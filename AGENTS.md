@@ -1,0 +1,3 @@
+Keep full project history in a dedicated client page that reads the existing scoped project records and register its route centrally; this separates history browsing from the compact sidebar preview without duplicating persistence logic.
+
+Keep subscription tier prices and feature limits in one shared client catalog, while treating database triggers and admin RPCs as authoritative for payment amounts, payment status, subscription changes, and ATS rewards; this prevents UI values from granting paid access.

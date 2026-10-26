@@ -1,0 +1,22 @@
+project_id = "eskjdfyrdyyhlaeqtpvz"
+
+[functions.verify-payment]
+verify_jwt = false
+
+[functions.send-notification]
+verify_jwt = false
+
+[functions.fetch-news]
+verify_jwt = false
+
+[functions.verify-fact]
+verify_jwt = false
+
+[functions.fetch-youtube]
+verify_jwt = false
+
+[functions.evidence-dive]
+verify_jwt = false
+
+[functions.averia-ai]
+verify_jwt = false

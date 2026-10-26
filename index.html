@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Averia AI - Smart Global News & AI Verification Platform</title>
+    <meta name="description" content="Averia AI is your intelligent companion for verified global news and AI-powered deepfake detection. Stay informed with real-time news verification, fact-checking, and media authenticity analysis." />
+    <meta name="author" content="Averia AI" />
+    <meta name="keywords" content="AI news, fake news detection, deepfake detection, news verification, fact checking, misinformation, Averia AI, global news, truth meter" />
+    <link rel="canonical" href="https://averia.ai" />
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Averia AI - Smart Global News & AI Verification" />
+    <meta property="og:description" content="AI-powered news verification and deepfake detection. Stay informed with verified global news." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://averia.ai" />
+    <meta property="og:image" content="https://averia.ai/og-image.png" />
+    <meta property="og:site_name" content="Averia AI" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@AveriaAI" />
+    <meta name="twitter:title" content="Averia AI - Smart Global News & AI Verification" />
+    <meta name="twitter:description" content="AI-powered news verification and deepfake detection platform." />
+    <meta name="twitter:image" content="https://averia.ai/twitter-image.png" />
+
+    <!-- JSON-LD Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Averia AI",
+      "description": "Smart Global News & AI-powered Verification Platform for detecting deepfakes and verifying news authenticity.",
+      "url": "https://averia.ai",
+      "applicationCategory": "NewsApplication",
+      "operatingSystem": "Web",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "INR"
+      },
+      "creator": {
+        "@type": "Organization",
+        "name": "Averia AI",
+        "email": "s6113994@gmail.com"
+      },
+      "featureList": [
+        "AI-powered deepfake detection",
+        "Real-time news verification",
+        "Global news aggregation",
+        "Fake news debunking",
+        "Trust score analysis"
+      ]
+    }
+    </script>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/favicon-rounded.png" />
+    <link rel="apple-touch-icon" href="/favicon-rounded.png" />
+    
+    <!-- Theme Color -->
+    <meta name="theme-color" content="#7c3aed" />
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    
+    <!-- Register Service Worker for Push Notifications -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+            .then(reg => console.log('SW registered:', reg.scope))
+            .catch(err => console.log('SW registration failed:', err));
+        });
+      }
+    </script>
+  </body>
+</html>

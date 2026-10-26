@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1791618117945,
+      "tag": "0000_subscription_tiers_secure_admin_controls_ats_monthly_cycle",
+      "breakpoints": true
+    }
+  ]
+}
