@@ -17,6 +17,7 @@ import Auth from "./pages/Auth";
 import News from "./pages/News";
 import Scanner from "./pages/Scanner";
 import Pricing from "./pages/Pricing";
+import Upgrade from "./pages/Upgrade";
 import Dashboard from "./pages/Dashboard";
 import DashboardSettings from "./pages/DashboardSettings";
 import PaymentSuccess from "./pages/PaymentSuccess";
@@ -55,6 +56,7 @@ const App = () => (
             <Route path="/news" element={<News />} />
             <Route path="/scanner" element={<Scanner />} />
             <Route path="/pricing" element={<Pricing />} />
+            <Route path="/upgrade" element={<Upgrade />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/dashboard/settings" element={<DashboardSettings />} />
             <Route path="/payment-success" element={<PaymentSuccess />} />

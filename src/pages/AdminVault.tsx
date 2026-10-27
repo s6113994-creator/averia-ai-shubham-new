@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Shield, Crown, Check, X, Clock, AlertTriangle, RefreshCw, Eye, User, Mail, MessageSquare, Inbox } from 'lucide-react';
+import { Shield, Crown, Check, X, Clock, AlertTriangle, RefreshCw, User, Mail, MessageSquare, Inbox } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { SUBSCRIPTION_PLANS } from '@/lib/subscriptionPlans';
 
 interface AIVerificationResult {
   verified: boolean;
@@ -23,6 +24,7 @@ interface AIVerificationResult {
 interface PaymentRequest {
   id: string;
   user_id: string;
+  plan: string;
   amount: number;
   utr_number: string;
   screenshot_url: string;
@@ -63,7 +65,6 @@ export default function AdminVault() {
   const [adminNotes, setAdminNotes] = useState('');
   const [adminResponse, setAdminResponse] = useState('');
   const [processing, setProcessing] = useState(false);
-  const [showScreenshot, setShowScreenshot] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
 
@@ -200,41 +201,29 @@ export default function AdminVault() {
     }
   };
 
-  const handleApprove = async () => {
-    if (!selectedRequest || !user) return;
+  // The database owns payment status and tier changes; the browser only asks.
+  const tierFromReview = (result: unknown): string | null => {
+    if (!result || typeof result !== 'object') return null;
+    const payload = result as Record<string, unknown>;
+    const candidate = payload.tier;
+    return typeof candidate === 'string' ? candidate : null;
+  };
 
+  const approveRequest = async (request: PaymentRequest, notes: string) => {
     setProcessing(true);
     try {
-      const { error: updateError } = await supabase
-        .from('payment_requests')
-        .update({
-          status: 'approved',
-          admin_notes: adminNotes || null,
-          approved_at: new Date().toISOString(),
-          approved_by: user.id,
-        })
-        .eq('id', selectedRequest.id);
-
-      if (updateError) throw updateError;
-
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .update({ is_pro: true })
-        .eq('user_id', selectedRequest.user_id);
-
-      if (profileError) throw profileError;
-
-      await supabase.functions.invoke('send-notification', {
-        body: {
-          userId: selectedRequest.user_id,
-          title: '🎉 Welcome to Averia AI Pro!',
-          body: 'Your payment has been verified. You now have access to all premium features!',
-          type: 'payment_approved',
-          data: { amount: selectedRequest.amount },
-        },
+      // admin_review_payment flips the status and unlocks the tier server-side.
+      const { data, error } = await supabase.rpc('admin_review_payment', {
+        _payment_id: request.id,
+        _decision: 'approved',
+        _admin_notes: notes || undefined,
       });
 
-      toast.success('Payment approved! User upgraded to Pro.');
+      if (error) throw error;
+
+      const tier = tierFromReview(data) ?? request.plan;
+      toast.success(`Payment approved — ${tier} tier unlocked.`);
+
       setSelectedRequest(null);
       setAdminNotes('');
       await fetchPaymentRequests();
@@ -246,18 +235,21 @@ export default function AdminVault() {
     }
   };
 
+  const handleApprove = async () => {
+    if (!selectedRequest) return;
+    await approveRequest(selectedRequest, adminNotes);
+  };
+
   const handleReject = async () => {
     if (!selectedRequest) return;
 
     setProcessing(true);
     try {
-      const { error } = await supabase
-        .from('payment_requests')
-        .update({
-          status: 'rejected',
-          admin_notes: adminNotes || 'Payment verification failed',
-        })
-        .eq('id', selectedRequest.id);
+      const { error } = await supabase.rpc('admin_review_payment', {
+        _payment_id: selectedRequest.id,
+        _decision: 'rejected',
+        _admin_notes: adminNotes || undefined,
+      });
 
       if (error) throw error;
 
@@ -323,6 +315,9 @@ export default function AdminVault() {
     setSelectedMessage(message);
     setAdminResponse(message.admin_response || '');
   };
+
+  const planLabel = (plan: string) =>
+    SUBSCRIPTION_PLANS.find((item) => item.id === plan)?.name ?? plan;
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -493,6 +488,8 @@ export default function AdminVault() {
                               <div className="flex items-center gap-3 text-sm text-muted-foreground">
                                 <span>₹{request.amount}</span>
                                 <span>•</span>
+                                <span className="text-foreground/80">{planLabel(request.plan)}</span>
+                                <span>•</span>
                                 <span>UTR: {request.utr_number}</span>
                                 <span>•</span>
                                 <span>{new Date(request.created_at).toLocaleDateString()}</span>
@@ -506,15 +503,26 @@ export default function AdminVault() {
                               size="sm"
                               onClick={() => {
                                 setSelectedRequest(request);
-                                setShowScreenshot(true);
+                                setAdminNotes('');
                               }}
                             >
-                              <Eye className="h-4 w-4 mr-1" />
-                              View
+                              Details
                             </Button>
                             {request.status === 'pending' && (
                               <Button
                                 size="sm"
+                                onClick={() => approveRequest(request, '')}
+                                disabled={processing}
+                                className="glow-success"
+                              >
+                                <Check className="h-4 w-4 mr-1" />
+                                Approve &amp; Unlock Tier
+                              </Button>
+                            )}
+                            {request.status === 'pending' && (
+                              <Button
+                                size="sm"
+                                variant="outline"
                                 onClick={() => {
                                   setSelectedRequest(request);
                                   setAdminNotes('');
@@ -583,36 +591,8 @@ export default function AdminVault() {
         </div>
       </div>
 
-      {/* Screenshot Viewer */}
-      <Dialog open={showScreenshot} onOpenChange={setShowScreenshot}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Payment Screenshot</DialogTitle>
-          </DialogHeader>
-          {selectedRequest && (
-            <div className="space-y-4">
-              <img
-                src={selectedRequest.screenshot_url}
-                alt="Payment screenshot"
-                className="w-full rounded-lg border border-border"
-              />
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <p className="text-muted-foreground">Amount</p>
-                  <p className="font-medium">₹{selectedRequest.amount}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">UTR</p>
-                  <p className="font-mono">{selectedRequest.utr_number}</p>
-                </div>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
       {/* Review Dialog */}
-      <Dialog open={!!selectedRequest && !showScreenshot} onOpenChange={(open) => !open && setSelectedRequest(null)}>
+      <Dialog open={!!selectedRequest} onOpenChange={(open) => !open && setSelectedRequest(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Review Payment Request</DialogTitle>
@@ -629,6 +609,10 @@ export default function AdminVault() {
                   <p className="font-heading font-bold">₹{selectedRequest.amount}</p>
                 </div>
                 <div className="glass-card p-3 rounded-lg">
+                  <p className="text-xs text-muted-foreground">Plan</p>
+                  <p className="font-medium text-sm">{planLabel(selectedRequest.plan)}</p>
+                </div>
+                <div className="glass-card p-3 rounded-lg">
                   <p className="text-xs text-muted-foreground">UTR Number</p>
                   <p className="font-mono text-sm">{selectedRequest.utr_number}</p>
                 </div>
@@ -637,15 +621,6 @@ export default function AdminVault() {
                   <p className="text-sm">{new Date(selectedRequest.created_at).toLocaleString()}</p>
                 </div>
               </div>
-
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={() => setShowScreenshot(true)}
-              >
-                <Eye className="h-4 w-4 mr-2" />
-                View Screenshot
-              </Button>
 
               <div className="space-y-2">
                 <Label>Admin Notes (optional)</Label>
@@ -657,25 +632,31 @@ export default function AdminVault() {
                 />
               </div>
 
-              <div className="flex gap-3">
-                <Button
-                  variant="destructive"
-                  className="flex-1"
-                  onClick={handleReject}
-                  disabled={processing}
-                >
-                  <X className="h-4 w-4 mr-2" />
-                  Reject
-                </Button>
-                <Button
-                  className="flex-1 glow-primary"
-                  onClick={handleApprove}
-                  disabled={processing}
-                >
-                  <Check className="h-4 w-4 mr-2" />
-                  Approve & Upgrade
-                </Button>
-              </div>
+              {selectedRequest.status === 'pending' ? (
+                <div className="flex gap-3">
+                  <Button
+                    variant="destructive"
+                    className="flex-1"
+                    onClick={handleReject}
+                    disabled={processing}
+                  >
+                    <X className="h-4 w-4 mr-2" />
+                    Reject
+                  </Button>
+                  <Button
+                    className="flex-1 glow-primary"
+                    onClick={handleApprove}
+                    disabled={processing}
+                  >
+                    <Check className="h-4 w-4 mr-2" />
+                    Approve &amp; Unlock Tier
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-center text-sm text-muted-foreground">
+                  This request was already {selectedRequest.status}.
+                </p>
+              )}
             </div>
           )}
         </DialogContent>

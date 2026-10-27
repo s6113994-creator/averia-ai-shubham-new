@@ -24,8 +24,10 @@ button:active:not(:disabled), a[href]:active, [role="button"]:active, [role="tab
   transition-duration: 300ms;
 }
 @media (hover: hover) {
+  /* Deepens whatever Tailwind shadow the element already carries instead of
+     replacing it, so `shadow-2xl` keeps working on hover. */
   button:hover:not(:disabled), a[href]:hover, [role="button"]:hover, [role="tab"]:hover {
-    box-shadow: 0 14px 32px -24px rgba(0, 0, 0, .95);
+    --tw-shadow: 0 22px 44px -22px rgba(0, 0, 0, .95);
   }
   .glass-card:hover {
     transform: translateY(-.25rem);

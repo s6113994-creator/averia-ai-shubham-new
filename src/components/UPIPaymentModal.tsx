@@ -1,151 +1,131 @@
-import { useState, useRef } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { useEffect, useMemo, useState } from 'react';
+import QRCode from 'qrcode';
+import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion';
+import {
+  CheckCircle2, Copy, CreditCard, Loader2, QrCode, ShieldCheck, Smartphone,
+} from 'lucide-react';
+import { toast } from 'sonner';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Shield, Upload, CheckCircle, AlertCircle, Loader2, Smartphone, Copy, ExternalLink } from 'lucide-react';
-import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
-import { motion, AnimatePresence } from 'framer-motion';
+import {
+  getSubscriptionPlan,
+  type SubscriptionPlanId,
+} from '@/lib/subscriptionPlans';
+
+export const UPI_PAYEE_ID = 'ganeshrajak123451@okhdfcbank';
+export const UPI_PAYEE_NAME = 'Averia AI';
+
+// The database trigger rejects anything that is not exactly 12 digits.
+const UTR_PATTERN = /^\d{12}$/;
 
 interface UPIPaymentModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  planName: string;
-  amount: number;
+  planId: SubscriptionPlanId;
 }
 
-const UPI_ID = 'ganeshrajak123451@okhdfcbank';
+type UpiApp = { id: string; label: string; scheme: string; accent: string };
 
-export function UPIPaymentModal({ open, onOpenChange, planName, amount }: UPIPaymentModalProps) {
+const UPI_APPS: UpiApp[] = [
+  { id: 'gpay', label: 'Google Pay', scheme: 'tez://upi/pay', accent: 'from-blue-500/25 to-blue-500/5' },
+  { id: 'phonepe', label: 'PhonePe', scheme: 'phonepe://pay', accent: 'from-violet-500/25 to-violet-500/5' },
+  { id: 'paytm', label: 'Paytm', scheme: 'paytmmp://pay', accent: 'from-teal-500/25 to-teal-500/5' },
+];
+
+export function UPIPaymentModal({ open, onOpenChange, planId }: UPIPaymentModalProps) {
   const { user } = useAuth();
-  const [step, setStep] = useState<'pay' | 'upload' | 'verifying' | 'submitted'>('pay');
-  const [screenshot, setScreenshot] = useState<File | null>(null);
-  const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
+  const plan = getSubscriptionPlan(planId);
   const [utrNumber, setUtrNumber] = useState('');
-  const [verifying, setVerifying] = useState(false);
-  const [aiResult, setAiResult] = useState<{
-    verified: boolean;
-    confidence: number;
-    amount_detected?: string;
-    utr_detected?: string;
-    issues?: string[];
-  } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
 
-  const upiIntentUrl = `upi://pay?pa=${UPI_ID}&pn=Averia%20AI&am=${amount}&cu=INR&tn=Averia%20AI%20Pro%20Subscription`;
+  const tiltX = useMotionValue(0);
+  const tiltY = useMotionValue(0);
+  const springX = useSpring(tiltX, { stiffness: 220, damping: 22 });
+  const springY = useSpring(tiltY, { stiffness: 220, damping: 22 });
+  const rotateX = useTransform(springX, [-1, 1], [7, -7]);
+  const rotateY = useTransform(springY, [-1, 1], [-9, 9]);
+  const glareX = useTransform(springY, [-1, 1], ['62%', '38%']);
+  const glareY = useTransform(springX, [-1, 1], ['58%', '42%']);
 
-  const handlePayClick = () => {
-    // Try to open UPI app
-    window.location.href = upiIntentUrl;
-    
-    // After a short delay, show upload step
-    setTimeout(() => {
-      setStep('upload');
-    }, 1000);
-  };
+  const intentParams = useMemo(
+    () => new URLSearchParams({
+      pa: UPI_PAYEE_ID,
+      pn: UPI_PAYEE_NAME,
+      am: String(plan.price),
+      cu: 'INR',
+      tn: `Averia AI ${plan.name} subscription`,
+      tr: `AVERIA-${plan.id.toUpperCase()}-${Date.now().toString().slice(-8)}`,
+    }),
+    [plan.id, plan.price],
+  );
 
-  const handleCopyUPI = () => {
-    navigator.clipboard.writeText(UPI_ID);
-    toast.success('UPI ID copied!');
-  };
+  const upiIntentUrl = `upi://pay?${intentParams.toString()}`;
+  const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (!file.type.startsWith('image/')) {
-        toast.error('Please select an image file');
-        return;
-      }
-      if (file.size > 10 * 1024 * 1024) {
-        toast.error('File size must be less than 10MB');
-        return;
-      }
-      setScreenshot(file);
-      setScreenshotPreview(URL.createObjectURL(file));
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    QRCode.toDataURL(upiIntentUrl, {
+      width: 320,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#EDEDED', light: '#1A1A24' },
+    })
+      .then((url) => { if (!cancelled) setQrCodeUrl(url); })
+      .catch(() => { if (!cancelled) setQrCodeUrl(null); });
+    return () => { cancelled = true; };
+  }, [open, upiIntentUrl]);
+
+  useEffect(() => {
+    if (!open) {
+      setUtrNumber('');
+      setSubmitted(false);
+      setSubmitting(false);
+      tiltX.set(0);
+      tiltY.set(0);
     }
-  };
+  }, [open, tiltX, tiltY]);
 
-  const verifyWithAI = async () => {
-    if (!screenshot || !user) return;
-
-    setVerifying(true);
-    setStep('verifying');
-
+  const copyUpiId = async () => {
     try {
-      // Convert image to base64
-      const reader = new FileReader();
-      reader.readAsDataURL(screenshot);
-      
-      const base64 = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => {
-          const result = reader.result as string;
-          resolve(result.split(',')[1]);
-        };
-        reader.onerror = reject;
-      });
-
-      // Call AI verification
-      const { data, error } = await supabase.functions.invoke('verify-payment', {
-        body: {
-          screenshotBase64: base64,
-          utrNumber,
-          expectedAmount: amount,
-        },
-      });
-
-      if (error) throw error;
-
-      setAiResult(data);
-
-      // If UTR was detected, auto-fill it
-      if (data.utr_detected && !utrNumber) {
-        setUtrNumber(data.utr_detected);
-      }
-
-      if (data.verified) {
-        toast.success('Payment verified by AI!');
-      } else {
-        toast.warning('AI could not fully verify. You can still submit for manual review.');
-      }
-    } catch (error) {
-      console.error('AI verification error:', error);
-      toast.error('AI verification failed. Please enter details manually.');
-    } finally {
-      setVerifying(false);
-      setStep('upload');
+      await navigator.clipboard.writeText(UPI_PAYEE_ID);
+      toast.success('UPI ID copied');
+    } catch {
+      toast.error('Could not copy the UPI ID');
     }
+  };
+
+  const openUpiApp = (scheme: string) => {
+    window.location.href = `${scheme}?${intentParams.toString()}`;
   };
 
   const handleSubmit = async () => {
-    if (!screenshot || !utrNumber || !user) {
-      toast.error('Please provide screenshot and UTR number');
+    if (!user) {
+      toast.error('Please sign in before paying');
+      return;
+    }
+    const trimmedUtr = utrNumber.trim();
+    if (!UTR_PATTERN.test(trimmedUtr)) {
+      toast.error('Enter the 12-digit UPI transaction ID from your payment app');
       return;
     }
 
-    setVerifying(true);
-
+    setSubmitting(true);
     try {
-      // Upload screenshot to storage (we'll use base64 for now since storage isn't set up)
-      const reader = new FileReader();
-      reader.readAsDataURL(screenshot);
-      
-      const base64Url = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
+      // The database trigger owns the amount, status and receipt fields; the
+      // browser only states which plan was bought and which UTI was paid with.
+      const { error } = await supabase.from('payment_requests').insert({
+        user_id: user.id,
+        plan: plan.id,
+        amount: plan.price,
+        utr_number: trimmedUtr,
+        status: 'pending',
       });
-
-      // Create payment request
-      const { error } = await supabase
-        .from('payment_requests')
-        .insert({
-          user_id: user.id,
-          amount,
-          utr_number: utrNumber,
-          screenshot_url: base64Url,
-          ai_verification_result: aiResult,
-        });
 
       if (error) {
         if (error.code === '23505') {
@@ -156,263 +136,162 @@ export function UPIPaymentModal({ open, onOpenChange, planName, amount }: UPIPay
         return;
       }
 
-      setStep('submitted');
-      toast.success('Payment submitted for verification!');
+      setSubmitted(true);
+      toast.success('Payment request submitted to Admin Vault. Verification takes 2-5 mins.');
     } catch (error) {
-      console.error('Submit error:', error);
-      toast.error('Failed to submit payment');
+      console.error('Payment submission error:', error);
+      toast.error('Could not submit the payment request. Please try again.');
     } finally {
-      setVerifying(false);
+      setSubmitting(false);
     }
-  };
-
-  const resetModal = () => {
-    setStep('pay');
-    setScreenshot(null);
-    setScreenshotPreview(null);
-    setUtrNumber('');
-    setAiResult(null);
-    onOpenChange(false);
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="font-heading">
-            {step === 'submitted' ? 'Payment Submitted!' : `Upgrade to ${planName}`}
-          </DialogTitle>
-          <DialogDescription>
-            {step === 'submitted' 
-              ? 'Your payment is being reviewed'
-              : 'Pay securely via UPI'}
-          </DialogDescription>
+      <DialogContent className="sm:max-w-[520px] overflow-hidden border-0 bg-transparent p-0 shadow-none">
+        <DialogHeader className="sr-only">
+          <DialogTitle>Upgrade to {plan.name}</DialogTitle>
+          <DialogDescription>Pay securely via UPI and submit your transaction ID for verification.</DialogDescription>
         </DialogHeader>
 
-        <AnimatePresence mode="wait">
-          {step === 'pay' && (
-            <motion.div
-              key="pay"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-6 py-4"
-            >
-              <div className="glass-card p-4 rounded-lg">
-                <div className="flex justify-between items-center">
-                  <span>Monthly subscription</span>
-                  <span className="font-heading font-bold text-xl">₹{amount}</span>
+        <motion.div
+          style={{ rotateX, rotateY, transformStyle: 'preserve-3d' }}
+          onPointerMove={(event) => {
+            const bounds = event.currentTarget.getBoundingClientRect();
+            tiltY.set(((event.clientX - bounds.left) / bounds.width) * 2 - 1);
+            tiltX.set(((event.clientY - bounds.top) / bounds.height) * 2 - 1);
+          }}
+          onPointerLeave={() => { tiltX.set(0); tiltY.set(0); }}
+          className="relative rounded-3xl border border-white/10 bg-[#1A1A24]/90 p-6 shadow-2xl backdrop-blur-2xl sm:p-7"
+        >
+          <motion.div
+            aria-hidden
+            style={{ left: glareX, top: glareY }}
+            className="pointer-events-none absolute h-56 w-56 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/10 blur-3xl"
+          />
+
+          {submitted ? (
+            <div className="relative flex flex-col items-center py-6 text-center">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-success/15">
+                <CheckCircle2 className="h-8 w-8 text-success" />
+              </div>
+              <h3 className="font-heading text-xl font-bold">Payment request submitted</h3>
+              <p className="mt-2 max-w-sm text-sm text-muted-foreground">
+                Payment request submitted to Admin Vault. Verification takes 2-5 mins.
+              </p>
+              <div className="mt-5 w-full rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-left text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Plan</span>
+                  <span className="font-medium">{plan.name}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-muted-foreground">Amount</span>
+                  <span className="font-medium">₹{plan.price}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-muted-foreground">UTR</span>
+                  <span className="font-mono text-xs">{utrNumber.trim()}</span>
+                </div>
+              </div>
+              <Button className="mt-6 w-full" onClick={() => onOpenChange(false)}>Done</Button>
+            </div>
+          ) : (
+            <>
+              <div className="relative flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Upgrade to</p>
+                  <h3 className="font-heading text-2xl font-bold">{plan.name}</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">{plan.tagline}</p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-2 text-right">
+                  <p className="font-heading text-2xl font-bold">₹{plan.price}</p>
+                  <p className="text-[11px] text-muted-foreground">{plan.period}</p>
                 </div>
               </div>
 
-              <div className="space-y-3">
-                <div className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
-                  <div>
-                    <p className="text-sm text-muted-foreground">UPI ID</p>
-                    <p className="font-mono font-medium">{UPI_ID}</p>
-                  </div>
-                  <Button variant="ghost" size="icon" onClick={handleCopyUPI}>
-                    <Copy className="h-4 w-4" />
-                  </Button>
-                </div>
-
-                <Button onClick={handlePayClick} className="w-full glow-primary" size="lg">
-                  <Smartphone className="h-5 w-5 mr-2" />
-                  Pay ₹{amount} via UPI
-                </Button>
-
-                <p className="text-xs text-center text-muted-foreground">
-                  This will open your UPI app (GPay, PhonePe, Paytm, etc.)
-                </p>
-              </div>
-
-              <Button 
-                variant="ghost" 
-                className="w-full" 
-                onClick={() => setStep('upload')}
-              >
-                I've already paid, upload screenshot
-                <ExternalLink className="h-4 w-4 ml-2" />
-              </Button>
-
-              <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-                <Shield className="h-4 w-4" />
-                Secured Manual UPI Verification
-              </div>
-            </motion.div>
-          )}
-
-          {step === 'upload' && (
-            <motion.div
-              key="upload"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-6 py-4"
-            >
-              {/* Screenshot Upload */}
-              <div className="space-y-2">
-                <Label>Payment Screenshot</Label>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  accept="image/*"
-                  onChange={handleFileSelect}
-                  className="hidden"
-                />
-                
-                {screenshotPreview ? (
-                  <div className="relative">
-                    <img
-                      src={screenshotPreview}
-                      alt="Payment screenshot"
-                      className="w-full h-48 object-cover rounded-lg border border-border"
-                    />
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="absolute top-2 right-2"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      Change
-                    </Button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full h-32 border-2 border-dashed border-border rounded-lg flex flex-col items-center justify-center gap-2 hover:border-primary/50 hover:bg-primary/5 transition-colors"
-                  >
-                    <Upload className="h-8 w-8 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">
-                      Upload payment screenshot
-                    </span>
-                  </button>
-                )}
-              </div>
-
-              {/* AI Verification Button */}
-              {screenshot && !aiResult && (
-                <Button
-                  variant="outline"
-                  className="w-full"
-                  onClick={verifyWithAI}
-                  disabled={verifying}
-                >
-                  {verifying ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      AI Scanning...
-                    </>
-                  ) : (
-                    <>
-                      <Shield className="h-4 w-4 mr-2" />
-                      Auto-scan with AI
-                    </>
-                  )}
-                </Button>
-              )}
-
-              {/* AI Result */}
-              {aiResult && (
-                <div className={`p-4 rounded-lg border ${
-                  aiResult.verified 
-                    ? 'bg-success/10 border-success/30' 
-                    : 'bg-warning/10 border-warning/30'
-                }`}>
-                  <div className="flex items-start gap-3">
-                    {aiResult.verified ? (
-                      <CheckCircle className="h-5 w-5 text-success shrink-0 mt-0.5" />
+              <div className="relative mt-6 grid gap-5 sm:grid-cols-[168px_1fr]">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="rounded-2xl border border-white/10 bg-[#252534] p-3 shadow-[0_18px_40px_-20px_rgba(0,0,0,0.9)]">
+                    {qrCodeUrl ? (
+                      <img src={qrCodeUrl} alt="UPI QR code" className="h-36 w-36 rounded-lg" />
                     ) : (
-                      <AlertCircle className="h-5 w-5 text-warning shrink-0 mt-0.5" />
+                      <div className="flex h-36 w-36 items-center justify-center rounded-lg bg-white/5">
+                        <QrCode className="h-8 w-8 animate-pulse text-muted-foreground" />
+                      </div>
                     )}
-                    <div>
-                      <p className="font-medium text-sm">
-                        {aiResult.verified ? 'Payment Verified' : 'Needs Manual Review'}
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Confidence: {aiResult.confidence}%
-                      </p>
-                      {aiResult.amount_detected && (
-                        <p className="text-xs text-muted-foreground">
-                          Amount found: {aiResult.amount_detected}
-                        </p>
-                      )}
+                  </div>
+                  <p className="text-center text-[11px] leading-4 text-muted-foreground">
+                    Scan with any UPI app
+                  </p>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">UPI ID</p>
+                        <p className="truncate font-mono text-sm">{UPI_PAYEE_ID}</p>
+                      </div>
+                      <Button variant="ghost" size="icon" onClick={copyUpiId} aria-label="Copy UPI ID">
+                        <Copy />
+                      </Button>
                     </div>
                   </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    {UPI_APPS.map((app) => (
+                      <button
+                        key={app.id}
+                        type="button"
+                        onClick={() => openUpiApp(app.scheme)}
+                        className={`group flex flex-col items-center gap-1 rounded-2xl border border-white/10 bg-gradient-to-b ${app.accent} px-2 py-3 text-xs font-medium shadow-2xl transition hover:-translate-y-1 hover:border-white/25 active:scale-95`}
+                      >
+                        <Smartphone className="h-5 w-5 text-white/90" />
+                        {app.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => window.location.href = upiIntentUrl}
+                  >
+                    <CreditCard /> Pay ₹{plan.price} with any UPI app
+                  </Button>
                 </div>
-              )}
-
-              {/* UTR Input */}
-              <div className="space-y-2">
-                <Label htmlFor="utr">UTR / Transaction ID</Label>
-                <Input
-                  id="utr"
-                  value={utrNumber}
-                  onChange={(e) => setUtrNumber(e.target.value)}
-                  placeholder="12-digit UPI Transaction ID"
-                  className="bg-secondary/30"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Find this in your payment app's transaction details
-                </p>
               </div>
 
-              <Button
-                onClick={handleSubmit}
-                className="w-full glow-primary"
-                disabled={!screenshot || !utrNumber || verifying}
-              >
-                {verifying ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                ) : null}
-                Submit for Verification
-              </Button>
+              <div className="relative mt-6 space-y-4 border-t border-white/10 pt-5">
+                <div className="space-y-2">
+                  <Label htmlFor="upi-utr">UTR / Transaction ID</Label>
+                  <Input
+                    id="upi-utr"
+                    value={utrNumber}
+                    onChange={(event) => setUtrNumber(event.target.value.replace(/\D/g, '').slice(0, 12))}
+                    placeholder="123456789012"
+                    inputMode="numeric"
+                    maxLength={12}
+                    className="border-white/10 bg-white/[0.05] font-mono tracking-wide"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    The 12-digit reference in your UPI app under transaction details. Required for approval.
+                  </p>
+                </div>
 
-              <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-                <Shield className="h-4 w-4" />
-                Secured Manual UPI Verification
+                <Button className="w-full" onClick={handleSubmit} disabled={submitting}>
+                  {submitting ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
+                  Submit for verification
+                </Button>
+
+                <div className="flex items-center justify-center gap-2 text-[11px] text-muted-foreground">
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  Admin-verified activation · tier unlocks after approval
+                </div>
               </div>
-            </motion.div>
+            </>
           )}
-
-          {step === 'verifying' && (
-            <motion.div
-              key="verifying"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="py-12 text-center"
-            >
-              <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
-              <p className="font-medium">AI is scanning your screenshot...</p>
-              <p className="text-sm text-muted-foreground mt-2">
-                Extracting payment details automatically
-              </p>
-            </motion.div>
-          )}
-
-          {step === 'submitted' && (
-            <motion.div
-              key="submitted"
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="py-8 text-center"
-            >
-              <div className="w-16 h-16 rounded-full bg-success/20 flex items-center justify-center mx-auto mb-4">
-                <CheckCircle className="h-8 w-8 text-success" />
-              </div>
-              <h3 className="font-heading text-xl font-bold mb-2">
-                Payment Submitted!
-              </h3>
-              <p className="text-muted-foreground text-sm mb-6">
-                Your payment is being reviewed. You'll receive a notification once approved.
-              </p>
-              <Button onClick={resetModal}>
-                Got it!
-              </Button>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        </motion.div>
       </DialogContent>
     </Dialog>
   );

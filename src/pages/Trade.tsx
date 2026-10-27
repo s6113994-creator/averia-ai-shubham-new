@@ -92,16 +92,6 @@ function EmailOtpStep({ email, code, setCode, sent, verified, sending, onSend, o
   </div>;
 }
 
-function PhoneOtpStep({ phone, setPhone, code, setCode, sent, sending, onSend }: {
-  phone: string; setPhone: (value: string) => void; code: string; setCode: (value: string) => void; sent: boolean; sending: boolean; onSend: () => void;
-}) {
-  return <div className="space-y-3 rounded-2xl bg-white/[0.04] p-4">
-    <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-success" /><p className="text-sm font-medium">Phone confirmation</p></div>
-    <div className="flex flex-col gap-2 sm:flex-row"><Input value={phone} onChange={e => setPhone(e.target.value)} placeholder="+91 98765 43210" inputMode="tel" /><Button type="button" variant="outline" onClick={onSend} disabled={sending || !phone.trim()}>{sending ? <Loader2 className="animate-spin" /> : sent ? 'Resend' : 'Send OTP'}</Button></div>
-    {sent && <Input value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit OTP" inputMode="numeric" maxLength={6} />}
-  </div>;
-}
-
 function ListingModal({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (value: boolean) => void; onCreated: () => void }) {
   const { user } = useAuth();
   const [title, setTitle] = useState('');
@@ -208,25 +198,43 @@ function BuyModal({ project, open, onOpenChange, onComplete }: { project: Projec
   const { user } = useAuth();
   const [receipt, setReceipt] = useState<File | null>(null);
   const [utr, setUtr] = useState('');
-  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const [otp, setOtp] = useState('');
   const [otpSent, setOtpSent] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
   const [sending, setSending] = useState(false);
   const [processing, setProcessing] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? user?.email ?? ''));
+  }, [open, user?.email]);
+
   if (!project) return null;
   const sellerAmount = project.asking_price_inr * 0.8;
   const escrowAmount = project.asking_price_inr * 0.2;
   const upiLink = `upi://pay?pa=${encodeURIComponent(project.seller_upi_id)}&pn=${encodeURIComponent(project.seller_upi_registered_name)}&am=${project.asking_price_inr}&cu=INR&tn=Averia_Asset_Purchase_${project.id}`;
   const sendOtp = async () => {
-    setSending(true); const { error } = await supabase.auth.signInWithOtp({ phone: phone.trim() }); setSending(false);
-    if (error) toast.error(error.message); else { setOtpSent(true); toast.success('OTP sent to your phone'); }
+    if (!email) return;
+    setSending(true);
+    const { error } = await supabase.auth.signInWithOtp({ email });
+    setSending(false);
+    if (error) { toast.error(error.message); return; }
+    setOtpSent(true); setOtpVerified(false); toast.success('OTP sent to your email');
+  };
+  const verifyOtp = async () => {
+    if (!email || otp.length !== 6) return;
+    setSending(true);
+    const { error } = await supabase.auth.verifyOtp({ email, token: otp, type: 'email' });
+    setSending(false);
+    if (error) { toast.error(error.message); return; }
+    setOtpVerified(true); toast.success('Email verified');
   };
   const submit = async () => {
     if (!user) { toast.error('Sign in to buy this asset'); return; }
-    if (!receipt || !/^\d{12}$/.test(utr) || !otpSent || otp.length !== 6) { toast.error('Add the receipt, 12-digit UTR, and OTP'); return; }
+    if (!receipt || !/^\d{12}$/.test(utr) || !otpVerified) { toast.error('Add the receipt, the 12-digit UTR, and verify your email OTP'); return; }
     setProcessing(true);
     try {
-      const { error: otpError } = await supabase.auth.verifyOtp({ phone: phone.trim(), token: otp, type: 'sms' }); if (otpError) throw otpError;
       const path = `${user.id}/${crypto.randomUUID()}-${receipt.name}`;
       const upload = await sb.storage.from('payment-proofs').upload(path, receipt, { upsert: false }); if (upload.error) throw upload.error;
       const buyer = identity(user);
@@ -250,8 +258,8 @@ function BuyModal({ project, open, onOpenChange, onComplete }: { project: Projec
       <div className="rounded-2xl bg-white/[0.04] p-4"><p className="text-xs text-muted-foreground">Paying {project.seller_upi_registered_name}</p><p className="mt-1 font-mono text-sm">{project.seller_upi_id}</p><Button asChild className="mt-4 w-full bg-purple-600 text-white shadow-lg shadow-purple-500/20 hover:bg-purple-700"><a href={upiLink}>Pay {money(project.asking_price_inr)} via UPI <ArrowUpRight /></a></Button></div>
       <Field label="Payment receipt"><FileDrop accept="image/*,application/pdf" onChange={setReceipt} icon={<ImagePlus className="h-6 w-6" />} title={receipt?.name || 'Upload payment receipt'} subtitle="Private payment-proofs storage" /></Field>
       <Field label="12-digit UTR"><Input value={utr} onChange={e => setUtr(e.target.value.replace(/\D/g, '').slice(0, 12))} placeholder="123456789012" inputMode="numeric" maxLength={12} /></Field>
-      <PhoneOtpStep phone={phone} setPhone={setPhone} code={otp} setCode={setOtp} sent={otpSent} sending={sending} onSend={sendOtp} />
-      <Button onClick={submit} disabled={processing} className="w-full">{processing ? <Loader2 className="animate-spin" /> : <Check />} Verify payment & transfer ownership</Button>
+      <EmailOtpStep email={email} code={otp} setCode={setOtp} sent={otpSent} verified={otpVerified} sending={sending} onSend={sendOtp} onVerify={verifyOtp} />
+      <Button onClick={submit} disabled={processing || !otpVerified} className="w-full">{processing ? <Loader2 className="animate-spin" /> : <Check />} Verify payment &amp; transfer ownership</Button>
     </div>
   </DialogContent></Dialog>;
 }
