@@ -160,7 +160,7 @@ function AuthenticatedAppShell({ children, user, signOut }: { children: ReactNod
     setHighlightText(bullets || 'No messages yet.');
   };
 
-  const sidebarWidth = open ? (isMobile ? '80vw' : 260) : 0;
+  const sidebarWidth = open ? (isMobile ? '80vw' : 256) : 0;
 
   const Sidebar = (
     <motion.aside
@@ -380,7 +380,7 @@ function AuthenticatedAppShell({ children, user, signOut }: { children: ReactNod
       <GlobalProfileAnchor />
 
 
-      <main className="app-ambient-mesh flex-1 min-w-0 overflow-auto relative">
+      <main className="app-ambient-mesh flex-1 min-w-0 overflow-auto relative pt-16 sm:pt-20 px-4 sm:px-6 md:px-8">
         {children}
       </main>
 
