@@ -59,22 +59,23 @@ export function GlobalProfileAnchor() {
       aria-label="Open dashboard"
       title={isJoint ? `${myName} + ${partnerName}` : myName}
       data-app-chrome
-      className="fixed top-3 right-3 z-[46] hover:scale-105 transition"
+      className="fixed top-3 left-16 md:left-20 z-[46] hover:scale-105 transition flex items-center gap-2 bg-background/80 backdrop-blur-md border border-border/60 rounded-full p-1.5 shadow-lg"
     >
       {isJoint ? (
-        <span className="relative inline-flex items-center h-10">
-          <span className="relative z-10 rounded-full ring-2 ring-background shadow-lg">
+        <span className="relative inline-flex items-center h-8">
+          <span className="relative z-10 rounded-full ring-2 ring-background shadow">
             <UserAvatar url={myUrl} name={myName} size="sm" />
           </span>
-          <span className="-ml-3 -mt-2 rounded-full ring-2 ring-background shadow-lg">
+          <span className="-ml-3 rounded-full ring-2 ring-background shadow">
             <UserAvatar url={partnerUrl} name={partnerName} size="sm" />
           </span>
         </span>
       ) : (
-        <span className="rounded-full ring-2 ring-primary/40 shadow-lg inline-flex">
+        <span className="rounded-full ring-2 ring-primary/40 shadow inline-flex">
           <UserAvatar url={myUrl} name={myName} size="sm" />
         </span>
       )}
+      <span className="text-xs font-medium pr-2 hidden sm:inline truncate max-w-[100px]">{myName}</span>
     </button>
   );
 }

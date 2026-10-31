@@ -86,9 +86,9 @@ function EmailOtpStep({ email, code, setCode, sent, verified, sending, onSend, o
   email: string; code: string; setCode: (value: string) => void; sent: boolean; verified: boolean; sending: boolean; onSend: () => void; onVerify: () => void;
 }) {
   return <div className="space-y-3 rounded-2xl bg-white/[0.04] p-4">
-    <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-success" /><p className="text-sm font-medium">Email confirmation</p>{verified && <CheckCircle2 className="ml-auto h-4 w-4 text-success" />}</div>
-    <div className="flex flex-col gap-2 sm:flex-row"><Input value={email} readOnly aria-label="Signed-in email" /><Button type="button" variant="outline" onClick={onSend} disabled={sending || !email}>{sending ? <Loader2 className="animate-spin" /> : sent ? 'Resend OTP' : 'Send OTP to Email'}</Button></div>
-    {sent && <div className="flex flex-col gap-2 sm:flex-row"><Input value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="Enter 6-digit OTP code" inputMode="numeric" maxLength={6} disabled={verified} /><Button type="button" variant="outline" onClick={onVerify} disabled={sending || verified || code.length !== 6}>{verified ? 'Verified' : 'Verify OTP'}</Button></div>}
+    <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-success" /><p className="text-sm font-medium">Email verification (6-digit numeric code)</p>{verified && <CheckCircle2 className="ml-auto h-4 w-4 text-success" />}</div>
+    <div className="flex flex-col gap-2 sm:flex-row"><Input value={email} readOnly aria-label="Signed-in email" /><Button type="button" variant="outline" onClick={onSend} disabled={sending || !email}>{sending ? <Loader2 className="animate-spin" /> : sent ? 'Resend 6-digit OTP' : 'Send 6-digit OTP to Email'}</Button></div>
+    {sent && <div className="flex flex-col gap-2 sm:flex-row"><Input value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="Enter 6-digit numeric OTP code" inputMode="numeric" maxLength={6} disabled={verified} /><Button type="button" variant="outline" onClick={onVerify} disabled={sending || verified || code.length !== 6}>{verified ? 'Verified' : 'Verify OTP'}</Button></div>}
   </div>;
 }
 
@@ -131,10 +131,13 @@ function ListingModal({ open, onOpenChange, onCreated }: { open: boolean; onOpen
   const sendOtp = async () => {
     if (!email) return;
     setSendingOtp(true);
-    const { error } = await supabase.auth.signInWithOtp({ email });
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: false }
+    });
     setSendingOtp(false);
     if (error) { toast.error(error.message); return; }
-    setOtpSent(true); setOtpVerified(false); toast.success('OTP sent to your email');
+    setOtpSent(true); setOtpVerified(false); toast.success('6-digit OTP code sent to your email');
   };
 
   const verifyOtp = async () => {
@@ -217,10 +220,13 @@ function BuyModal({ project, open, onOpenChange, onComplete }: { project: Projec
   const sendOtp = async () => {
     if (!email) return;
     setSending(true);
-    const { error } = await supabase.auth.signInWithOtp({ email });
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: false }
+    });
     setSending(false);
     if (error) { toast.error(error.message); return; }
-    setOtpSent(true); setOtpVerified(false); toast.success('OTP sent to your email');
+    setOtpSent(true); setOtpVerified(false); toast.success('6-digit OTP code sent to your email');
   };
   const verifyOtp = async () => {
     if (!email || otp.length !== 6) return;
