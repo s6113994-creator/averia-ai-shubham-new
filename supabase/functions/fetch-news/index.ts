@@ -199,6 +199,7 @@ serve(async (req) => {
         success: true,
         articles: realArticles,
         debunked: [...debunkedArticles, ...debunkedExtra],
+        debunkedArticles: [...debunkedArticles, ...debunkedExtra],
         totalResults: data.totalResults || 0,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
