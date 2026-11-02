@@ -162,7 +162,7 @@ export function UPIPaymentModal({ open, onOpenChange, planId }: UPIPaymentModalP
             tiltX.set(((event.clientY - bounds.top) / bounds.height) * 2 - 1);
           }}
           onPointerLeave={() => { tiltX.set(0); tiltY.set(0); }}
-          className="relative rounded-3xl border border-white/10 bg-[#1A1A24]/95 p-4 sm:p-6 md:p-7 shadow-2xl backdrop-blur-2xl max-h-[90vh] overflow-y-auto w-full box-border"
+          className="relative rounded-3xl border border-white/10 bg-[#1A1A24]/95 p-4 sm:p-6 shadow-2xl backdrop-blur-2xl max-h-[90vh] overflow-y-auto w-full box-border"
         >
           <motion.div
             aria-hidden
