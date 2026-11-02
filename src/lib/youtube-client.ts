@@ -298,3 +298,5 @@ export async function searchYouTube(
 export async function dualSyncHeadlinesToYouTube() {
   return { success: true };
 }
+
+export const fetchTrendingVideos = searchYouTube;
