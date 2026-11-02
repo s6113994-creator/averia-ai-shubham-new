@@ -6,23 +6,30 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+const DEFAULT_NEWS_KEYS = [
+  '2a2c607411b2488f9b5bab17af6a8ea5',
+  '59ae1b46bd4046a0ade43d48c5e4417e',
+  'a4e70f9af3a34627ab3f90d9aa36d811',
+  '30a4ac64313f4acd8926dd1857c2fedf',
+];
+
 function getNewsKeys(): string[] {
   const keys: string[] = [];
-  for (let i = 1; i <= 10; i++) {
+  for (let i = 1; i <= 4; i++) {
     const k = Deno.env.get(`NEWS_API_KEY_${i}`) || Deno.env.get(`VITE_NEWS_API_${i}`);
     if (k && !keys.includes(k)) keys.push(k);
   }
   const primary = Deno.env.get("NEWS_API_KEY") || Deno.env.get("VITE_NEWS_API_KEY");
   if (primary && !keys.includes(primary)) keys.unshift(primary);
-  if (keys.length === 0) {
-    keys.push("2a2c607411b2488f9b5bab17af6a8ea5");
+  for (const defKey of DEFAULT_NEWS_KEYS) {
+    if (!keys.includes(defKey)) keys.push(defKey);
   }
   return keys;
 }
 
 let currentKeyIndex = 0;
 function getNextNewsKey(keys: string[]): string {
-  if (keys.length === 0) return "";
+  if (keys.length === 0) return DEFAULT_NEWS_KEYS[0];
   const key = keys[currentKeyIndex % keys.length];
   currentKeyIndex = (currentKeyIndex + 1) % keys.length;
   return key;
@@ -55,13 +62,6 @@ const debunkedQueries = [
   "misleading news viral social media",
   "conspiracy theory debunked latest",
 ];
-
-function getSupabase() {
-  return createClient(
-    Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
-  );
-}
 
 async function fetchWithRotation(url: string): Promise<Response> {
   const keys = getNewsKeys();
@@ -174,10 +174,17 @@ serve(async (req) => {
     const page = parseInt(urlObj.searchParams.get("page") || "1", 10);
     const pageSize = parseInt(urlObj.searchParams.get("pageSize") || "15", 10);
 
-    const queryMap = region === "global" ? globalQueries : indiaQueries;
-    const query = queryMap[category] || queryMap.general;
+    let queryParam = "";
+    if (req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      if (body.query) queryParam = body.query;
+    }
 
-    const newsUrl = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&pageSize=${pageSize}&page=${page}&sortBy=publishedAt&language=en`;
+    const queryMap = region === "global" ? globalQueries : indiaQueries;
+    const baseQuery = queryMap[category] || queryMap.general;
+    const finalQuery = queryParam ? `${queryParam} ${baseQuery}` : baseQuery;
+
+    const newsUrl = `https://newsapi.org/v2/everything?q=${encodeURIComponent(finalQuery)}&pageSize=${pageSize}&page=${page}&sortBy=publishedAt&language=en`;
     const res = await fetchWithRotation(newsUrl);
 
     if (!res.ok) {
