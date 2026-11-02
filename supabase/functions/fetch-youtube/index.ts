@@ -5,21 +5,51 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+function getYouTubeKeys(): string[] {
+  const keys: string[] = [];
+  for (let i = 1; i <= 10; i++) {
+    const k = Deno.env.get(`YOUTUBE_API_KEY_${i}`) || Deno.env.get(`VITE_YOUTUBE_API_${i}`);
+    if (k && !keys.includes(k)) keys.push(k);
+  }
+  const primary = Deno.env.get("YOUTUBE_API_KEY") || Deno.env.get("VITE_YOUTUBE_API_KEY");
+  if (primary && !keys.includes(primary)) keys.unshift(primary);
+  return keys;
+}
+
+let keyIdx = 0;
+function getNextKey(keys: string[]): string {
+  if (keys.length === 0) return "";
+  const k = keys[keyIdx % keys.length];
+  keyIdx = (keyIdx + 1) % keys.length;
+  return k;
+}
+
+function parseDuration(duration: string): number {
+  const match = duration.match(/PT(\d+H)?(\d+M)?(\d+S)?/);
+  if (!match) return 0;
+  const hours = parseInt(match[1]) || 0;
+  const minutes = parseInt(match[2]) || 0;
+  const seconds = parseInt(match[3]) || 0;
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { type = "long", maxResults = 15, pageToken } = await req.json();
-    const YOUTUBE_API_KEY = Deno.env.get("YOUTUBE_API_KEY");
+    const { type = "long", maxResults = 15, pageToken, query } = await req.json();
+    const keys = getYouTubeKeys();
 
-    if (!YOUTUBE_API_KEY) {
+    if (keys.length === 0) {
       return new Response(
-        JSON.stringify({ success: false, error: "YouTube API key not configured" }),
+        JSON.stringify({ success: false, error: "YouTube API keys not configured in Supabase Secrets" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    const apiKey = getNextKey(keys);
 
     // Strategy 1: Try Videos.list (mostPopular in India, News category)
     const videosParams = new URLSearchParams({
@@ -28,11 +58,10 @@ serve(async (req) => {
       maxResults: String(maxResults),
       regionCode: "IN",
       videoCategoryId: "25", // News & Politics
-      key: YOUTUBE_API_KEY,
+      key: apiKey,
     });
-    if (pageToken) videosParams.set("pageToken", pageToken);
+    if (pageToken && !pageToken.startsWith("cache")) videosParams.set("pageToken", pageToken);
 
-    console.log(`Trying YouTube Videos.list for ${type}...`);
     const videosResp = await fetch(
       `https://www.googleapis.com/youtube/v3/videos?${videosParams.toString()}`,
       { headers: { Accept: "application/json" } }
@@ -47,7 +76,6 @@ serve(async (req) => {
         const secs = parseDuration(duration);
         const isShort = secs > 0 && secs <= 90;
 
-        // Filter by type
         if (type === "short" && !isShort) return null;
         if (type === "long" && isShort) return null;
 
@@ -70,8 +98,6 @@ serve(async (req) => {
         };
       }).filter(Boolean);
 
-      console.log(`YouTube Videos.list returned ${articles.length} ${type} videos`);
-
       if (articles.length > 0) {
         return new Response(
           JSON.stringify({
@@ -83,14 +109,12 @@ serve(async (req) => {
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-    } else {
-      console.log("Videos.list failed or returned 0:", videosData.error?.message || "no items");
     }
 
     // Strategy 2: Try Search API
-    const searchQuery = type === "short"
+    const searchQuery = query || (type === "short"
       ? "India news shorts trending viral action breaking today"
-      : "India news today trending report breaking world";
+      : "India news today trending report breaking world");
 
     const searchParams = new URLSearchParams({
       part: "snippet",
@@ -102,11 +126,10 @@ serve(async (req) => {
       order: "date",
       videoDuration: type === "short" ? "short" : "medium",
       safeSearch: "moderate",
-      key: YOUTUBE_API_KEY,
+      key: apiKey,
     });
-    if (pageToken) searchParams.set("pageToken", pageToken);
+    if (pageToken && !pageToken.startsWith("cache")) searchParams.set("pageToken", pageToken);
 
-    console.log(`Trying YouTube Search API for ${type}...`);
     const searchResp = await fetch(
       `https://www.googleapis.com/youtube/v3/search?${searchParams.toString()}`,
       { headers: { Accept: "application/json" } }
@@ -140,8 +163,6 @@ serve(async (req) => {
           };
         });
 
-      console.log(`YouTube Search API returned ${articles.length} ${type} videos`);
-
       return new Response(
         JSON.stringify({
           success: true,
@@ -153,30 +174,15 @@ serve(async (req) => {
       );
     }
 
-    console.error("Both YouTube methods failed. Search error:", searchData.error?.message || "unknown");
-
-    // Return empty with helpful error
     return new Response(
-      JSON.stringify({
-        success: true,
-        articles: [],
-        nextPageToken: null,
-        totalResults: 0,
-        debug: `Videos.list: ${videosData.error?.message || "0 items"}, Search: ${searchData.error?.message || "0 items"}`,
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      JSON.stringify({ success: false, error: searchData.error?.message || "YouTube API query returned no results" }),
+      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (error) {
-    console.error("Error:", error);
+  } catch (e) {
+    console.error("fetch-youtube error:", e);
     return new Response(
-      JSON.stringify({ success: false, error: error instanceof Error ? error.message : "Unknown error" }),
+      JSON.stringify({ success: false, error: e instanceof Error ? e.message : "Unknown error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });
-
-function parseDuration(iso: string): number {
-  const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-  if (!match) return 0;
-  return parseInt(match[1] || "0") * 3600 + parseInt(match[2] || "0") * 60 + parseInt(match[3] || "0");
-}

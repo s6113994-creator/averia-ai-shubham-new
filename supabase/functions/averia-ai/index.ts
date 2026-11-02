@@ -10,12 +10,32 @@ const corsHeaders = {
 const AI_MODEL = Deno.env.get("AVERIA_AI_MODEL") || "google/gemini-3-flash-preview";
 const IMAGE_MODEL = "google/gemini-3.1-flash-image-preview";
 
+function getGeminiKeys(): string[] {
+  const keys: string[] = [];
+  for (let i = 1; i <= 10; i++) {
+    const k = Deno.env.get(`GEMINI_API_KEY_${i}`) || Deno.env.get(`VITE_GEMINI_API_${i}`);
+    if (k && !keys.includes(k)) keys.push(k);
+  }
+  const primary = Deno.env.get("GEMINI_API_KEY") || Deno.env.get("LOVABLE_API_KEY") || Deno.env.get("VITE_GEMINI_API_KEY");
+  if (primary && !keys.includes(primary)) keys.unshift(primary);
+  return keys;
+}
+
+let geminiKeyIndex = 0;
+function getNextGeminiKey(keys: string[]): string {
+  if (keys.length === 0) return "";
+  const key = keys[geminiKeyIndex % keys.length];
+  geminiKeyIndex = (geminiKeyIndex + 1) % keys.length;
+  return key;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    const keys = getGeminiKeys();
+    if (keys.length === 0) throw new Error("GEMINI_API_KEY / LOVABLE_API_KEY is not configured in Supabase Secrets");
+    const geminiKey = getNextGeminiKey(keys);
 
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -25,11 +45,10 @@ serve(async (req) => {
     let userId: string | null = null;
     let memories: string[] = [];
     let userName = "";
-    
+
     if (authHeader) {
       try {
         const token = authHeader.replace("Bearer ", "");
-        // Try with anon key first, fall back gracefully
         const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || supabaseKey;
         const anonClient = createClient(supabaseUrl, anonKey);
         const { data: { user }, error: authError } = await anonClient.auth.getUser(token);
@@ -68,7 +87,7 @@ Submission:
       try {
         const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",
-          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${geminiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model: "google/gemini-2.5-flash-lite",
             messages: [{ role: "user", content: prompt }],
@@ -102,7 +121,7 @@ Submission:
       const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          Authorization: `Bearer ${geminiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -126,8 +145,8 @@ Submission:
     }
 
     // CHAT MODE (streaming)
-    const memoryContext = memories.length > 0 
-      ? `\n\nUser's Memory Vault:\n${memories.join("\n")}` 
+    const memoryContext = memories.length > 0
+      ? `\n\nUser's Memory Vault:\n${memories.join("\n")}`
       : "";
 
     const personalGreeting = userName ? `The user's name is "${userName}". Greet them personally when appropriate.` : "";
@@ -180,13 +199,12 @@ Rules:
 ${forensicAddon}
 ${memoryContext}`;
 
-    // Use a vision-capable model when forensic attachments are present
     const modelToUse = forensicMode ? "google/gemini-2.5-pro" : AI_MODEL;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        Authorization: `Bearer ${geminiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
