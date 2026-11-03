@@ -219,16 +219,23 @@ export default function News() {
       }
 
       // PARALLEL: Fetch from API AND Supabase archive simultaneously
-      const [newsResult, archiveLongRes, archiveShortRes, archiveNewsRes] = await Promise.allSettled([
-        supabase.functions.invoke('fetch-news', {
-          body: {
+      const { data: { session } } = await supabase.auth.getSession();
+      const [newsRes, archiveLongRes, archiveShortRes, archiveNewsRes] = await Promise.allSettled([
+        fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fetch-news`, {
+          method: 'POST',
+          headers: {
+            'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
             category: selectedCategory === 'all' ? 'general' : selectedCategory,
             pageSize: 30,
             page: 1,
             query: searchText || undefined,
-            bypassCache: true, // Force fresh fetch on app init
-          },
-        }),
+            bypassCache: true,
+          }),
+        }).then(r => r.json()),
         getHistoricalFeed('long', 0, 15),
         getHistoricalFeed('short', 0, 15),
         getHistoricalNewsFeed(0, 20),
@@ -237,7 +244,7 @@ export default function News() {
       let newsArticles: MediaNewsArticle[] = [];
       const headlines: string[] = [];
 
-      const newsData = newsResult.status === 'fulfilled' ? newsResult.value.data : null;
+      const newsData = newsRes.status === 'fulfilled' ? newsRes.value : null;
       if (newsData?.success && newsData.articles?.length > 0) {
         newsArticles = newsData.articles.map((article: any) => ({
           ...article,

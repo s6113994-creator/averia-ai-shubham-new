@@ -274,11 +274,19 @@ export async function searchYouTube(
 
   try {
     await ensureValidSession();
-    const { data, error } = await supabase.functions.invoke('fetch-youtube', {
-      body: { query: normalizedQuery, type, maxResults, pageToken },
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fetch-youtube`, {
+      method: 'POST',
+      headers: {
+        'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query: normalizedQuery, type, maxResults, pageToken }),
     });
+    const data = await res.json();
 
-    if (!error && data?.success && data?.articles) {
+    if (res.ok && data?.success && data?.articles) {
       return {
         articles: data.articles,
         nextPageToken: data.nextPageToken || null,
