@@ -119,17 +119,16 @@ export default function News() {
   }, []);
 
   const searchApiCacheFirst = useCallback(async (query: string): Promise<MediaNewsArticle[]> => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return [];
-
-    const word = normalized.split(/\s+/).find(w => w.length > 2) || normalized;
-    const categoryKey = selectedCategory === 'all' ? '' : selectedCategory;
-
     try {
-      // Ensure valid session before search queries
-      const { data: { session } } = await supabase.auth.getSession();
+      const normalized = query.trim().toLowerCase();
+      if (!normalized) return [];
+
+      const word = normalized.split(/\s+/).find(w => w.length > 2) || normalized;
+      const categoryKey = selectedCategory === 'all' ? '' : selectedCategory;
+
+      const { data: { session } } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
       if (session?.expires_at && session.expires_at - Math.floor(Date.now() / 1000) < 60) {
-        await supabase.auth.refreshSession();
+        await supabase.auth.refreshSession().catch(() => {});
       }
       const [newsResult, longResult, shortResult] = await Promise.all([
         supabase
@@ -137,19 +136,22 @@ export default function News() {
           .select('data, created_at')
           .like('cache_key', categoryKey ? `news:${categoryKey}:%${word}%` : `news:%${word}%`)
           .order('created_at', { ascending: false })
-          .limit(30),
+          .limit(30)
+          .catch(() => ({ data: [] })),
         supabase
           .from('api_cache')
           .select('data, created_at')
           .like('cache_key', `yt:long:%${word}%`)
           .order('created_at', { ascending: false })
-          .limit(20),
+          .limit(20)
+          .catch(() => ({ data: [] })),
         supabase
           .from('api_cache')
           .select('data, created_at')
           .like('cache_key', `yt:short:%${word}%`)
           .order('created_at', { ascending: false })
-          .limit(20),
+          .limit(20)
+          .catch(() => ({ data: [] })),
       ]);
 
       const rows = [
@@ -703,9 +705,9 @@ export default function News() {
           style={{ width: `${scrollProgress}%` }}
         />
       </div>
-      <div className="container mx-auto px-4 pt-0 pb-3">
+      <div className="container mx-auto px-4 pt-20 pb-6">
         {/* ROW 1 — compact: centered "News" + [+], refresh on the right */}
-        <div className="sticky top-0 z-50 flex h-[52px] max-h-[52px] flex-row items-center justify-between bg-background/95 pl-14 pr-14 backdrop-blur-md md:pl-0 border-b border-border/40">
+        <div className="sticky top-0 z-[100] w-full bg-[#0c0d12] bg-opacity-100 backdrop-blur-md border-b border-white/15 shadow-lg flex h-[52px] max-h-[52px] flex-row items-center justify-between pl-14 pr-14 md:pl-0">
           <div className="flex items-center gap-2">
             <h1 className="font-heading text-lg md:text-xl font-semibold leading-none whitespace-nowrap">News</h1>
             <button
