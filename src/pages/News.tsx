@@ -290,9 +290,10 @@ export default function News() {
       let longVideos: MediaNewsArticle[] = [];
       let shortVideos: MediaNewsArticle[] = [];
 
-      if (dualSync.status === 'fulfilled') {
-        longVideos.push(...dualSync.value.long);
-        shortVideos.push(...dualSync.value.short);
+      if (dualSync.status === 'fulfilled' && dualSync.value) {
+        const val: any = dualSync.value;
+        if (Array.isArray(val.long)) longVideos.push(...val.long);
+        if (Array.isArray(val.short)) shortVideos.push(...val.short);
       }
 
       if (trendingLong.status === 'fulfilled') {
