@@ -705,7 +705,7 @@ export default function News() {
       </div>
       <div className="container mx-auto px-4 pt-0 pb-3">
         {/* ROW 1 — compact: centered "News" + [+], refresh on the right */}
-        <div className="sticky top-0 z-40 flex h-[52px] max-h-[52px] flex-row items-center justify-between bg-background/90 pl-14 pr-14 backdrop-blur-xl md:pl-0">
+        <div className="sticky top-0 z-50 flex h-[52px] max-h-[52px] flex-row items-center justify-between bg-background/95 pl-14 pr-14 backdrop-blur-md md:pl-0 border-b border-border/40">
           <div className="flex items-center gap-2">
             <h1 className="font-heading text-lg md:text-xl font-semibold leading-none whitespace-nowrap">News</h1>
             <button

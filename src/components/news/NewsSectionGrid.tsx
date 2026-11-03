@@ -92,9 +92,9 @@ function InfiniteScrollGrid({
   return (
     <div>
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {articles.map((article) => (
+        {articles.map((article, index) => (
           <NewsMediaCard
-            key={article.id}
+            key={article.id || article.videoId || article.url || index}
             article={article}
             onSave={onSave ? () => onSave(article) : undefined}
             onVerify={onVerify ? () => onVerify(article) : undefined}
@@ -218,9 +218,9 @@ function AllSectionContent({
             <FileText className="h-5 w-5 text-primary" /> Articles
           </h3>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {otherArticles.map((article) => (
+            {otherArticles.map((article, index) => (
               <NewsMediaCard
-                key={article.id}
+                key={article.id || article.videoId || article.url || index}
                 article={article}
                 onSave={onSave ? () => onSave(article) : undefined}
                 onVerify={onVerify ? () => onVerify(article) : undefined}
