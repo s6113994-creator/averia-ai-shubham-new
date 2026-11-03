@@ -16,11 +16,15 @@ const DEFAULT_NEWS_KEYS = [
 function getNewsKeys(): string[] {
   const keys: string[] = [];
   for (let i = 1; i <= 4; i++) {
-    const k = Deno.env.get(`NEWS_API_KEY_${i}`) || Deno.env.get(`VITE_NEWS_API_${i}`);
-    if (k && !keys.includes(k)) keys.push(k);
+    const k1 = Deno.env.get(`NEWS_API_KEY_${i}`);
+    const k2 = Deno.env.get(`VITE_NEWS_API_${i}`);
+    if (k1 && !keys.includes(k1)) keys.push(k1);
+    if (k2 && !keys.includes(k2)) keys.push(k2);
   }
-  const primary = Deno.env.get("NEWS_API_KEY") || Deno.env.get("VITE_NEWS_API_KEY");
-  if (primary && !keys.includes(primary)) keys.unshift(primary);
+  const primary1 = Deno.env.get("NEWS_API_KEY");
+  const primary2 = Deno.env.get("VITE_NEWS_API_KEY");
+  if (primary1 && !keys.includes(primary1)) keys.unshift(primary1);
+  if (primary2 && !keys.includes(primary2)) keys.unshift(primary2);
   for (const defKey of DEFAULT_NEWS_KEYS) {
     if (!keys.includes(defKey)) keys.push(defKey);
   }
@@ -171,13 +175,15 @@ serve(async (req) => {
     const urlObj = new URL(req.url);
     const category = urlObj.searchParams.get("category") || "general";
     const region = urlObj.searchParams.get("region") || "in";
-    const page = parseInt(urlObj.searchParams.get("page") || "1", 10);
-    const pageSize = parseInt(urlObj.searchParams.get("pageSize") || "15", 10);
+    const page = Number(urlObj.searchParams.get("page") || 1);
+    const pageSize = Number(urlObj.searchParams.get("pageSize") || 15);
 
     let queryParam = "";
     if (req.method === "POST") {
       const body = await req.json().catch(() => ({}));
       if (body.query) queryParam = body.query;
+      if (body.page) page = Number(body.page || 1);
+      if (body.pageSize || body.page_size) pageSize = Number(body.pageSize || body.page_size || 15);
     }
 
     const queryMap = region === "global" ? globalQueries : indiaQueries;

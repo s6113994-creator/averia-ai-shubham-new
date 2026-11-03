@@ -5,20 +5,40 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+const DEFAULT_YOUTUBE_KEYS = [
+  'AIzaSyAZE0y8xD7Y1NIOY4G-KkybHOb2Kzx7NCQ',
+  'AIzaSyBZzw5iDWA3quIj76m4u8S8pq4uE9Q3zsM',
+  'AIzaSyDGPUneOQFjK7GPqDp6RU-D3oxGoGwT96U',
+  'AIzaSyCf53hTWT_UGoVzD57Qgd5E6xaH0QGgEOg',
+  'AIzaSyCM5dviM3L0xYaISvY1R0dds5bxAk5PK7o',
+  'AIzaSyC7oL9Xgx7ycI6HhDZ84Ub2wfdOX-2NpDc',
+  'AIzaSyBdXk0-0EXJV-EkVXL3Rr_iEFOFaC-7c6U',
+  'AIzaSyA3m2k602asEdkbkP5NziInkKysUn9t_Sw',
+  'AIzaSyC_giw7hu-NYf6mzxOF5oDBrBGE_JOkSwQ',
+  'AIzaSyB2PIrCjOzCc3cPWVoWLSQyv_825TKzAHU',
+];
+
 function getYouTubeKeys(): string[] {
   const keys: string[] = [];
   for (let i = 1; i <= 10; i++) {
-    const k = Deno.env.get(`YOUTUBE_API_KEY_${i}`) || Deno.env.get(`VITE_YOUTUBE_API_${i}`);
-    if (k && !keys.includes(k)) keys.push(k);
+    const k1 = Deno.env.get(`YOUTUBE_API_KEY_${i}`);
+    const k2 = Deno.env.get(`VITE_YOUTUBE_API_${i}`);
+    if (k1 && !keys.includes(k1)) keys.push(k1);
+    if (k2 && !keys.includes(k2)) keys.push(k2);
   }
-  const primary = Deno.env.get("YOUTUBE_API_KEY") || Deno.env.get("VITE_YOUTUBE_API_KEY");
-  if (primary && !keys.includes(primary)) keys.unshift(primary);
+  const primary1 = Deno.env.get("YOUTUBE_API_KEY");
+  const primary2 = Deno.env.get("VITE_YOUTUBE_API_KEY");
+  if (primary1 && !keys.includes(primary1)) keys.unshift(primary1);
+  if (primary2 && !keys.includes(primary2)) keys.unshift(primary2);
+  for (const defKey of DEFAULT_YOUTUBE_KEYS) {
+    if (!keys.includes(defKey)) keys.push(defKey);
+  }
   return keys;
 }
 
 let keyIdx = 0;
 function getNextKey(keys: string[]): string {
-  if (keys.length === 0) return "";
+  if (keys.length === 0) return DEFAULT_YOUTUBE_KEYS[0];
   const k = keys[keyIdx % keys.length];
   keyIdx = (keyIdx + 1) % keys.length;
   return k;
@@ -39,16 +59,25 @@ serve(async (req) => {
   }
 
   try {
-    const { type = "long", maxResults = 15, pageToken, query } = await req.json();
-    const keys = getYouTubeKeys();
-
-    if (keys.length === 0) {
-      return new Response(
-        JSON.stringify({ success: false, error: "YouTube API keys not configured in Supabase Secrets" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    let reqPayload: any = {};
+    try {
+      reqPayload = await req.json();
+    } catch {
+      const urlObj = new URL(req.url);
+      reqPayload = {
+        type: urlObj.searchParams.get("type") || "long",
+        maxResults: urlObj.searchParams.get("maxResults") || urlObj.searchParams.get("max_results") || 15,
+        pageToken: urlObj.searchParams.get("pageToken") || urlObj.searchParams.get("page_token"),
+        query: urlObj.searchParams.get("query"),
+      };
     }
 
+    const type = reqPayload?.type || "long";
+    const maxResults = Number(reqPayload?.maxResults || reqPayload?.max_results || 15);
+    const pageToken = reqPayload?.pageToken || reqPayload?.page_token;
+    const query = reqPayload?.query;
+
+    const keys = getYouTubeKeys();
     const apiKey = getNextKey(keys);
 
     // Strategy 1: Try Videos.list (mostPopular in India, News category)
