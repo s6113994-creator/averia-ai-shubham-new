@@ -175,8 +175,8 @@ serve(async (req) => {
     const urlObj = new URL(req.url);
     const category = urlObj.searchParams.get("category") || "general";
     const region = urlObj.searchParams.get("region") || "in";
-    const page = Number(urlObj.searchParams.get("page") || 1);
-    const pageSize = Number(urlObj.searchParams.get("pageSize") || 15);
+    let page = Number(urlObj.searchParams.get("page") || 1);
+    let pageSize = Number(urlObj.searchParams.get("pageSize") || 15);
 
     let queryParam = "";
     if (req.method === "POST") {
