@@ -1,0 +1,213 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+};
+
+const AI_MODEL = Deno.env.get("AVERIA_AI_MODEL") || "google/gemini-3-flash-preview";
+const IMAGE_MODEL = "google/gemini-3.1-flash-image-preview";
+
+function getGeminiKeys(): string[] {
+  const keys: string[] = [];
+  for (let i = 1; i <= 10; i++) {
+    const k1 = Deno.env.get(`GEMINI_API_KEY_${i}`);
+    const k2 = Deno.env.get(`VITE_GEMINI_API_${i}`);
+    if (k1 && !keys.includes(k1)) keys.push(k1);
+    if (k2 && !keys.includes(k2)) keys.push(k2);
+  }
+  const primary1 = Deno.env.get("GEMINI_API_KEY");
+  const primary2 = Deno.env.get("LOVABLE_API_KEY");
+  const primary3 = Deno.env.get("VITE_GEMINI_API_KEY");
+  if (primary1 && !keys.includes(primary1)) keys.unshift(primary1);
+  if (primary2 && !keys.includes(primary2)) keys.unshift(primary2);
+  if (primary3 && !keys.includes(primary3)) keys.unshift(primary3);
+  if (keys.length === 0) {
+    keys.push("sk-proj-default");
+  }
+  return keys;
+}
+
+async function fetchWithGeminiRotation(url: string, options: RequestInit): Promise<Response> {
+  const keys = getGeminiKeys();
+  let lastResp: Response | null = null;
+
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    const headers = new Headers(options.headers || {});
+    headers.set("Authorization", `Bearer ${key}`);
+
+    try {
+      const res = await fetch(url, { ...options, headers });
+      if (res.ok) return res;
+
+      lastResp = res;
+      const status = res.status;
+      if (status === 429 || status === 402 || status === 401 || status === 403 || status >= 500) {
+        console.warn(`[Gemini Rotation] Key index ${i} failed with status ${status}, rotating...`);
+        continue;
+      }
+      return res;
+    } catch (err) {
+      console.warn(`[Gemini Rotation] Network error on key index ${i}:`, err);
+      continue;
+    }
+  }
+
+  return lastResp || new Response(JSON.stringify({ error: "All Gemini API keys exhausted or failed" }), { status: 500, headers: corsHeaders });
+}
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+
+  try {
+    const authHeader = req.headers.get("Authorization");
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    let userId: string | null = null;
+    let memories: string[] = [];
+    let userName = "";
+
+    if (authHeader) {
+      try {
+        const token = authHeader.replace("Bearer ", "");
+        const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || supabaseKey;
+        const anonClient = createClient(supabaseUrl, anonKey);
+        const { data: { user }, error: authError } = await anonClient.auth.getUser(token);
+        if (!authError && user) {
+          userId = user.id;
+          userName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || "";
+
+          const { data: mems } = await supabase
+            .from("ai_memory")
+            .select("key, value")
+            .eq("user_id", userId)
+            .limit(20);
+          if (mems?.length) {
+            memories = mems.map(m => `${m.key}: ${m.value}`);
+          }
+        }
+      } catch (authErr) {
+        console.warn("Auth lookup failed:", authErr);
+      }
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const { messages, conversationId, saveMemory, mode, forensicMode, classify, kind, text } = body as any;
+
+    if (classify === true) {
+      const prompt = `You are a strict content-quality classifier for a public news vault.
+A user submitted a ${kind || 'text'} entry. Decide if it qualifies as:
+- legitimate news / trending announcement / useful global data / informative public content (=> allowed)
+- OR fake news / spam / personal-only chatter / non-informative ramble (=> rejected).
+
+Respond as STRICT JSON only: {"allowed": true|false, "reason": "short reason"}.
+
+Submission:
+"""${(text || '').slice(0, 1500)}"""`;
+      try {
+        const r = await fetchWithGeminiRotation("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash-lite",
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+        if (!r.ok) return new Response(JSON.stringify({ allowed: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        const j = await r.json();
+        const raw = j?.choices?.[0]?.message?.content || "";
+        const m = raw.match(/\{[\s\S]*\}/);
+        let verdict: { allowed: boolean; reason?: string } = { allowed: true };
+        if (m) { try { verdict = JSON.parse(m[0]); } catch {} }
+        return new Response(JSON.stringify(verdict), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      } catch {
+        return new Response(JSON.stringify({ allowed: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+    }
+
+    if (saveMemory && userId) {
+      await supabase.from("ai_memory").upsert({
+        user_id: userId,
+        key: saveMemory.key,
+        value: saveMemory.value,
+        memory_type: saveMemory.type || "preference",
+      }, { onConflict: "user_id,key" }).catch(() => {});
+    }
+
+    if (mode === "image") {
+      const imagePrompt = messages[messages.length - 1]?.content || "";
+      const response = await fetchWithGeminiRotation("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: IMAGE_MODEL,
+          messages: [{ role: "user", content: imagePrompt }],
+          modalities: ["image", "text"],
+        }),
+      });
+
+      if (!response.ok) {
+        const status = response.status;
+        if (status === 429) return new Response(JSON.stringify({ error: "Rate limit exceeded. Wait a moment." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        if (status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted. Add funds in Settings." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        return new Response(JSON.stringify({ error: "Image generation failed." }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      const data = await response.json();
+      return new Response(JSON.stringify(data), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const memoryContext = memories.length > 0 ? `\n\nUser's Memory Vault:\n${memories.join("\n")}` : "";
+    const personalGreeting = userName ? `The user's name is "${userName}". Greet them personally when appropriate.` : "";
+
+    const forensicAddon = forensicMode ? `
+🔬 **DEEP-CORE FORENSIC MODE ACTIVATED** — Perform exhaustive forensic analysis on attached media.
+1. **🎯 Verdict Badge**: ✅ AUTHENTIC / ❌ FAKE / ⚠️ MISLEADING / 🤖 AI-GENERATED / 🔧 MANIPULATED
+2. **📊 Confidence Score**: Exact percentage
+3. **🔍 Forensic Markers**: Anomalies found
+4. **👻 AI Ghost Detection**: Manipulation regions
+` : "";
+
+    const systemPrompt = `You are **Averia Agentic AI (V5.1)** — a world-class multimodal agentic assistant.
+${personalGreeting}
+${forensicAddon}
+${memoryContext}`;
+
+    const modelToUse = forensicMode ? "google/gemini-2.5-pro" : AI_MODEL;
+
+    const response = await fetchWithGeminiRotation("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: modelToUse,
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...messages,
+        ],
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      const status = response.status;
+      if (status === 429) return new Response(JSON.stringify({ error: "Rate limit exceeded." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      if (status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: "AI service temporarily unavailable." }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    return new Response(response.body, {
+      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+    });
+  } catch (e) {
+    console.error("master-agent-engine error:", e);
+    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+});

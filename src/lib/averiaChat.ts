@@ -1,19 +1,26 @@
 import { supabase } from '@/integrations/supabase/client';
 
-/** One-shot helper around the streaming averia-ai edge function with robust retry and error boundary. */
+const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/master-agent-engine`;
+
+function getChatHeaders(accessToken?: string | null) {
+  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  return {
+    'apikey': anonKey,
+    'Authorization': accessToken ? `Bearer ${accessToken}` : `Bearer ${anonKey}`,
+    'Content-Type': 'application/json',
+  };
+}
+
+/** One-shot helper around the streaming master-agent-engine edge function with robust retry and error boundary. */
 export async function askAveria(messages: { role: string; content: string }[], retries = 2): Promise<string> {
   const { data: { session } } = await supabase.auth.getSession();
   let lastError: any = null;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/averia-ai`, {
+      const res = await fetch(CHAT_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-        },
+        headers: getChatHeaders(session?.access_token),
         body: JSON.stringify({ messages }),
       });
 
@@ -66,13 +73,9 @@ export async function streamAveria(
   const { data: { session } } = await supabase.auth.getSession();
   let res: Response;
   try {
-    res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/averia-ai`, {
+    res = await fetch(CHAT_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      },
+      headers: getChatHeaders(session?.access_token),
       body: JSON.stringify({ messages }),
     });
   } catch (netErr: any) {
@@ -118,7 +121,6 @@ export interface UpiQrDetails {
   registeredName: string;
 }
 
-/** Extracts the payment address and registered name from a decoded UPI QR payload. */
 export function extractUpiDetails(payload: string): UpiQrDetails | null {
   try {
     const decoded = decodeURIComponent(payload.trim());
@@ -134,7 +136,6 @@ export function extractUpiDetails(payload: string): UpiQrDetails | null {
   }
 }
 
-/** Uses the browser QR detector when available, then applies the same UPI parser. */
 export async function decodeUpiQrFile(file: File): Promise<UpiQrDetails | null> {
   const BarcodeDetector = (window as typeof window & {
     BarcodeDetector?: new (options?: { formats?: string[] }) => {

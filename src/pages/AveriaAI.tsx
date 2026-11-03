@@ -13,7 +13,7 @@ import { AveriaLogo } from '@/components/AveriaLogo';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { MessageResponse } from '@/components/ai-elements/message';
 
-const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/averia-ai`;
+const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/master-agent-engine`;
 
 interface Attachment {
   id: string;
@@ -643,14 +643,15 @@ export default function AveriaAI() {
   const handleImageGeneration = async (prompt: string, convId: string) => {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
-      const authToken = sessionData?.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-      
+      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const authToken = sessionData?.session?.access_token || anonKey;
+
       const resp = await fetch(CHAT_URL, {
         method: 'POST',
         headers: {
+          'apikey': anonKey,
+          'Authorization': `Bearer ${authToken}`,
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`,
-          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
           'x-client-info': 'averia-ai-client',
         },
         body: JSON.stringify({ messages: [{ role: 'user', content: prompt }], conversationId: convId, mode: 'image' }),
@@ -826,14 +827,15 @@ export default function AveriaAI() {
     let assistantContent = '';
     try {
       const { data: sessionData } = await supabase.auth.getSession();
-      const authToken = sessionData?.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-      
+      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const authToken = sessionData?.session?.access_token || anonKey;
+
       const resp = await fetch(CHAT_URL, {
         method: 'POST',
         headers: {
+          'apikey': anonKey,
+          'Authorization': `Bearer ${authToken}`,
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`,
-          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
           'x-client-info': 'averia-ai-client',
         },
         body: JSON.stringify({ messages: payloadMessages, conversationId: convId, forensicMode: currentAttachments.length > 0 }),
