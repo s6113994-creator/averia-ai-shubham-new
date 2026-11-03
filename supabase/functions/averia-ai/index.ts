@@ -6,37 +6,62 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// Model configuration - single variable hot-swap
 const AI_MODEL = Deno.env.get("AVERIA_AI_MODEL") || "google/gemini-3-flash-preview";
 const IMAGE_MODEL = "google/gemini-3.1-flash-image-preview";
 
 function getGeminiKeys(): string[] {
   const keys: string[] = [];
   for (let i = 1; i <= 10; i++) {
-    const k = Deno.env.get(`GEMINI_API_KEY_${i}`) || Deno.env.get(`VITE_GEMINI_API_${i}`);
-    if (k && !keys.includes(k)) keys.push(k);
+    const k1 = Deno.env.get(`GEMINI_API_KEY_${i}`);
+    const k2 = Deno.env.get(`VITE_GEMINI_API_${i}`);
+    if (k1 && !keys.includes(k1)) keys.push(k1);
+    if (k2 && !keys.includes(k2)) keys.push(k2);
   }
-  const primary = Deno.env.get("GEMINI_API_KEY") || Deno.env.get("LOVABLE_API_KEY") || Deno.env.get("VITE_GEMINI_API_KEY");
-  if (primary && !keys.includes(primary)) keys.unshift(primary);
+  const primary1 = Deno.env.get("GEMINI_API_KEY");
+  const primary2 = Deno.env.get("LOVABLE_API_KEY");
+  const primary3 = Deno.env.get("VITE_GEMINI_API_KEY");
+  if (primary1 && !keys.includes(primary1)) keys.unshift(primary1);
+  if (primary2 && !keys.includes(primary2)) keys.unshift(primary2);
+  if (primary3 && !keys.includes(primary3)) keys.unshift(primary3);
+  if (keys.length === 0) {
+    keys.push("sk-proj-default");
+  }
   return keys;
 }
 
-let geminiKeyIndex = 0;
-function getNextGeminiKey(keys: string[]): string {
-  if (keys.length === 0) return "";
-  const key = keys[geminiKeyIndex % keys.length];
-  geminiKeyIndex = (geminiKeyIndex + 1) % keys.length;
-  return key;
+async function fetchWithGeminiRotation(url: string, options: RequestInit): Promise<Response> {
+  const keys = getGeminiKeys();
+  let lastResp: Response | null = null;
+
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    const headers = new Headers(options.headers || {});
+    headers.set("Authorization", `Bearer ${key}`);
+
+    try {
+      const res = await fetch(url, { ...options, headers });
+      if (res.ok) return res;
+
+      lastResp = res;
+      const status = res.status;
+      if (status === 429 || status === 402 || status === 401 || status === 403 || status >= 500) {
+        console.warn(`[Gemini Rotation] Key index ${i} failed with status ${status}, rotating to next key...`);
+        continue;
+      }
+      return res;
+    } catch (err) {
+      console.warn(`[Gemini Rotation] Network error on key index ${i}:`, err);
+      continue;
+    }
+  }
+
+  return lastResp || new Response(JSON.stringify({ error: "All Gemini API keys exhausted or failed" }), { status: 500, headers: corsHeaders });
 }
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const keys = getGeminiKeys();
-    if (keys.length === 0) throw new Error("GEMINI_API_KEY / LOVABLE_API_KEY is not configured in Supabase Secrets");
-    const geminiKey = getNextGeminiKey(keys);
-
     const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -85,9 +110,9 @@ Respond as STRICT JSON only: {"allowed": true|false, "reason": "short reason"}.
 Submission:
 """${(text || '').slice(0, 1500)}"""`;
       try {
-        const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        const r = await fetchWithGeminiRotation("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",
-          headers: { Authorization: `Bearer ${geminiKey}`, "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             model: "google/gemini-2.5-flash-lite",
             messages: [{ role: "user", content: prompt }],
@@ -118,10 +143,9 @@ Submission:
     // IMAGE GENERATION MODE
     if (mode === "image") {
       const imagePrompt = messages[messages.length - 1]?.content || "";
-      const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      const response = await fetchWithGeminiRotation("https://ai.gateway.lovable.dev/v1/chat/completions", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${geminiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -201,10 +225,9 @@ ${memoryContext}`;
 
     const modelToUse = forensicMode ? "google/gemini-2.5-pro" : AI_MODEL;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const response = await fetchWithGeminiRotation("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${geminiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
