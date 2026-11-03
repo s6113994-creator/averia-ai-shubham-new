@@ -282,7 +282,7 @@ export async function searchYouTube(
         'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ query: normalizedQuery, type, maxResults, pageToken }),
+      body: JSON.stringify({ query: normalizedQuery, type, maxResults: Number(maxResults || 15), max_results: Number(maxResults || 15), pageToken }),
     });
     const data = await res.json();
 

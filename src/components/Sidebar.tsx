@@ -128,7 +128,7 @@ export function Sidebar({ open, onOpenChange }: { open: boolean; onOpenChange: (
       }`}
       style={{ width: sidebarWidth as any, maxWidth: sidebarWidth as any }}
     >
-      <div className="shrink-0 sticky top-0 z-20 bg-[#1A1A24]">
+      <div className="shrink-0 sticky top-0 z-50 bg-[#1A1A24]/95 backdrop-blur-md">
         <div className="h-14 px-4 flex items-center justify-between gap-2">
           <Link to="/averia-ai" className="flex items-center gap-2 min-w-0" onClick={() => isMobile && onOpenChange(false)}>
             <div className="w-7 h-7 flex items-center justify-center shrink-0"><AveriaLogo size="sm" /></div>
