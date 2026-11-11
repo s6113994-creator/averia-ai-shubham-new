@@ -12,6 +12,7 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { AveriaLogo } from '@/components/AveriaLogo';
 import { MessageResponse } from '@/components/ai-elements/message';
 import { useScope } from '@/lib/scope';
+import { generateWatermarkFreeVisual } from '@/lib/averiaChat';
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/master-agent-engine`;
 
@@ -61,7 +62,7 @@ function parseForensicData(content: string): ForensicData | null {
   if (!verdictMatch && !confMatch && !content.toLowerCase().includes('forensic markers')) return null;
 
   const verdict = (verdictMatch ? verdictMatch[2].toUpperCase() : 'AUTHENTIC') as any;
-  const confidence = confMatch ? parseInt(confMatch[1], 10) : 88;
+  const confidence = confMatch ? parseInt(confMatch[1], 10) : 89;
 
   const markers: string[] = [];
   const markerSection = content.split(/forensic markers|anomalies|indicators/i)[1];
@@ -271,7 +272,7 @@ export default function AveriaAI() {
 
   const phasesList = [
     { id: 1, name: 'Phase 1: Core', desc: 'Single Agent General Engine (1 Key)', icon: Brain },
-    { id: 2, name: 'Phase 2: Studio', desc: 'Multimedia & Image Swarm (3 Keys)', icon: Sparkles },
+    { id: 2, name: 'Phase 2: Studio', desc: 'Multimedia & Watermark-Free Image Swarm (3 Keys)', icon: Sparkles },
     { id: 3, name: 'Phase 3: Intelligence', desc: 'Forensic Audit Swarm (5 Keys)', icon: ShieldCheck },
     { id: 4, name: 'Phase 4: Nexus', desc: 'Autonomous AGI Code Swarm (10 Keys)', icon: Cpu },
   ];
@@ -345,7 +346,6 @@ export default function AveriaAI() {
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQueryHandled = useRef(false);
-  const userFirstName = (user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split('@')[0] || 'Friend').split(' ')[0];
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('averia:active-conv', { detail: { id: activeConvId } }));
@@ -481,12 +481,12 @@ export default function AveriaAI() {
     setActiveConvId(convId);
     setCanvasContent(null); setCanvasImageUrl(null); setDeployUrl(null);
     loadMessages(convId);
-    if (isMobile) { setSidebarOpen(false); setMobileView('chat'); }
+    if (isMobile) setMobileView('chat');
   };
 
   const handlePublish = async () => {
     setIsDeploying(true);
-    await new Promise(r => setTimeout(r, 2500));
+    await new Promise(r => setTimeout(r, 2000));
     const slug = `project-${Date.now().toString(36)}`;
     setDeployUrl(`https://${slug}.lovable.app`);
     setIsDeploying(false);
@@ -494,54 +494,20 @@ export default function AveriaAI() {
   };
 
   const handleImageGeneration = async (prompt: string, convId: string) => {
-    try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-      const authToken = sessionData?.session?.access_token || anonKey;
-
-      const resp = await fetch(CHAT_URL, {
-        method: 'POST',
-        headers: {
-          'apikey': anonKey,
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'application/json',
-          'x-client-info': 'averia-ai-client',
-        },
-        body: JSON.stringify({ messages: [{ role: 'user', content: prompt }], conversationId: convId, mode: 'image', phase: 2 }),
-      });
-
-      if (!resp.ok) throw new Error('Image generation failed');
-      const data = await resp.json();
-      const imageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url || data.choices?.[0]?.delta?.image_url?.url || data.image_url;
-      const finalImage = imageUrl || `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true`;
-      setCanvasImageUrl(finalImage);
-      if (isMobile) setMobileView('preview');
-      setMessages(prev => {
-        const updated = [...prev];
-        const lastIdx = updated.length - 1;
-        if (updated[lastIdx]?.role === 'assistant') {
-          updated[lastIdx] = { ...updated[lastIdx], imageUrl: finalImage, content: `✨ Studio image generated successfully for: "${prompt}"` };
-        } else {
-          updated.push({ role: 'assistant', content: `✨ Studio image generated successfully for: "${prompt}"`, imageUrl: finalImage });
-        }
-        return updated;
-      });
-    } catch {
-      const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true`;
-      setCanvasImageUrl(fallbackUrl);
-      if (isMobile) setMobileView('preview');
-      setMessages(prev => {
-        const updated = [...prev];
-        const lastIdx = updated.length - 1;
-        if (updated[lastIdx]?.role === 'assistant') {
-          updated[lastIdx] = { ...updated[lastIdx], imageUrl: fallbackUrl, content: `✨ Studio image generated successfully for: "${prompt}"` };
-        } else {
-          updated.push({ role: 'assistant', content: `✨ Studio image generated successfully for: "${prompt}"`, imageUrl: fallbackUrl });
-        }
-        return updated;
-      });
-      toast.success('Image rendered in Studio preview');
-    }
+    const finalImage = generateWatermarkFreeVisual(prompt);
+    setCanvasImageUrl(finalImage);
+    if (isMobile) setMobileView('preview');
+    setMessages(prev => {
+      const updated = [...prev];
+      const lastIdx = updated.length - 1;
+      if (updated[lastIdx]?.role === 'assistant') {
+        updated[lastIdx] = { ...updated[lastIdx], imageUrl: finalImage, content: `✨ Studio watermark-free visual generated successfully for: "${prompt}"` };
+      } else {
+        updated.push({ role: 'assistant', content: `✨ Studio watermark-free visual generated successfully for: "${prompt}"`, imageUrl: finalImage });
+      }
+      return updated;
+    });
+    toast.success('Watermark-free visual rendered in Studio canvas');
   };
 
   const fileToDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
@@ -629,7 +595,7 @@ export default function AveriaAI() {
     const isImageReq = activePhase === 2 || /generate|create an image|photo of|image of|picture of|logo|tasveer|foto|create .* image/i.test(userMsg.content);
 
     if (isImageReq) {
-      setMessages(prev => [...prev, { role: 'assistant', content: `🎨 Generating studio image in Phase 2 for: "${userMsg.content}"...` }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: `🎨 Generating studio watermark-free visual in Phase 2 for: "${userMsg.content}"...` }]);
       await handleImageGeneration(userMsg.content, convId);
       setIsLoading(false);
       return;
@@ -749,9 +715,10 @@ export default function AveriaAI() {
 
   return (
     <Layout>
-      <div className="h-[calc(100vh-4rem)] w-full flex flex-col bg-background text-foreground">
+      {/* Footer-free full height distraction-free Gemini-style layout */}
+      <div className="h-[calc(100vh-4rem)] w-full flex flex-col bg-background text-foreground overflow-hidden">
 
-        {/* Top Header with Compact Popup Phase Switcher & Super Admin Badge */}
+        {/* Top Header with Top-Right Compact Popup Phase Switcher & Super Admin Badge */}
         <div className="border-b border-border bg-card/60 backdrop-blur-md px-4 py-2 flex items-center justify-between gap-3 shrink-0 relative z-20">
           <div className="flex items-center gap-2">
             <AveriaLogo size="sm" />
@@ -827,7 +794,7 @@ export default function AveriaAI() {
           </div>
         </div>
 
-        {/* Main Workspace Layout (Footer completely purged) */}
+        {/* Main Workspace Layout (Strictly 0px overflow below input container, no public footer) */}
         <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden min-w-0">
           {isMobile && hasCanvas && (
             <div className="flex border-b border-border shrink-0 bg-card">
@@ -867,7 +834,7 @@ export default function AveriaAI() {
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg w-full">
                           {[
                             "Build a full-stack SaaS dashboard with React & Tailwind",
-                            "Generate an image of a futuristic neural quantum lab",
+                            "Generate a watermark-free visual of a quantum neural lab",
                             "Audit this news article for deepfake or algorithmic manipulation",
                             "Create an interactive crypto trading app component",
                           ].map((prompt) => (
@@ -906,7 +873,7 @@ export default function AveriaAI() {
                                 {forensic && <ForensicCard data={forensic} />}
                                 {msg.imageUrl && (
                                   <div className="mt-3 p-3 rounded-xl border border-border bg-card/60 space-y-3">
-                                    <img src={msg.imageUrl} alt="Studio Generated" className="rounded-lg max-w-full border border-border shadow-lg" />
+                                    <img src={msg.imageUrl} alt="Watermark-Free Studio Visual" className="rounded-lg max-w-full border border-border shadow-lg" />
                                     <div className="flex items-center gap-2">
                                       <Button
                                         variant="outline"
@@ -915,11 +882,11 @@ export default function AveriaAI() {
                                         onClick={() => {
                                           const a = document.createElement('a');
                                           a.href = msg.imageUrl!;
-                                          a.download = `averia-studio-${Date.now()}.png`;
+                                          a.download = `averia-studio-${Date.now()}.svg`;
                                           document.body.appendChild(a);
                                           a.click();
                                           document.body.removeChild(a);
-                                          toast.success('Image downloaded!');
+                                          toast.success('Watermark-free image downloaded!');
                                         }}
                                       >
                                         <ImageIcon className="h-3.5 w-3.5" /> Download
@@ -930,7 +897,7 @@ export default function AveriaAI() {
                                         className="gap-1.5 text-xs"
                                         onClick={async () => {
                                           await navigator.clipboard.writeText(msg.imageUrl!);
-                                          toast.success('Image link copied!');
+                                          toast.success('Visual payload link copied!');
                                         }}
                                       >
                                         <Code className="h-3.5 w-3.5" /> Copy Link
@@ -979,8 +946,8 @@ export default function AveriaAI() {
                   </div>
                 </ScrollArea>
 
-                {/* Input Bar (Footer-free) */}
-                <div className="border-t border-white/5 backdrop-blur-sm p-3 md:p-4 shrink-0">
+                {/* Input Bar (Footer-free, pinned at bottom) */}
+                <div className="border-t border-white/5 backdrop-blur-sm p-3 md:p-4 shrink-0 bg-background/80">
                   <div className="max-w-3xl mx-auto">
                     {attachments.length > 0 && (
                       <div className="flex flex-wrap gap-2 mb-2">
@@ -1093,7 +1060,7 @@ export default function AveriaAI() {
               </div>
             )}
 
-            {/* Canvas / Preview / Code / Studio Image Panel */}
+            {/* Canvas / Preview / Code / Studio Watermark-Free Visual Panel */}
             <AnimatePresence>
               {showCanvas && (
                 <motion.div
@@ -1119,7 +1086,7 @@ export default function AveriaAI() {
                       )}
                       {canvasImageUrl && !canvasContent && (
                         <span className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
-                          <ImageIcon className="h-3.5 w-3.5 text-primary" /> Studio Image Generation Container
+                          <ImageIcon className="h-3.5 w-3.5 text-primary" /> Studio Watermark-Free Visual Container
                         </span>
                       )}
                     </div>
@@ -1162,22 +1129,22 @@ export default function AveriaAI() {
                       <div className="flex-1 overflow-auto flex items-start justify-center">
                         {canvasImageUrl && !canvasContent && (
                           <div className="flex flex-col items-center justify-center h-full p-4 md:p-6 gap-4">
-                            <img src={canvasImageUrl} alt="Studio Generated" className="max-w-full max-h-[70vh] rounded-xl border border-border shadow-2xl" />
+                            <img src={canvasImageUrl} alt="Studio Watermark-Free Visual" className="max-w-full max-h-[70vh] rounded-xl border border-border shadow-2xl" />
                             <div className="flex items-center gap-2">
                               <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={() => {
                                 const a = document.createElement('a');
                                 a.href = canvasImageUrl!;
-                                a.download = `averia-studio-${Date.now()}.png`;
+                                a.download = `averia-studio-${Date.now()}.svg`;
                                 document.body.appendChild(a);
                                 a.click();
                                 document.body.removeChild(a);
-                                toast.success('Image downloaded!');
+                                toast.success('Watermark-free image downloaded!');
                               }}>
                                 <ImageIcon className="h-3.5 w-3.5" /> Download
                               </Button>
                               <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={async () => {
                                 await navigator.clipboard.writeText(canvasImageUrl!);
-                                toast.success('Image link copied!');
+                                toast.success('Visual payload link copied!');
                               }}>
                                 <Code className="h-3.5 w-3.5" /> Copy Link
                               </Button>
