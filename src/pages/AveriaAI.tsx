@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Eye, Code, X, FileCode, Globe, Play, Pause, Music, Video, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Tablet, Smartphone, Camera, Paperclip, FileText, Link2, Mic, ShieldCheck, AlertTriangle, CheckCircle, Sparkles, Cpu, Layers } from 'lucide-react';
+import { Send, Plus, Brain, MessageSquare, Eye, Code, X, FileCode, Globe, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Tablet, Smartphone, Camera, Paperclip, FileText, Link2, Mic, ShieldCheck, Sparkles, Cpu, Layers, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
@@ -10,7 +10,6 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { AveriaLogo } from '@/components/AveriaLogo';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { MessageResponse } from '@/components/ai-elements/message';
 import { useScope } from '@/lib/scope';
 
@@ -253,7 +252,6 @@ export default function AveriaAI() {
   const recognitionRef = useRef<any>(null);
   const speechBaseTextRef = useRef('');
   const [isLoading, setIsLoading] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [canvasContent, setCanvasContent] = useState<string | null>(null);
   const [canvasMode, setCanvasMode] = useState<'preview' | 'code' | 'files'>('preview');
   const [canvasImageUrl, setCanvasImageUrl] = useState<string | null>(null);
@@ -261,15 +259,24 @@ export default function AveriaAI() {
   const [deployUrl, setDeployUrl] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<'chat' | 'preview'>('chat');
   const [previewDevice, setPreviewDevice] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
-  const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewKey, setPreviewKey] = useState(0);
 
-  // 4-Phase System State & Super Admin RBAC
+  // 4-Phase System State & Super Admin RBAC & Top-Right Popup Switcher
   const [activePhase, setActivePhase] = useState<number>(1);
+  const [phaseMenuOpen, setPhaseMenuOpen] = useState(false);
   const isSuperAdmin = user?.email?.toLowerCase() === 's6113994@gmail.com';
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const phasesList = [
+    { id: 1, name: 'Phase 1: Core', desc: 'Single Agent General Engine (1 Key)', icon: Brain },
+    { id: 2, name: 'Phase 2: Studio', desc: 'Multimedia & Image Swarm (3 Keys)', icon: Sparkles },
+    { id: 3, name: 'Phase 3: Intelligence', desc: 'Forensic Audit Swarm (5 Keys)', icon: ShieldCheck },
+    { id: 4, name: 'Phase 4: Nexus', desc: 'Autonomous AGI Code Swarm (10 Keys)', icon: Cpu },
+  ];
+
+  const currentPhaseMeta = phasesList.find(p => p.id === activePhase) || phasesList[0];
 
   const toggleVoiceInput = () => {
     if (voiceActive) {
@@ -302,7 +309,7 @@ export default function AveriaAI() {
     recognition.onerror = () => {
       setVoiceActive(false);
       setVoiceMode(false);
-      toast.error('Voice input stopped. Check microphone access.');
+      toast.error('Voice input stopped.');
     };
     recognition.onend = () => {
       setVoiceActive(false);
@@ -317,7 +324,6 @@ export default function AveriaAI() {
       setVoiceActive(false);
       setVoiceMode(false);
       recognitionRef.current = null;
-      toast.error('Could not start voice input.');
     }
   };
 
@@ -339,7 +345,6 @@ export default function AveriaAI() {
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQueryHandled = useRef(false);
-  const mirrorPeer = searchParams.get('mirror') === 'peer' && scope.isJoint && !!scope.peerId;
   const userFirstName = (user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split('@')[0] || 'Friend').split(' ')[0];
 
   useEffect(() => {
@@ -384,7 +389,6 @@ export default function AveriaAI() {
       if (code && code !== canvasContent) {
         setCanvasContent(code);
         setPreviewKey(k => k + 1);
-        setPreviewError(null);
         if (isMobile) setMobileView('preview');
         const sig = `${activeConvId}::${code.slice(0, 80)}`;
         if (user && !scope.isJoint && activeConvId && !savedProjectRef.current.has(sig)) {
@@ -470,7 +474,6 @@ export default function AveriaAI() {
     setMessages([]);
     setCanvasContent(null); setCanvasImageUrl(null); setDeployUrl(null);
     setInput('');
-    setPreviewError(null);
     setMobileView('chat');
   };
 
@@ -748,54 +751,83 @@ export default function AveriaAI() {
     <Layout>
       <div className="h-[calc(100vh-4rem)] w-full flex flex-col bg-background text-foreground">
 
-        {/* Top 4-Phase Switcher & Super Admin Banner */}
-        <div className="border-b border-border bg-card/50 backdrop-blur-md px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center gap-2 overflow-x-auto">
-            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground mr-1 flex items-center gap-1">
-              <Layers className="h-3.5 w-3.5 text-primary" /> Phase:
-            </span>
-            {[
-              { id: 1, name: 'Phase 1: Core', desc: 'Single Agent General Engine', icon: Brain, keys: '1 Key' },
-              { id: 2, name: 'Phase 2: Studio', desc: 'Multimedia & Image Swarm', icon: Sparkles, keys: '3 Keys' },
-              { id: 3, name: 'Phase 3: Intelligence', desc: 'Forensic Audit Swarm', icon: ShieldCheck, keys: '5 Keys' },
-              { id: 4, name: 'Phase 4: Nexus', desc: 'Autonomous AGI Code Swarm', icon: Cpu, keys: '10 Keys' },
-            ].map(phase => {
-              const isActive = activePhase === phase.id;
-              return (
-                <button
-                  key={phase.id}
-                  onClick={() => {
-                    setActivePhase(phase.id);
-                    toast.success(`Switched to ${phase.name}`);
-                  }}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                    isActive
-                      ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/25 scale-[1.02]'
-                      : 'bg-secondary/60 hover:bg-secondary text-foreground/80 border border-border'
-                  }`}
-                  title={phase.desc}
-                >
-                  <phase.icon className="h-3.5 w-3.5" />
-                  <span>{phase.name}</span>
-                  <span className="text-[10px] opacity-75 hidden sm:inline">({phase.keys})</span>
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="flex items-center gap-2 ml-auto">
+        {/* Top Header with Compact Popup Phase Switcher & Super Admin Badge */}
+        <div className="border-b border-border bg-card/60 backdrop-blur-md px-4 py-2 flex items-center justify-between gap-3 shrink-0 relative z-20">
+          <div className="flex items-center gap-2">
+            <AveriaLogo size="sm" />
+            <span className="font-heading font-bold text-sm tracking-wide hidden sm:inline">Averia AI Nexus</span>
             {isSuperAdmin && (
-              <span className="text-[11px] font-bold px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5 shadow-sm">
-                👑 Super Admin (s6113994@gmail.com) — Unrestricted Bypass Active
+              <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1">
+                👑 Super Admin (s6113994@gmail.com)
               </span>
             )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Top-Right Compact Popup Phase Switcher Button */}
+            <div className="relative">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 text-xs font-semibold rounded-xl bg-secondary/80 border-border hover:bg-secondary"
+                onClick={() => setPhaseMenuOpen(v => !v)}
+              >
+                <currentPhaseMeta.icon className="h-3.5 w-3.5 text-primary" />
+                <span>⚡ Phase {activePhase}: {currentPhaseMeta.name.split(':')[1]?.trim() || 'Core'}</span>
+                <ChevronDown className={`h-3 w-3 transition-transform ${phaseMenuOpen ? 'rotate-180' : ''}`} />
+              </Button>
+
+              <AnimatePresence>
+                {phaseMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-30" onClick={() => setPhaseMenuOpen(false)} />
+                    <motion.div
+                      initial={{ opacity: 0, y: 6, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 6, scale: 0.95 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute right-0 top-10 z-40 w-72 rounded-2xl border border-border bg-card shadow-2xl p-2 backdrop-blur-xl space-y-1"
+                    >
+                      <div className="px-3 py-1.5 text-[10px] uppercase font-bold tracking-wider text-muted-foreground">
+                        Select Neural Execution Phase
+                      </div>
+                      {phasesList.map(p => {
+                        const isSelected = activePhase === p.id;
+                        return (
+                          <button
+                            key={p.id}
+                            onClick={() => {
+                              setActivePhase(p.id);
+                              setPhaseMenuOpen(false);
+                              toast.success(`Switched to ${p.name}`);
+                            }}
+                            className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-xl text-left transition-colors ${
+                              isSelected ? 'bg-primary/15 text-primary font-bold border border-primary/30' : 'hover:bg-secondary/60 text-foreground/85'
+                            }`}
+                          >
+                            <div className="mt-0.5 p-1 rounded-lg bg-background/50">
+                              <p.icon className="h-4 w-4 text-primary" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-semibold">{p.name}</div>
+                              <div className="text-[10px] text-muted-foreground">{p.desc}</div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+
             <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5 rounded-xl" onClick={handleNewChat}>
               <Plus className="h-3.5 w-3.5" /> New Chat
             </Button>
           </div>
         </div>
 
-        {/* Main Workspace Layout */}
+        {/* Main Workspace Layout (Footer completely purged) */}
         <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden min-w-0">
           {isMobile && hasCanvas && (
             <div className="flex border-b border-border shrink-0 bg-card">
@@ -826,13 +858,10 @@ export default function AveriaAI() {
                             <AveriaLogo size="xl" />
                           </div>
                           <h2 className="font-heading text-2xl md:text-3xl font-bold mb-2 gradient-text">
-                            Averia AI • Phase {activePhase} Active
+                            Averia AI • {currentPhaseMeta.name}
                           </h2>
                           <p className="text-muted-foreground text-sm max-w-md">
-                            {activePhase === 1 && "Core general conversational assistant & coding engine."}
-                            {activePhase === 2 && "Studio image generation & multimedia synthesis swarm."}
-                            {activePhase === 3 && "Intelligence forensic audit, deepfake detection & trust scoring."}
-                            {activePhase === 4 && "Nexus autonomous AGI full-stack code builder & live iframe preview."}
+                            {currentPhaseMeta.desc}. Ask anything or build full-stack apps instantly.
                           </p>
                         </motion.div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg w-full">
@@ -900,12 +929,8 @@ export default function AveriaAI() {
                                         size="sm"
                                         className="gap-1.5 text-xs"
                                         onClick={async () => {
-                                          try {
-                                            await navigator.clipboard.writeText(msg.imageUrl!);
-                                            toast.success('Image link copied!');
-                                          } catch {
-                                            toast.error('Copy failed');
-                                          }
+                                          await navigator.clipboard.writeText(msg.imageUrl!);
+                                          toast.success('Image link copied!');
                                         }}
                                       >
                                         <Code className="h-3.5 w-3.5" /> Copy Link
@@ -954,7 +979,7 @@ export default function AveriaAI() {
                   </div>
                 </ScrollArea>
 
-                {/* Input Bar */}
+                {/* Input Bar (Footer-free) */}
                 <div className="border-t border-white/5 backdrop-blur-sm p-3 md:p-4 shrink-0">
                   <div className="max-w-3xl mx-auto">
                     {attachments.length > 0 && (
@@ -1039,7 +1064,7 @@ export default function AveriaAI() {
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        placeholder={`Ask Averia (Phase ${activePhase}) or attach media...`}
+                        placeholder={`Ask Averia (${currentPhaseMeta.name}) or attach media...`}
                         rows={1}
                         className="flex-1 min-w-0 bg-transparent resize-none border-none outline-none text-[15px] sm:text-[16px] leading-relaxed py-2 min-h-[50px] max-h-[300px] overflow-y-auto placeholder:text-muted-foreground"
                       />
