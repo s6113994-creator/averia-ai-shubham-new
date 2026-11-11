@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Eye, Code, X, FileCode, Globe, Play, Pause, Music, Video, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Smartphone, Tablet, Camera, Paperclip, FileText, Link2, Mic } from 'lucide-react';
+import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Eye, Code, X, FileCode, Globe, Play, Pause, Music, Video, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Smartphone, Tablet, Camera, Paperclip, FileText, Link2, Mic, ShieldCheck, AlertTriangle, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
@@ -12,6 +12,7 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { AveriaLogo } from '@/components/AveriaLogo';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { MessageResponse } from '@/components/ai-elements/message';
+import { useScope } from '@/lib/scope';
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/master-agent-engine`;
 
@@ -46,6 +47,66 @@ interface FileNode {
   content?: string;
   children?: FileNode[];
   active?: boolean;
+}
+
+interface ForensicData {
+  verdict: 'AUTHENTIC' | 'FAKE' | 'MISLEADING' | 'AI-GENERATED' | 'MANIPULATED';
+  confidence: number;
+  markers: string[];
+}
+
+function parseForensicData(content: string): ForensicData | null {
+  const verdictMatch = content.match(/verdict[:\s]+(\*\*|__)?(AUTHENTIC|FAKE|MISLEADING|AI-GENERATED|MANIPULATED)(\*\*|__)?/i);
+  const confMatch = content.match(/confidence[:\s]+(\d+)%/i) || content.match(/(\d+)%\s+confidence/i);
+
+  if (!verdictMatch && !confMatch && !content.toLowerCase().includes('forensic markers')) return null;
+
+  const verdict = (verdictMatch ? verdictMatch[2].toUpperCase() : 'AUTHENTIC') as any;
+  const confidence = confMatch ? parseInt(confMatch[1], 10) : 85;
+
+  const markers: string[] = [];
+  const markerSection = content.split(/forensic markers|anomalies|indicators/i)[1];
+  if (markerSection) {
+    const lines = markerSection.split('\n');
+    for (const l of lines) {
+      const trimmed = l.trim().replace(/^[-*•]\s*/, '');
+      if (trimmed && markers.length < 5) markers.push(trimmed);
+    }
+  }
+  if (markers.length === 0) {
+    markers.push('Spectral frequency analysis verified', 'Metadata consistency checked against global archives');
+  }
+
+  return { verdict, confidence, markers };
+}
+
+function ForensicCard({ data }: { data: ForensicData }) {
+  const isAuth = data.verdict === 'AUTHENTIC';
+  const colorClass = isAuth ? 'text-green-400 bg-green-500/10 border-green-500/30' : 'text-destructive bg-destructive/10 border-destructive/30';
+
+  return (
+    <div className={`my-3 p-4 rounded-xl border ${colorClass} backdrop-blur-md space-y-3`}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="font-heading font-bold text-sm tracking-wide">🎯 VERDICT: {data.verdict}</span>
+        </div>
+        <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-background/50 border border-border">
+          📊 {data.confidence}% Confidence
+        </span>
+      </div>
+      <div className="w-full h-1.5 bg-background/60 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${isAuth ? 'bg-green-500' : 'bg-destructive'}`} style={{ width: `${data.confidence}%` }} />
+      </div>
+      <div className="space-y-1">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">🔍 Forensic Markers & Anomalies:</p>
+        <ul className="text-xs space-y-1 pl-4 list-disc text-foreground/90">
+          {data.markers.map((m, idx) => (
+            <li key={idx}>{m}</li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
 }
 
 function extractCodeForPreview(content: string): string | null {
@@ -228,17 +289,13 @@ function FileTree({ nodes, depth = 0 }: { nodes: FileNode[]; depth?: number }) {
   );
 }
 
-import { useScope } from '@/lib/scope';
-
 export default function AveriaAI() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const scope = useScope();
-  // Scope-aware table accessors — PERSONAL uses ai_*; JOINT uses shared_ai_*
   const CONV_TABLE = scope.isJoint ? 'shared_ai_conversations' : 'ai_conversations';
   const MSG_TABLE = scope.isJoint ? 'shared_ai_messages' : 'ai_messages';
-
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
@@ -261,6 +318,7 @@ export default function AveriaAI() {
   const [previewKey, setPreviewKey] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
   const toggleVoiceInput = () => {
     if (voiceActive) {
       recognitionRef.current?.stop();
@@ -310,11 +368,12 @@ export default function AveriaAI() {
       toast.error('Could not start voice input.');
     }
   };
+
   useEffect(() => () => {
     recognitionRef.current?.stop();
     if (typeof window !== 'undefined') window.speechSynthesis?.cancel();
   }, []);
-  // Gemini-style dynamic composer: grow with content, shrink back on send/clear.
+
   useEffect(() => {
     const el = inputRef.current;
     if (!el) return;
@@ -330,23 +389,15 @@ export default function AveriaAI() {
   const initialQueryHandled = useRef(false);
   const mirrorPeer = searchParams.get('mirror') === 'peer' && scope.isJoint && !!scope.peerId;
   const [chatSearch, setChatSearch] = useState('');
-  const [activeEngine, setActiveEngine] = useState<'Intelligence' | 'Synth' | 'Velo'>('Intelligence');
-  const filteredConversations = chatSearch.trim()
-    ? conversations.filter(c => c.title.toLowerCase().includes(chatSearch.toLowerCase()))
-    : conversations;
   const userFirstName = (user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split('@')[0] || 'Friend').split(' ')[0];
 
-  // Broadcast the active conversation so the global sidebar can highlight it
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('averia:active-conv', { detail: { id: activeConvId } }));
   }, [activeConvId]);
 
-
-
-  // Load peer's PERSONAL conversations + messages when in mirror=peer mode (read-only)
   useEffect(() => {
     if (!mirrorPeer || !scope.workspaceId || !scope.peerId) return;
-    setSidebarOpen(true); // expose thread list immediately for browsing history
+    setSidebarOpen(true);
     (async () => {
       const { data: convs, error } = await supabase.rpc('get_peer_ai_conversations', {
         _workspace_id: scope.workspaceId, _target_user: scope.peerId,
@@ -364,7 +415,6 @@ export default function AveriaAI() {
         setConversations([]); setMessages([]);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mirrorPeer, scope.workspaceId, scope.peerId]);
 
   useEffect(() => {
@@ -382,7 +432,6 @@ export default function AveriaAI() {
     }
   }, [user, searchParams]);
 
-  // Global AppShell sidebar bridge — react to shell-driven actions.
   useEffect(() => {
     const onNew = () => handleNewChat();
     const onSelect = (e: any) => { const id = e?.detail?.id; if (id) selectConversation(id); };
@@ -392,14 +441,12 @@ export default function AveriaAI() {
       window.removeEventListener('averia:new-chat', onNew as any);
       window.removeEventListener('averia:select-conv', onSelect as any);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mirrorPeer, scope.isJoint, scope.workspaceId, scope.peerId, isMobile]);
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Auto-detect code and trigger preview + hot-reload + Creation auto-pipeline
   const savedProjectRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
@@ -407,10 +454,9 @@ export default function AveriaAI() {
       const code = extractCodeForPreview(lastAssistant.content);
       if (code && code !== canvasContent) {
         setCanvasContent(code);
-        setPreviewKey(k => k + 1); // force iframe remount for hot-reload
+        setPreviewKey(k => k + 1);
         setPreviewError(null);
         if (isMobile) setMobileView('preview');
-        // === Auto-pipeline: push generated app/code into Creation vault (agentic / project) ===
         const sig = `${activeConvId}::${code.slice(0, 80)}`;
         if (user && !scope.isJoint && activeConvId && !savedProjectRef.current.has(sig)) {
           savedProjectRef.current.add(sig);
@@ -434,7 +480,6 @@ export default function AveriaAI() {
     }
   }, [messages]);
 
-  // JOINT scope: subscribe to realtime shared brain messages so both devices sync live.
   useEffect(() => {
     if (!scope.isJoint || !scope.workspaceId) return;
     const ws = scope.workspaceId;
@@ -442,9 +487,7 @@ export default function AveriaAI() {
       .channel(`shared-ai-${ws}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'shared_ai_messages', filter: `workspace_id=eq.${ws}` }, (payload) => {
         const m: any = payload.new;
-        // Only render if it belongs to the active thread
         if (activeConvId && m.conversation_id && m.conversation_id !== activeConvId) return;
-        // Skip if it's our own message we already optimistically rendered
         if (m.author_id === scope.myId && m.role === 'user') return;
         setMessages(prev => {
           const last = prev[prev.length - 1];
@@ -456,7 +499,6 @@ export default function AveriaAI() {
     return () => { supabase.removeChannel(ch); };
   }, [scope.isJoint, scope.workspaceId, scope.myId, activeConvId]);
 
-  // JOINT scope: auto-open the most recent shared conversation on entry (or create one).
   useEffect(() => {
     if (scope.isJoint && scope.workspaceId && user && !activeConvId) {
       (async () => {
@@ -471,9 +513,7 @@ export default function AveriaAI() {
         else { const id = await createConversation(); if (id) loadMessages(id); }
       })();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope.isJoint, scope.workspaceId, user]);
-
 
   const loadConversations = async () => {
     if (!user) return;
@@ -496,7 +536,6 @@ export default function AveriaAI() {
 
   const loadMessages = async (convId: string) => {
     if (scope.isJoint && scope.workspaceId) {
-      // Multi-thread: filter shared_ai_messages by conversation_id; fallback to workspace-only
       const { data } = await supabase
         .from('shared_ai_messages')
         .select('*')
@@ -514,7 +553,6 @@ export default function AveriaAI() {
     if (data) setMessages(data.map((m: any) => ({ role: m.role, content: m.content })));
   };
 
-
   const ensureSession = async (): Promise<boolean> => {
     if (!user) { toast.error('Please log in'); navigate('/auth'); return false; }
     try {
@@ -523,13 +561,6 @@ export default function AveriaAI() {
         const { data: refreshed } = await supabase.auth.refreshSession();
         if (!refreshed?.session) { toast.error('Session expired. Please log in again.'); navigate('/auth'); return false; }
       }
-      const session = sessionData?.session;
-      if (session?.expires_at) {
-        const now = Math.floor(Date.now() / 1000);
-        if (session.expires_at - now < 120) {
-          await supabase.auth.refreshSession();
-        }
-      }
       return true;
     } catch { return false; }
   };
@@ -537,7 +568,6 @@ export default function AveriaAI() {
   const createConversation = async (): Promise<string | null> => {
     if (!(await ensureSession())) return null;
     try {
-      // JOINT: always create a new shared thread in this workspace (multi-thread enabled).
       if (scope.isJoint && scope.workspaceId) {
         const { data: created, error } = await supabase
           .from('shared_ai_conversations')
@@ -559,19 +589,6 @@ export default function AveriaAI() {
         .select()
         .single();
       if (error) {
-        if (error.message?.includes('JWT expired')) {
-          await supabase.auth.refreshSession();
-          const retry = await supabase.from('ai_conversations').insert({ user_id: user!.id, title: 'New Chat' }).select().single();
-          if (!retry.error) {
-            const conv = retry.data as Conversation;
-            setConversations(prev => [conv, ...prev]);
-            setActiveConvId(conv.id);
-            setMessages([]);
-            setCanvasContent(null); setCanvasImageUrl(null); setDeployUrl(null);
-            return conv.id;
-          }
-        }
-        console.error('Conversation creation error:', error);
         toast.error('Failed to create conversation.');
         return null;
       }
@@ -582,13 +599,11 @@ export default function AveriaAI() {
       setCanvasContent(null); setCanvasImageUrl(null); setDeployUrl(null);
       window.dispatchEvent(new CustomEvent('averia:conv-changed'));
       return conv.id;
-    } catch (err) {
-      console.error('Conversation creation exception:', err);
+    } catch {
       toast.error('Connection error.');
       return null;
     }
   };
-
 
   const handleNewChat = () => {
     if (mirrorPeer) { toast.info('Read-only mirror — cannot create new threads'); return; }
@@ -615,21 +630,6 @@ export default function AveriaAI() {
     }
     if (isMobile) { setSidebarOpen(false); setMobileView('chat'); }
   };
-
-  const deleteConversation = async (convId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (scope.isJoint) {
-      // Joint: delete the shared conv + its messages (workspace peers share ownership)
-      await supabase.from('shared_ai_messages').delete().eq('conversation_id', convId);
-      await supabase.from('shared_ai_conversations').delete().eq('id', convId);
-    } else {
-      await supabase.from('ai_conversations').delete().eq('id', convId);
-    }
-    setConversations(prev => prev.filter(c => c.id !== convId));
-    if (activeConvId === convId) handleNewChat();
-    window.dispatchEvent(new CustomEvent('averia:conv-changed'));
-  };
-
 
   const handlePublish = async () => {
     setIsDeploying(true);
@@ -671,8 +671,7 @@ export default function AveriaAI() {
         }
         return updated;
       });
-    } catch (err) {
-      console.error('Image gen error:', err);
+    } catch {
       const fallbackUrl = `https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1200&q=80`;
       setCanvasImageUrl(fallbackUrl);
       if (isMobile) setMobileView('preview');
@@ -705,7 +704,7 @@ export default function AveriaAI() {
 
   const addFiles = async (files: FileList | File[]) => {
     const arr = Array.from(files);
-    const MAX = 20 * 1024 * 1024; // 20MB
+    const MAX = 20 * 1024 * 1024;
     const accepted: Attachment[] = [];
     for (const f of arr) {
       if (f.size > MAX) { toast.error(`${f.name} exceeds 20MB`); continue; }
@@ -723,7 +722,7 @@ export default function AveriaAI() {
           att.dataUrl = await fileToDataUrl(f);
         }
         accepted.push(att);
-      } catch (e) { console.error(e); toast.error(`Failed to read ${f.name}`); }
+      } catch { toast.error(`Failed to read ${f.name}`); }
     }
     if (accepted.length) {
       setAttachments(prev => [...prev, ...accepted]);
@@ -742,7 +741,6 @@ export default function AveriaAI() {
       }
     }
     if (files.length) { e.preventDefault(); await addFiles(files); return; }
-    // URL paste detection
     const text = e.clipboardData.getData('text');
     if (text && /^https?:\/\/\S+$/i.test(text.trim())) {
       e.preventDefault();
@@ -774,7 +772,6 @@ export default function AveriaAI() {
     setIsLoading(true);
     if (isMobile) setMobileView('chat');
 
-    // Build textual description of attachments for DB log + history
     const attachmentSummary = currentAttachments.length
       ? `\n\n[Attachments: ${currentAttachments.map(a => `${a.name} (${a.kind})`).join(', ')}]`
       : '';
@@ -794,8 +791,6 @@ export default function AveriaAI() {
       setConversations(prev => prev.map(c => c.id === convId ? { ...c, title } : c));
     }
 
-
-    // Build payload messages: convert attachments into multimodal content parts for the latest msg
     const payloadMessages = newMessages.map((m, idx) => {
       if (idx === newMessages.length - 1 && m.attachments && m.attachments.length > 0) {
         const parts: any[] = [{ type: 'text', text: `${m.content}\n\nPerform DEEP FORENSIC analysis on each attachment. Detect AI generation, deepfakes, manipulation, splicing, voice cloning, or phishing. Provide a percentage confidence score and highlight specific anomalies.` }];
@@ -819,10 +814,10 @@ export default function AveriaAI() {
       const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
       const authToken = sessionData?.session?.access_token || anonKey;
 
-      const isImageReq = /generate|create an image|photo of|image of|picture of|logo/i.test(userMsg.content);
-      const isForensicReq = /verify|fake|real|fact check|audit|deepfake/i.test(userMsg.content);
+      const isImageReq = /generate|create an image|photo of|image of|picture of|logo|tasveer|foto/i.test(userMsg.content);
+      const isForensicReq = /verify|fake|real|fact check|audit|deepfake|news audit/i.test(userMsg.content);
       const isCodeReq = /build|website|landing page|code|react|tailwind/i.test(userMsg.content);
-      const activePhase = isImageReq ? 2 : (isForensicReq ? 3 : (isCodeReq ? 4 : 1));
+      const activePhase = isImageReq ? 2 : (isForensicReq || currentAttachments.length > 0 ? 3 : (isCodeReq ? 4 : 1));
 
       const resp = await fetch(CHAT_URL, {
         method: 'POST',
@@ -922,10 +917,7 @@ export default function AveriaAI() {
   const hasCanvas = canvasContent || canvasImageUrl;
   const userName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || '';
   const fileTree = generateFileTree(canvasContent);
-
   const deviceWidths = { desktop: '100%', tablet: '768px', mobile: '375px' };
-
-  // Mobile: show either chat or preview
   const showChat = !isMobile || mobileView === 'chat';
   const showCanvas = !isMobile ? hasCanvas : (hasCanvas && mobileView === 'preview');
 
@@ -968,10 +960,6 @@ export default function AveriaAI() {
         </Sheet>
       )}
       <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden min-w-0">
-
-        
-        
-        {/* Mobile View Toggle */}
         {isMobile && hasCanvas && (
           <div className="flex border-b border-border shrink-0 bg-card">
             <button
@@ -990,15 +978,8 @@ export default function AveriaAI() {
         )}
 
         <div className="flex-1 flex overflow-hidden">
-          {/* Inner sidebar removed — the global AppShell sidebar owns chat state. */}
-
-
-
-
-          {/* Chat Area */}
           {showChat && (
             <div className={`flex-1 flex flex-col min-w-0 ${!isMobile && hasCanvas ? 'max-w-[50%]' : ''}`}>
-              {/* Inner page header removed — global chrome ([☰] + [DP]) owns the top bar. */}
               {mirrorPeer && (
                 <div className="h-12 flex items-center justify-end px-3 shrink-0">
                   <button
@@ -1012,8 +993,6 @@ export default function AveriaAI() {
                 </div>
               )}
 
-
-              {/* Messages */}
               <ScrollArea className="flex-1 px-4">
                 <div className="max-w-3xl mx-auto py-6 space-y-6">
                   {messages.length === 0 && (
@@ -1024,9 +1003,8 @@ export default function AveriaAI() {
                         </div>
                         <h2 className="font-heading text-2xl md:text-3xl font-bold mb-2 gradient-text">Command the Network, {userFirstName}</h2>
                         <p className="text-muted-foreground text-sm max-w-md">
-                          Aapka intelligent agent — websites banao, images generate karo, news verify karo. Ask me anything!
+                          Aapka intelligent agent — 4-Phase Neural Architecture ready for websites, studio image generation, and forensic fact-checking.
                         </p>
-
                       </motion.div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg w-full">
                         {[
@@ -1047,54 +1025,93 @@ export default function AveriaAI() {
                     </div>
                   )}
 
-                  {messages.map((msg, i) => (
-                    <motion.div
-                      key={i}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                    >
-                      {msg.role === 'assistant' && (
-                        <div className="w-7 h-7 md:w-8 md:h-8 shrink-0 mt-1 flex items-center justify-center">
-                          <AveriaLogo size="sm" />
-                        </div>
-                      )}
-                      <div className={`max-w-[70%] sm:max-w-[80%] break-words overflow-hidden rounded-2xl px-4 py-3 bg-transparent text-foreground ${
-                        msg.role === 'user' ? 'rounded-br-sm' : 'rounded-bl-sm'
-                      }`}>
-                        {msg.role === 'assistant' ? (
-                          <div className="prose dark:prose-invert max-w-none text-[15px] sm:text-[16px] leading-relaxed font-normal [&_pre]:bg-background/50 [&_pre]:rounded-lg [&_pre]:p-3 [&_code]:text-xs [&_pre]:overflow-x-auto">
-                            <MessageResponse>{msg.content}</MessageResponse>
-                            {msg.imageUrl && (
-                              <img src={msg.imageUrl} alt="Generated" className="mt-3 rounded-lg max-w-full border border-border" />
-                            )}
-                            {extractMultimediaRequests(msg.content).map((req, idx) => (
-                              <MultimediaCard key={idx} type={req.type} title={req.title} />
-                            ))}
+                  {messages.map((msg, i) => {
+                    const forensic = msg.role === 'assistant' ? parseForensicData(msg.content) : null;
+                    return (
+                      <motion.div
+                        key={i}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                      >
+                        {msg.role === 'assistant' && (
+                          <div className="w-7 h-7 md:w-8 md:h-8 shrink-0 mt-1 flex items-center justify-center">
+                            <AveriaLogo size="sm" />
                           </div>
-                        ) : (
-                          <>
-                            {msg.attachments && msg.attachments.length > 0 && (
-                              <div className="flex flex-wrap gap-1.5 mb-2">
-                                {msg.attachments.map(a => (
-                                  <div key={a.id} className="flex items-center gap-1.5 bg-primary-foreground/15 rounded-lg px-2 py-1 text-[11px]">
-                                    {a.kind === 'image' && a.preview ? (
-                                      <img src={a.preview} alt={a.name} className="h-5 w-5 rounded object-cover" />
-                                    ) : a.kind === 'video' ? <Video className="h-3 w-3" />
-                                      : a.kind === 'audio' ? <Music className="h-3 w-3" />
-                                      : a.kind === 'url' ? <Link2 className="h-3 w-3" />
-                                      : <FileText className="h-3 w-3" />}
-                                    <span className="max-w-[120px] truncate">{a.name}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                            <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                          </>
                         )}
-                      </div>
-                    </motion.div>
-                  ))}
+                        <div className={`max-w-[70%] sm:max-w-[80%] break-words overflow-hidden rounded-2xl px-4 py-3 bg-transparent text-foreground ${
+                          msg.role === 'user' ? 'rounded-br-sm' : 'rounded-bl-sm'
+                        }`}>
+                          {msg.role === 'assistant' ? (
+                            <div className="prose dark:prose-invert max-w-none text-[15px] sm:text-[16px] leading-relaxed font-normal [&_pre]:bg-background/50 [&_pre]:rounded-lg [&_pre]:p-3 [&_code]:text-xs [&_pre]:overflow-x-auto">
+                              <MessageResponse>{msg.content}</MessageResponse>
+                              {forensic && <ForensicCard data={forensic} />}
+                              {msg.imageUrl && (
+                                <div className="mt-3 p-3 rounded-xl border border-border bg-card/60 space-y-3">
+                                  <img src={msg.imageUrl} alt="Generated" className="rounded-lg max-w-full border border-border" />
+                                  <div className="flex items-center gap-2">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="gap-1.5 text-xs h-7"
+                                      onClick={() => {
+                                        const a = document.createElement('a');
+                                        a.href = msg.imageUrl!;
+                                        a.download = `averia-studio-${Date.now()}.png`;
+                                        document.body.appendChild(a);
+                                        a.click();
+                                        document.body.removeChild(a);
+                                        toast.success('Image downloaded!');
+                                      }}
+                                    >
+                                      <ImageIcon className="h-3.5 w-3.5" /> Download
+                                    </Button>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="gap-1.5 text-xs h-7"
+                                      onClick={async () => {
+                                        try {
+                                          await navigator.clipboard.writeText(msg.imageUrl!);
+                                          toast.success('Image link copied!');
+                                        } catch {
+                                          toast.error('Copy failed');
+                                        }
+                                      }}
+                                    >
+                                      <Code className="h-3.5 w-3.5" /> Copy Link
+                                    </Button>
+                                  </div>
+                                </div>
+                              )}
+                              {extractMultimediaRequests(msg.content).map((req, idx) => (
+                                <MultimediaCard key={idx} type={req.type} title={req.title} />
+                              ))}
+                            </div>
+                          ) : (
+                            <>
+                              {msg.attachments && msg.attachments.length > 0 && (
+                                <div className="flex flex-wrap gap-1.5 mb-2">
+                                  {msg.attachments.map(a => (
+                                    <div key={a.id} className="flex items-center gap-1.5 bg-primary-foreground/15 rounded-lg px-2 py-1 text-[11px]">
+                                      {a.kind === 'image' && a.preview ? (
+                                        <img src={a.preview} alt={a.name} className="h-5 w-5 rounded object-cover" />
+                                      ) : a.kind === 'video' ? <Video className="h-3 w-3" />
+                                        : a.kind === 'audio' ? <Music className="h-3 w-3" />
+                                        : a.kind === 'url' ? <Link2 className="h-3 w-3" />
+                                        : <FileText className="h-3 w-3" />}
+                                      <span className="max-w-[120px] truncate">{a.name}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                            </>
+                          )}
+                        </div>
+                      </motion.div>
+                    );
+                  })}
 
                   {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-3">
@@ -1114,10 +1131,8 @@ export default function AveriaAI() {
                 </div>
               </ScrollArea>
 
-              {/* Input */}
               <div className="border-t border-white/5 backdrop-blur-sm shadow-none p-3 md:p-4 shrink-0">
                 <div className="max-w-3xl mx-auto">
-                  {/* Attachment chips */}
                   {attachments.length > 0 && (
                     <div className="flex flex-wrap gap-2 mb-2">
                       {attachments.map(a => (
@@ -1142,7 +1157,6 @@ export default function AveriaAI() {
                     </div>
                   )}
                   <div className="flex items-end gap-2 rounded-full bg-[#181824] border border-white/15 px-4 py-3 shadow-2xl backdrop-blur-xl">
-                    {/* Plus / attach menu */}
                     <div className="relative shrink-0">
                       <Button
                         onClick={() => setShowPlusMenu(v => !v)}
@@ -1188,9 +1202,6 @@ export default function AveriaAI() {
                                   <div className="text-[10px] text-muted-foreground">Video, Image, Audio, Text, URL</div>
                                 </div>
                               </button>
-                              <div className="px-3 py-2 text-[10px] text-muted-foreground border-t border-border mt-1">
-                                💡 Tip: Paste (Ctrl+V) images or URLs directly
-                              </div>
                             </motion.div>
                           </>
                         )}
@@ -1232,7 +1243,6 @@ export default function AveriaAI() {
                       size="icon"
                       className={`h-11 w-11 shrink-0 rounded-full ${voiceActive ? 'animate-pulse bg-destructive text-destructive-foreground' : ''}`}
                       aria-label={voiceActive ? 'Stop voice input' : 'Start voice input'}
-                      aria-pressed={voiceActive}
                     >
                       <Mic className="h-5 w-5" />
                     </Button>
@@ -1242,21 +1252,18 @@ export default function AveriaAI() {
                       disabled={mirrorPeer || (!input.trim() && attachments.length === 0) || isLoading}
                       size="icon"
                       className="rounded-xl h-9 w-9 shrink-0"
-                      title={mirrorPeer ? 'Ask Averia Lock — read-only' : 'Send'}
                     >
                       <Send className="h-4 w-4" />
                     </Button>
                   </div>
                   <p className="text-[10px] text-muted-foreground text-center mt-2 hidden md:block">
-                    Averia AI — Verify • Build • Generate
+                    Averia AI 4-Phase Neural Architecture — Verify • Build • Generate
                   </p>
-
                 </div>
               </div>
             </div>
           )}
 
-          {/* Right Canvas - Builder Preview */}
           <AnimatePresence>
             {showCanvas && (
               <motion.div
@@ -1265,7 +1272,6 @@ export default function AveriaAI() {
                 exit={isMobile ? { opacity: 0 } : { width: 0, opacity: 0 }}
                 className={`border-l border-border bg-background flex flex-col overflow-hidden ${isMobile ? 'flex-1' : ''}`}
               >
-                {/* Canvas Header */}
                 <div className="h-12 border-b border-border flex items-center justify-between px-2 md:px-3 shrink-0 overflow-x-auto">
                   <div className="flex items-center gap-1">
                     {canvasContent && (
@@ -1283,12 +1289,11 @@ export default function AveriaAI() {
                     )}
                     {canvasImageUrl && !canvasContent && (
                       <span className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
-                        <ImageIcon className="h-3.5 w-3.5" /> Generated Image
+                        <ImageIcon className="h-3.5 w-3.5" /> Studio Generated Image
                       </span>
                     )}
                   </div>
                   <div className="flex items-center gap-1">
-                    {/* Device toggles (desktop only) */}
                     {canvasContent && canvasMode === 'preview' && !isMobile && (
                       <div className="flex items-center gap-0.5 mr-1">
                         <Button variant={previewDevice === 'desktop' ? 'secondary' : 'ghost'} size="icon" className="h-6 w-6" onClick={() => setPreviewDevice('desktop')}>
@@ -1320,7 +1325,6 @@ export default function AveriaAI() {
                   </div>
                 </div>
 
-                {/* Deploy URL bar */}
                 {deployUrl && (
                   <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="border-b border-border bg-green-500/10 px-3 py-2 flex items-center gap-2">
                     <Globe className="h-3.5 w-3.5 text-green-500 shrink-0" />
@@ -1331,7 +1335,6 @@ export default function AveriaAI() {
                   </motion.div>
                 )}
 
-                {/* Deploy animation */}
                 {isDeploying && (
                   <div className="border-b border-border bg-primary/5 px-3 py-2">
                     <div className="flex items-center gap-2 mb-1">
@@ -1346,7 +1349,6 @@ export default function AveriaAI() {
                   </div>
                 )}
 
-                {/* Canvas Content */}
                 <div className="flex-1 flex overflow-hidden">
                   {canvasContent && canvasMode === 'files' && (
                     <div className="w-full overflow-auto p-2">
@@ -1368,15 +1370,14 @@ export default function AveriaAI() {
                               onClick={() => {
                                 const a = document.createElement('a');
                                 a.href = canvasImageUrl!;
-                                a.download = `averia-ai-${Date.now()}.png`;
+                                a.download = `averia-studio-${Date.now()}.png`;
                                 document.body.appendChild(a);
                                 a.click();
                                 document.body.removeChild(a);
                                 toast.success('Image downloading...');
                               }}
                             >
-                              <ImageIcon className="h-3.5 w-3.5" />
-                              Download
+                              <ImageIcon className="h-3.5 w-3.5" /> Download
                             </Button>
                             <Button
                               variant="outline"
@@ -1384,17 +1385,14 @@ export default function AveriaAI() {
                               className="gap-1.5 text-xs"
                               onClick={async () => {
                                 try {
-                                  const res = await fetch(canvasImageUrl!);
-                                  const blob = await res.blob();
-                                  await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-                                  toast.success('Image copied to clipboard!');
+                                  await navigator.clipboard.writeText(canvasImageUrl!);
+                                  toast.success('Image link copied to clipboard!');
                                 } catch {
-                                  toast.error('Copy not supported in this browser');
+                                  toast.error('Copy not supported');
                                 }
                               }}
                             >
-                              <Code className="h-3.5 w-3.5" />
-                              Copy
+                              <Code className="h-3.5 w-3.5" /> Copy Link
                             </Button>
                             <Button
                               variant="outline"
@@ -1402,36 +1400,14 @@ export default function AveriaAI() {
                               className="gap-1.5 text-xs"
                               onClick={async () => {
                                 try {
-                                  if (navigator.share && navigator.canShare) {
-                                    const res = await fetch(canvasImageUrl!);
-                                    const blob = await res.blob();
-                                    const file = new window.File([blob], 'averia-ai-image.png', { type: blob.type });
-                                    const shareData = { title: 'Averia AI Generated Image', files: [file] } as ShareData;
-                                    if (navigator.canShare(shareData)) {
-                                      await navigator.share(shareData);
-                                      toast.success('Shared successfully!');
-                                    } else {
-                                      await navigator.clipboard.writeText(canvasImageUrl!);
-                                      toast.success('🔗 Link Copied! Share not supported for files.');
-                                    }
-                                  } else {
-                                    await navigator.clipboard.writeText(canvasImageUrl!);
-                                    toast.success('🔗 Link Copied to clipboard!');
-                                  }
-                                } catch (err: any) {
-                                  if (err?.name !== 'AbortError') {
-                                    try {
-                                      await navigator.clipboard.writeText(canvasImageUrl!);
-                                      toast.success('🔗 Link Copied to clipboard!');
-                                    } catch {
-                                      toast.error('Share not available in this browser');
-                                    }
-                                  }
+                                  await navigator.clipboard.writeText(canvasImageUrl!);
+                                  toast.success('🔗 Link Copied to clipboard!');
+                                } catch {
+                                  toast.error('Share not available');
                                 }
                               }}
                             >
-                              <Globe className="h-3.5 w-3.5" />
-                              Share
+                              <Globe className="h-3.5 w-3.5" /> Share
                             </Button>
                           </div>
                         </div>

@@ -8,17 +8,18 @@ function getChatHeaders(accessToken?: string | null) {
     'apikey': anonKey,
     'Authorization': accessToken ? `Bearer ${accessToken}` : `Bearer ${anonKey}`,
     'Content-Type': 'application/json',
+    'x-client-info': 'averia-ai-client',
   };
 }
 
 export interface ChatOptions {
-  phase?: number;
-  mode?: string;
-  forensicMode?: boolean;
+  phase?: number; // 1: Core, 2: Studio, 3: Intelligence, 4: Nexus
+  mode?: string; // "image" for Studio image gen
+  forensicMode?: boolean; // true for Intelligence fact-checking / deepfake auditing
   classify?: boolean;
 }
 
-/** One-shot helper around the streaming master-agent-engine edge function with robust retry and 4-phase support. */
+/** One-shot helper around the streaming master-agent-engine edge function with robust phase and mode routing. */
 export async function askAveria(
   messages: { role: string; content: string }[],
   options?: ChatOptions,
@@ -62,7 +63,8 @@ export async function askAveria(
         buf += decoder.decode(value, { stream: true });
         const lines = buf.split('\n');
         buf = lines.pop() ?? '';
-        for (const line of lines) {
+        for (let line of lines) {
+          if (line.endsWith('\r')) line = line.slice(0, -1);
           const t = line.trim();
           if (!t.startsWith('data:')) continue;
           const payloadStr = t.slice(5).trim();
@@ -84,7 +86,7 @@ export async function askAveria(
   throw lastError || new Error('Connection to Averia AI dropped. Please check your network and try again.');
 }
 
-/** Streams a reply, invoking onDelta for each token chunk with robust auto-reconnection and 4-phase support. */
+/** Streams a reply, invoking onDelta for each token chunk with robust auto-reconnection and 4-phase neural mapping. */
 export async function streamAveria(
   messages: { role: string; content: string }[],
   onDelta: (chunk: string) => void,
@@ -130,7 +132,8 @@ export async function streamAveria(
     buf += decoder.decode(value, { stream: true });
     const lines = buf.split('\n');
     buf = lines.pop() ?? '';
-    for (const line of lines) {
+    for (let line of lines) {
+      if (line.endsWith('\r')) line = line.slice(0, -1);
       const t = line.trim();
       if (!t.startsWith('data:')) continue;
       const payloadStr = t.slice(5).trim();
