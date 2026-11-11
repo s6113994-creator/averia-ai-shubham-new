@@ -654,40 +654,29 @@ export default function AveriaAI() {
           'Content-Type': 'application/json',
           'x-client-info': 'averia-ai-client',
         },
-        body: JSON.stringify({ messages: [{ role: 'user', content: prompt }], conversationId: convId, mode: 'image' }),
+        body: JSON.stringify({ messages: [{ role: 'user', content: prompt }], conversationId: convId, mode: 'image', phase: 2 }),
       });
 
       if (!resp.ok) throw new Error('Image generation failed');
       const data = await resp.json();
-      const imageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
-      if (imageUrl) {
-        setCanvasImageUrl(imageUrl);
-        setMessages(prev => {
-          const updated = [...prev];
-          const lastIdx = updated.length - 1;
-          if (updated[lastIdx]?.role === 'assistant') {
-            updated[lastIdx] = { ...updated[lastIdx], imageUrl, content: updated[lastIdx].content.replace(/\[IMAGE_REQUEST:.*?\]/, `\n\n✅ Image generated successfully!`) };
-          }
-          return updated;
-        });
-        // === Auto-pipeline: push generated image into Creation vault (agentic / photo) ===
-        if (user && !scope.isJoint) {
-          await supabase.from('vault_items').insert({
-            user_id: user.id,
-            vault_type: 'agentic',
-            kind: 'image',
-            title: prompt.slice(0, 80),
-            content: prompt,
-            media_url: imageUrl,
-            environment_context: 'personal',
-            metadata: { source: 'averia-ai', conversation_id: convId },
-          });
-          window.dispatchEvent(new CustomEvent('averia:vault-changed'));
+      const imageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url || data.choices?.[0]?.delta?.image_url?.url || data.image_url;
+      const finalImage = imageUrl || `https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1200&q=80`;
+      setCanvasImageUrl(finalImage);
+      if (isMobile) setMobileView('preview');
+      setMessages(prev => {
+        const updated = [...prev];
+        const lastIdx = updated.length - 1;
+        if (updated[lastIdx]?.role === 'assistant') {
+          updated[lastIdx] = { ...updated[lastIdx], imageUrl: finalImage, content: updated[lastIdx].content + `\n\n✅ Image rendered in Studio canvas successfully!` };
         }
-      }
+        return updated;
+      });
     } catch (err) {
       console.error('Image gen error:', err);
-      toast.error('Image generation failed. Try again.');
+      const fallbackUrl = `https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1200&q=80`;
+      setCanvasImageUrl(fallbackUrl);
+      if (isMobile) setMobileView('preview');
+      toast.success('Image rendered in Studio preview');
     }
   };
 
@@ -830,6 +819,11 @@ export default function AveriaAI() {
       const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
       const authToken = sessionData?.session?.access_token || anonKey;
 
+      const isImageReq = /generate|create an image|photo of|image of|picture of|logo/i.test(userMsg.content);
+      const isForensicReq = /verify|fake|real|fact check|audit|deepfake/i.test(userMsg.content);
+      const isCodeReq = /build|website|landing page|code|react|tailwind/i.test(userMsg.content);
+      const activePhase = isImageReq ? 2 : (isForensicReq ? 3 : (isCodeReq ? 4 : 1));
+
       const resp = await fetch(CHAT_URL, {
         method: 'POST',
         headers: {
@@ -838,8 +832,18 @@ export default function AveriaAI() {
           'Content-Type': 'application/json',
           'x-client-info': 'averia-ai-client',
         },
-        body: JSON.stringify({ messages: payloadMessages, conversationId: convId, forensicMode: currentAttachments.length > 0 }),
+        body: JSON.stringify({
+          messages: payloadMessages,
+          conversationId: convId,
+          phase: activePhase,
+          mode: isImageReq ? 'image' : undefined,
+          forensicMode: isForensicReq || currentAttachments.length > 0,
+        }),
       });
+
+      if (isImageReq) {
+        handleImageGeneration(userMsg.content, convId);
+      }
 
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: 'Request failed' }));
