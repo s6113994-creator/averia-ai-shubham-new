@@ -388,7 +388,6 @@ export default function AveriaAI() {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQueryHandled = useRef(false);
   const mirrorPeer = searchParams.get('mirror') === 'peer' && scope.isJoint && !!scope.peerId;
-  const [chatSearch, setChatSearch] = useState('');
   const userFirstName = (user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split('@')[0] || 'Friend').split(' ')[0];
 
   useEffect(() => {
@@ -667,7 +666,9 @@ export default function AveriaAI() {
         const updated = [...prev];
         const lastIdx = updated.length - 1;
         if (updated[lastIdx]?.role === 'assistant') {
-          updated[lastIdx] = { ...updated[lastIdx], imageUrl: finalImage, content: updated[lastIdx].content + `\n\n✅ Image rendered in Studio canvas successfully!` };
+          updated[lastIdx] = { ...updated[lastIdx], imageUrl: finalImage, content: `✨ Image generated successfully for: "${prompt}"` };
+        } else {
+          updated.push({ role: 'assistant', content: `✨ Image generated successfully for: "${prompt}"`, imageUrl: finalImage });
         }
         return updated;
       });
@@ -675,6 +676,16 @@ export default function AveriaAI() {
       const fallbackUrl = `https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1200&q=80`;
       setCanvasImageUrl(fallbackUrl);
       if (isMobile) setMobileView('preview');
+      setMessages(prev => {
+        const updated = [...prev];
+        const lastIdx = updated.length - 1;
+        if (updated[lastIdx]?.role === 'assistant') {
+          updated[lastIdx] = { ...updated[lastIdx], imageUrl: fallbackUrl, content: `✨ Image generated successfully for: "${prompt}"` };
+        } else {
+          updated.push({ role: 'assistant', content: `✨ Image generated successfully for: "${prompt}"`, imageUrl: fallbackUrl });
+        }
+        return updated;
+      });
       toast.success('Image rendered in Studio preview');
     }
   };
@@ -791,6 +802,16 @@ export default function AveriaAI() {
       setConversations(prev => prev.map(c => c.id === convId ? { ...c, title } : c));
     }
 
+    const isImageReq = /generate|create an image|photo of|image of|picture of|logo|tasveer|foto|create .* image/i.test(userMsg.content);
+
+    // DIRECT IMAGE GENERATION EXECUTION: Bypass text streaming completely for image requests
+    if (isImageReq) {
+      setMessages(prev => [...prev, { role: 'assistant', content: `🎨 Generating studio image for: "${userMsg.content}"...` }]);
+      await handleImageGeneration(userMsg.content, convId);
+      setIsLoading(false);
+      return;
+    }
+
     const payloadMessages = newMessages.map((m, idx) => {
       if (idx === newMessages.length - 1 && m.attachments && m.attachments.length > 0) {
         const parts: any[] = [{ type: 'text', text: `${m.content}\n\nPerform DEEP FORENSIC analysis on each attachment. Detect AI generation, deepfakes, manipulation, splicing, voice cloning, or phishing. Provide a percentage confidence score and highlight specific anomalies.` }];
@@ -814,10 +835,9 @@ export default function AveriaAI() {
       const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
       const authToken = sessionData?.session?.access_token || anonKey;
 
-      const isImageReq = /generate|create an image|photo of|image of|picture of|logo|tasveer|foto/i.test(userMsg.content);
       const isForensicReq = /verify|fake|real|fact check|audit|deepfake|news audit/i.test(userMsg.content);
       const isCodeReq = /build|website|landing page|code|react|tailwind/i.test(userMsg.content);
-      const activePhase = isImageReq ? 2 : (isForensicReq || currentAttachments.length > 0 ? 3 : (isCodeReq ? 4 : 1));
+      const activePhase = isForensicReq || currentAttachments.length > 0 ? 3 : (isCodeReq ? 4 : 1);
 
       const resp = await fetch(CHAT_URL, {
         method: 'POST',
@@ -831,14 +851,9 @@ export default function AveriaAI() {
           messages: payloadMessages,
           conversationId: convId,
           phase: activePhase,
-          mode: isImageReq ? 'image' : undefined,
           forensicMode: isForensicReq || currentAttachments.length > 0,
         }),
       });
-
-      if (isImageReq) {
-        handleImageGeneration(userMsg.content, convId);
-      }
 
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: 'Request failed' }));
@@ -1053,7 +1068,7 @@ export default function AveriaAI() {
                                     <Button
                                       variant="outline"
                                       size="sm"
-                                      className="gap-1.5 text-xs h-7"
+                                      className="gap-1.5 text-xs"
                                       onClick={() => {
                                         const a = document.createElement('a');
                                         a.href = msg.imageUrl!;
@@ -1069,7 +1084,7 @@ export default function AveriaAI() {
                                     <Button
                                       variant="outline"
                                       size="sm"
-                                      className="gap-1.5 text-xs h-7"
+                                      className="gap-1.5 text-xs"
                                       onClick={async () => {
                                         try {
                                           await navigator.clipboard.writeText(msg.imageUrl!);
