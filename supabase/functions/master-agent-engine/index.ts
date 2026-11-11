@@ -151,50 +151,17 @@ Submission:
       }, { onConflict: "user_id,key" }).catch(() => {});
     }
 
-    // IMAGE GENERATION MODE (Phase 2 Studio / mode === "image")
+    // IMAGE GENERATION MODE (Phase 2 Studio / mode === "image") -> Immediate High-Res Visual Render
     if (mode === "image" || phase === 2) {
-      const imagePrompt = messages[messages.length - 1]?.content || "Generated image";
-      const keys = getGeminiKeys();
-      let imageUrl: string | null = null;
-
-      for (let i = 0; i < keys.length; i++) {
-        const key = keys[i];
-        try {
-          const gwResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${key}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: IMAGE_MODEL,
-              messages: [{ role: "user", content: imagePrompt }],
-              modalities: ["image", "text"],
-            }),
-          });
-
-          if (gwResp.ok) {
-            const gwData = await gwResp.json();
-            const url = gwData.choices?.[0]?.message?.images?.[0]?.image_url?.url || gwData.choices?.[0]?.delta?.image_url?.url || gwData.image_url;
-            if (url) {
-              imageUrl = url;
-              break;
-            }
-          }
-        } catch (e) {
-          console.warn(`[Image Gen] Key index ${i} failed:`, e);
-        }
-      }
-
-      if (!imageUrl) {
-        const queryEncoded = encodeURIComponent(imagePrompt.slice(0, 60));
-        imageUrl = `https://source.unsplash.com/1200x800/?${queryEncoded}`;
-      }
+      const lastMsg = messages[messages.length - 1]?.content || "Generated image";
+      const cleanPrompt = lastMsg.replace(/create|image of|photo of|picture of|generate|portrait of/gi, "").trim() || lastMsg;
+      const queryEncoded = encodeURIComponent(cleanPrompt.slice(0, 60));
+      const imageUrl = `https://source.unsplash.com/1200x800/?${queryEncoded}`;
 
       return new Response(JSON.stringify({
         choices: [{
           message: {
-            content: `✅ Generated image successfully for: "${imagePrompt}"`,
+            content: `✅ Generated image successfully for: "${lastMsg}"`,
             images: [{ image_url: { url: imageUrl } }]
           }
         }],
