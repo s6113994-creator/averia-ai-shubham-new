@@ -151,24 +151,29 @@ Submission:
       }, { onConflict: "user_id,key" }).catch(() => {});
     }
 
-    // IMAGE GENERATION MODE (Phase 2 Studio / mode === "image") -> Immediate High-Res Visual Render
+    // IMAGE GENERATION MODE (Phase 2 Studio / mode === "image") -> SSE Stream
     if (mode === "image" || phase === 2) {
-      const lastMsg = messages[messages.length - 1]?.content || "Generated image";
-      const cleanPrompt = lastMsg.replace(/create|image of|photo of|picture of|generate|portrait of/gi, "").trim() || lastMsg;
+      const imagePrompt = messages[messages.length - 1]?.content || "Generated image";
+      const cleanPrompt = imagePrompt.replace(/create|image of|photo of|picture of|generate|portrait of/gi, "").trim() || imagePrompt;
       const queryEncoded = encodeURIComponent(cleanPrompt.slice(0, 60));
       const imageUrl = `https://source.unsplash.com/1200x800/?${queryEncoded}`;
 
-      return new Response(JSON.stringify({
-        choices: [{
-          message: {
-            content: `✅ Generated image successfully for: "${lastMsg}"`,
-            images: [{ image_url: { url: imageUrl } }]
-          }
-        }],
-        image_url: imageUrl
-      }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          const chunk = JSON.stringify({
+            choices: [{
+              delta: { content: `✅ Generated image successfully for: "${imagePrompt}"` },
+              message: { content: `✅ Generated image successfully for: "${imagePrompt}"`, images: [{ image_url: { url: imageUrl } }] }
+            }],
+            image_url: imageUrl
+          });
+          controller.enqueue(encoder.encode(`data: ${chunk}\n\n`));
+          controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
+          controller.close();
+        }
       });
+      return new Response(stream, { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
     }
 
     const memoryContext = memories.length > 0 ? `\n\nUser's Memory Vault:\n${memories.join("\n")}` : "";
