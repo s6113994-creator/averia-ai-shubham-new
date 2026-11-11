@@ -11,8 +11,18 @@ function getChatHeaders(accessToken?: string | null) {
   };
 }
 
-/** One-shot helper around the streaming master-agent-engine edge function with robust retry and error boundary. */
-export async function askAveria(messages: { role: string; content: string }[], retries = 2): Promise<string> {
+export interface ChatOptions {
+  phase?: number;
+  mode?: string;
+  forensicMode?: boolean;
+}
+
+/** One-shot helper around the streaming master-agent-engine edge function with robust retry and 4-phase support. */
+export async function askAveria(
+  messages: { role: string; content: string }[],
+  options?: ChatOptions,
+  retries = 2
+): Promise<string> {
   const { data: { session } } = await supabase.auth.getSession();
   let lastError: any = null;
 
@@ -21,7 +31,7 @@ export async function askAveria(messages: { role: string; content: string }[], r
       const res = await fetch(CHAT_URL, {
         method: 'POST',
         headers: getChatHeaders(session?.access_token),
-        body: JSON.stringify({ messages }),
+        body: JSON.stringify({ messages, ...options }),
       });
 
       if (res.status === 429) throw new Error('Averia is rate limited — try again in a moment.');
@@ -50,7 +60,7 @@ export async function askAveria(messages: { role: string; content: string }[], r
           if (payload === '[DONE]') continue;
           try {
             const json = JSON.parse(payload);
-            const delta = json?.choices?.[0]?.delta?.content || json?.content || '';
+            const delta = json?.choices?.[0]?.delta?.content || json?.choices?.[0]?.message?.content || json?.content || '';
             out += delta;
           } catch { /* partial JSON */ }
         }
@@ -65,10 +75,11 @@ export async function askAveria(messages: { role: string; content: string }[], r
   throw lastError || new Error('Connection to Averia AI dropped. Please check your network and try again.');
 }
 
-/** Streams a reply, invoking onDelta for each token chunk with robust auto-reconnection. */
+/** Streams a reply, invoking onDelta for each token chunk with robust auto-reconnection and 4-phase support. */
 export async function streamAveria(
   messages: { role: string; content: string }[],
   onDelta: (chunk: string) => void,
+  options?: ChatOptions,
 ): Promise<void> {
   const { data: { session } } = await supabase.auth.getSession();
   let res: Response;
@@ -76,7 +87,7 @@ export async function streamAveria(
     res = await fetch(CHAT_URL, {
       method: 'POST',
       headers: getChatHeaders(session?.access_token),
-      body: JSON.stringify({ messages }),
+      body: JSON.stringify({ messages, ...options }),
     });
   } catch (netErr: any) {
     throw new Error('Network connection failed. Please verify your internet connection.');
@@ -109,7 +120,7 @@ export async function streamAveria(
       if (payload === '[DONE]') continue;
       try {
         const json = JSON.parse(payload);
-        const delta = json?.choices?.[0]?.delta?.content || json?.content || '';
+        const delta = json?.choices?.[0]?.delta?.content || json?.choices?.[0]?.message?.content || json?.content || '';
         if (delta) onDelta(delta);
       } catch { /* partial frame */ }
     }

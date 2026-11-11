@@ -55,7 +55,6 @@ async function fetchWithGeminiRotation(url: string, options: RequestInit): Promi
     }
   }
 
-  // Graceful fallback response instead of 500 error popup
   const fallbackJson = {
     choices: [{
       message: {
@@ -110,7 +109,7 @@ serve(async (req) => {
     }
 
     const body = await req.json().catch(() => ({}));
-    const { messages, conversationId, saveMemory, mode, forensicMode, classify, kind, text } = body as any;
+    const { messages, conversationId, saveMemory, mode, forensicMode, classify, kind, text, phase = 1 } = body as any;
 
     if (classify === true) {
       const prompt = `You are a strict content-quality classifier for a public news vault.
@@ -152,7 +151,7 @@ Submission:
       }, { onConflict: "user_id,key" }).catch(() => {});
     }
 
-    if (mode === "image") {
+    if (mode === "image" || phase === 2) {
       const imagePrompt = messages[messages.length - 1]?.content || "";
       const response = await fetchWithGeminiRotation("https://ai.gateway.lovable.dev/v1/chat/completions", {
         method: "POST",
@@ -181,7 +180,18 @@ Submission:
     const memoryContext = memories.length > 0 ? `\n\nUser's Memory Vault:\n${memories.join("\n")}` : "";
     const personalGreeting = userName ? `The user's name is "${userName}". Greet them personally when appropriate.` : "";
 
-    const forensicAddon = forensicMode ? `
+    let phaseInstruction = "";
+    if (phase === 1) {
+      phaseInstruction = "Phase 1: Averia Core - Core conversational reasoning and general agent assistance.";
+    } else if (phase === 2) {
+      phaseInstruction = "Phase 2: Averia Studio - Creative generation and visual asset design.";
+    } else if (phase === 3 || forensicMode) {
+      phaseInstruction = "Phase 3: Averia Intelligence - Deep forensic verification, deepfake detection, and trust scoring.";
+    } else if (phase === 4) {
+      phaseInstruction = "Phase 4: Averia Nexus - Advanced multi-agent code orchestration and network execution.";
+    }
+
+    const forensicAddon = (forensicMode || phase === 3) ? `
 🔬 **DEEP-CORE FORENSIC MODE ACTIVATED** — Perform exhaustive forensic analysis on attached media.
 1. **🎯 Verdict Badge**: ✅ AUTHENTIC / ❌ FAKE / ⚠️ MISLEADING / 🤖 AI-GENERATED / 🔧 MANIPULATED
 2. **📊 Confidence Score**: Exact percentage
@@ -189,12 +199,12 @@ Submission:
 4. **👻 AI Ghost Detection**: Manipulation regions
 ` : "";
 
-    const systemPrompt = `You are **Averia Agentic AI (V5.1)** — a world-class multimodal agentic assistant.
+    const systemPrompt = `You are **Averia Agentic AI (V5.1)** operating under **${phaseInstruction}**.
 ${personalGreeting}
 ${forensicAddon}
 ${memoryContext}`;
 
-    const modelToUse = forensicMode ? "google/gemini-2.5-pro" : AI_MODEL;
+    const modelToUse = (forensicMode || phase === 3) ? "google/gemini-2.5-pro" : AI_MODEL;
 
     const response = await fetchWithGeminiRotation("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
