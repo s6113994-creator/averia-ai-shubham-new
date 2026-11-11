@@ -7,7 +7,6 @@ const corsHeaders = {
 };
 
 const AI_MODEL = Deno.env.get("AVERIA_AI_MODEL") || "google/gemini-3-flash-preview";
-const IMAGE_MODEL = "google/gemini-3.1-flash-image-preview";
 
 function getGeminiKeys(): string[] {
   const keys: string[] = [];
@@ -151,72 +150,21 @@ Submission:
       }, { onConflict: "user_id,key" }).catch(() => {});
     }
 
-    // IMAGE GENERATION MODE (Phase 2 Studio / mode === "image") -> Real Gemini Image Generation via 10 Rotated Keys
+    // REAL IMAGE GENERATION MODE (Phase 2 Studio / mode === "image") -> High-Resolution AI Image Generation
     if (mode === "image" || phase === 2) {
       const imagePrompt = messages[messages.length - 1]?.content || "Generated image";
       const cleanPrompt = imagePrompt.replace(/create|image of|photo of|picture of|generate|portrait of|ki image create karo/gi, "").trim() || imagePrompt;
-      const keys = getGeminiKeys();
-      let imageUrl: string | null = null;
 
-      for (let i = 0; i < keys.length; i++) {
-        const key = keys[i];
-        try {
-          // 1. Try Google AI Gemini multimodal image generation
-          const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: `Generate a photorealistic, high-resolution portrait or image of: ${cleanPrompt}` }] }],
-              generationConfig: { responseModalities: ["IMAGE", "TEXT"] }
-            }),
-          });
-          if (geminiRes.ok) {
-            const gemData = await geminiRes.json();
-            const part = gemData?.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData || p.fileData);
-            if (part?.inlineData) {
-              imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-              break;
-            }
-          }
-
-          // 2. Try Gateway image model with rotated key
-          const gwResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${key}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: IMAGE_MODEL,
-              messages: [{ role: "user", content: `Generate an image of: ${cleanPrompt}` }],
-              modalities: ["image", "text"],
-            }),
-          });
-          if (gwResp.ok) {
-            const gwData = await gwResp.json();
-            const url = gwData.choices?.[0]?.message?.images?.[0]?.image_url?.url || gwData.choices?.[0]?.delta?.image_url?.url || gwData.image_url;
-            if (url) {
-              imageUrl = url;
-              break;
-            }
-          }
-        } catch (e) {
-          console.warn(`[Gemini Image Gen] Key ${i} failed:`, e);
-        }
-      }
-
-      if (!imageUrl) {
-        const queryEncoded = encodeURIComponent(cleanPrompt);
-        imageUrl = `https://source.unsplash.com/1200x800/?${queryEncoded}`;
-      }
+      const encodedPrompt = encodeURIComponent(`photorealistic, high-resolution 4k, cinematic lighting, masterpiece, ${cleanPrompt}`);
+      const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1200&height=800&nologo=true&seed=${Math.floor(Math.random() * 1000000)}`;
 
       const encoder = new TextEncoder();
       const stream = new ReadableStream({
         start(controller) {
           const chunk = JSON.stringify({
             choices: [{
-              delta: { content: `✅ Generated image successfully for: "${cleanPrompt}"` },
-              message: { content: `✅ Generated image successfully for: "${cleanPrompt}"`, images: [{ image_url: { url: imageUrl } }] }
+              delta: { content: `✨ Studio image generated successfully for: "${cleanPrompt}"`, image_url: { url: imageUrl } },
+              message: { content: `✨ Studio image generated successfully for: "${cleanPrompt}"`, images: [{ image_url: { url: imageUrl } }] }
             }],
             image_url: imageUrl
           });
