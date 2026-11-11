@@ -15,6 +15,7 @@ export interface ChatOptions {
   phase?: number;
   mode?: string;
   forensicMode?: boolean;
+  classify?: boolean;
 }
 
 /** One-shot helper around the streaming master-agent-engine edge function with robust retry and 4-phase support. */
@@ -28,10 +29,18 @@ export async function askAveria(
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
+      const payload = {
+        messages,
+        phase: options?.phase ?? 1,
+        mode: options?.mode,
+        forensicMode: options?.forensicMode ?? false,
+        classify: options?.classify ?? false,
+      };
+
       const res = await fetch(CHAT_URL, {
         method: 'POST',
         headers: getChatHeaders(session?.access_token),
-        body: JSON.stringify({ messages, ...options }),
+        body: JSON.stringify(payload),
       });
 
       if (res.status === 429) throw new Error('Averia is rate limited — try again in a moment.');
@@ -56,10 +65,10 @@ export async function askAveria(
         for (const line of lines) {
           const t = line.trim();
           if (!t.startsWith('data:')) continue;
-          const payload = t.slice(5).trim();
-          if (payload === '[DONE]') continue;
+          const payloadStr = t.slice(5).trim();
+          if (payloadStr === '[DONE]') continue;
           try {
-            const json = JSON.parse(payload);
+            const json = JSON.parse(payloadStr);
             const delta = json?.choices?.[0]?.delta?.content || json?.choices?.[0]?.message?.content || json?.content || '';
             out += delta;
           } catch { /* partial JSON */ }
@@ -84,10 +93,18 @@ export async function streamAveria(
   const { data: { session } } = await supabase.auth.getSession();
   let res: Response;
   try {
+    const payload = {
+      messages,
+      phase: options?.phase ?? 1,
+      mode: options?.mode,
+      forensicMode: options?.forensicMode ?? false,
+      classify: options?.classify ?? false,
+    };
+
     res = await fetch(CHAT_URL, {
       method: 'POST',
       headers: getChatHeaders(session?.access_token),
-      body: JSON.stringify({ messages, ...options }),
+      body: JSON.stringify(payload),
     });
   } catch (netErr: any) {
     throw new Error('Network connection failed. Please verify your internet connection.');
@@ -116,10 +133,10 @@ export async function streamAveria(
     for (const line of lines) {
       const t = line.trim();
       if (!t.startsWith('data:')) continue;
-      const payload = t.slice(5).trim();
-      if (payload === '[DONE]') continue;
+      const payloadStr = t.slice(5).trim();
+      if (payloadStr === '[DONE]') continue;
       try {
-        const json = JSON.parse(payload);
+        const json = JSON.parse(payloadStr);
         const delta = json?.choices?.[0]?.delta?.content || json?.choices?.[0]?.message?.content || json?.content || '';
         if (delta) onDelta(delta);
       } catch { /* partial frame */ }
