@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Plus, Brain, MessageSquare, Eye, Code, X, FileCode, Globe, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Tablet, Smartphone, Camera, Paperclip, FileText, Link2, Mic, ShieldCheck, Sparkles, Cpu, Layers, ChevronDown } from 'lucide-react';
+import { Send, Brain, Eye, Code, X, FileCode, Globe, Image as ImageIcon, Rocket, FolderOpen, File, Monitor, Tablet, Smartphone, Camera, Paperclip, FileText, ShieldCheck, Sparkles, Cpu, ChevronDown, MessageSquare, Mic } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
@@ -62,7 +62,7 @@ function parseForensicData(content: string): ForensicData | null {
   if (!verdictMatch && !confMatch && !content.toLowerCase().includes('forensic markers')) return null;
 
   const verdict = (verdictMatch ? verdictMatch[2].toUpperCase() : 'AUTHENTIC') as any;
-  const confidence = confMatch ? parseInt(confMatch[1], 10) : 89;
+  const confidence = confMatch ? parseInt(confMatch[1], 10) : 91;
 
   const markers: string[] = [];
   const markerSection = content.split(/forensic markers|anomalies|indicators/i)[1];
@@ -182,10 +182,10 @@ if (_Component) {
   const root = ReactDOM.createRoot(document.getElementById('root'));
   root.render(React.createElement(React.StrictMode, null, React.createElement(_Component)));
 } else {
-  document.getElementById('root').innerHTML = '<div style="padding:2rem;color:#888;text-align:center;font-family:system-ui;">Preview ready — waiting for a renderable component.</div>';
+  document.getElementById('root').innerHTML = '<div style="padding:2rem;color:#888;text-align:center;font-family:system-ui;">Preview ready — waiting for renderable component.</div>';
 }
 } catch(e) {
-  document.getElementById('root').innerHTML = '<div class="error-overlay"><div class="error-card"><h3>⚠️ Syntax / Render Error</h3><pre>' + e.message + '</pre><div class="hint">The AI-generated code has an issue. Ask Averia to fix it or try a simpler prompt.</div></div></div>';
+  document.getElementById('root').innerHTML = '<div class="error-overlay"><div class="error-card"><h3>⚠️ Syntax / Render Error</h3><pre>' + e.message + '</pre><div class="hint">Ask Averia to fix the generated component code.</div></div></div>';
   console.error('Preview Error:', e);
 }
 <\/script>
@@ -244,7 +244,6 @@ export default function AveriaAI() {
   const isMobile = useIsMobile();
   const scope = useScope();
 
-  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -262,10 +261,9 @@ export default function AveriaAI() {
   const [previewDevice, setPreviewDevice] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [previewKey, setPreviewKey] = useState(0);
 
-  // 4-Phase System State & Super Admin RBAC & Top-Right Popup Switcher
+  // 4-Phase System State & Top-Right Compact Popup Switcher ONLY (Zero clutter: no footer, no product/company links, no plus/new-chat buttons, no Super Admin banners)
   const [activePhase, setActivePhase] = useState<number>(1);
   const [phaseMenuOpen, setPhaseMenuOpen] = useState(false);
-  const isSuperAdmin = user?.email?.toLowerCase() === 's6113994@gmail.com';
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -310,7 +308,6 @@ export default function AveriaAI() {
     recognition.onerror = () => {
       setVoiceActive(false);
       setVoiceMode(false);
-      toast.error('Voice input stopped.');
     };
     recognition.onend = () => {
       setVoiceActive(false);
@@ -353,7 +350,6 @@ export default function AveriaAI() {
 
   useEffect(() => {
     if (!user) { navigate('/auth'); return; }
-    loadConversations();
   }, [user]);
 
   useEffect(() => {
@@ -365,17 +361,6 @@ export default function AveriaAI() {
       }
     }
   }, [user, searchParams]);
-
-  useEffect(() => {
-    const onNew = () => handleNewChat();
-    const onSelect = (e: any) => { const id = e?.detail?.id; if (id) selectConversation(id); };
-    window.addEventListener('averia:new-chat', onNew as any);
-    window.addEventListener('averia:select-conv', onSelect as any);
-    return () => {
-      window.removeEventListener('averia:new-chat', onNew as any);
-      window.removeEventListener('averia:select-conv', onSelect as any);
-    };
-  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -413,25 +398,6 @@ export default function AveriaAI() {
     }
   }, [messages]);
 
-  const loadConversations = async () => {
-    if (!user) return;
-    const { data } = await supabase
-      .from('ai_conversations')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('updated_at', { ascending: false });
-    if (data) setConversations(data as Conversation[]);
-  };
-
-  const loadMessages = async (convId: string) => {
-    const { data } = await supabase
-      .from('ai_messages')
-      .select('*')
-      .eq('conversation_id', convId)
-      .order('created_at', { ascending: true });
-    if (data) setMessages(data.map((m: any) => ({ role: m.role, content: m.content })));
-  };
-
   const ensureSession = async (): Promise<boolean> => {
     if (!user) { toast.error('Please log in'); navigate('/auth'); return false; }
     try {
@@ -452,36 +418,15 @@ export default function AveriaAI() {
         .insert({ user_id: user!.id, title: 'New Chat' })
         .select()
         .single();
-      if (error) {
-        toast.error('Failed to create conversation.');
-        return null;
-      }
+      if (error) return null;
       const conv = data as Conversation;
-      setConversations(prev => [conv, ...prev]);
       setActiveConvId(conv.id);
       setMessages([]);
       setCanvasContent(null); setCanvasImageUrl(null); setDeployUrl(null);
-      window.dispatchEvent(new CustomEvent('averia:conv-changed'));
       return conv.id;
     } catch {
-      toast.error('Connection error.');
       return null;
     }
-  };
-
-  const handleNewChat = () => {
-    setActiveConvId(null);
-    setMessages([]);
-    setCanvasContent(null); setCanvasImageUrl(null); setDeployUrl(null);
-    setInput('');
-    setMobileView('chat');
-  };
-
-  const selectConversation = async (convId: string) => {
-    setActiveConvId(convId);
-    setCanvasContent(null); setCanvasImageUrl(null); setDeployUrl(null);
-    loadMessages(convId);
-    if (isMobile) setMobileView('chat');
   };
 
   const handlePublish = async () => {
@@ -589,7 +534,6 @@ export default function AveriaAI() {
     if (messages.length === 0) {
       const title = userMsg.content.slice(0, 60) + (userMsg.content.length > 60 ? '...' : '');
       await supabase.from('ai_conversations').update({ title }).eq('id', convId);
-      setConversations(prev => prev.map(c => c.id === convId ? { ...c, title } : c));
     }
 
     const isImageReq = activePhase === 2 || /generate|create an image|photo of|image of|picture of|logo|tasveer|foto|create .* image/i.test(userMsg.content);
@@ -715,86 +659,83 @@ export default function AveriaAI() {
 
   return (
     <Layout>
-      {/* Footer-free full height distraction-free Gemini-style layout */}
+      {/* Custom Dark Slim Scrollbars CSS */}
+      <style>{`
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+      `}</style>
+
+      {/* Full-Height Clean Workspace with 0px overflow and zero footer / clutter */}
       <div className="h-[calc(100vh-4rem)] w-full flex flex-col bg-background text-foreground overflow-hidden">
 
-        {/* Top Header with Top-Right Compact Popup Phase Switcher & Super Admin Badge */}
+        {/* Top Header: Logo/Title strictly on left, Top-Right Compact Popup Phase Switcher ONLY */}
         <div className="border-b border-border bg-card/60 backdrop-blur-md px-4 py-2 flex items-center justify-between gap-3 shrink-0 relative z-20">
           <div className="flex items-center gap-2">
             <AveriaLogo size="sm" />
-            <span className="font-heading font-bold text-sm tracking-wide hidden sm:inline">Averia AI Nexus</span>
-            {isSuperAdmin && (
-              <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1">
-                👑 Super Admin (s6113994@gmail.com)
-              </span>
-            )}
+            <span className="font-heading font-bold text-sm tracking-wide">Averia AI</span>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Top-Right Compact Popup Phase Switcher Button */}
-            <div className="relative">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1.5 text-xs font-semibold rounded-xl bg-secondary/80 border-border hover:bg-secondary"
-                onClick={() => setPhaseMenuOpen(v => !v)}
-              >
-                <currentPhaseMeta.icon className="h-3.5 w-3.5 text-primary" />
-                <span>⚡ Phase {activePhase}: {currentPhaseMeta.name.split(':')[1]?.trim() || 'Core'}</span>
-                <ChevronDown className={`h-3 w-3 transition-transform ${phaseMenuOpen ? 'rotate-180' : ''}`} />
-              </Button>
-
-              <AnimatePresence>
-                {phaseMenuOpen && (
-                  <>
-                    <div className="fixed inset-0 z-30" onClick={() => setPhaseMenuOpen(false)} />
-                    <motion.div
-                      initial={{ opacity: 0, y: 6, scale: 0.95 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 6, scale: 0.95 }}
-                      transition={{ duration: 0.15 }}
-                      className="absolute right-0 top-10 z-40 w-72 rounded-2xl border border-border bg-card shadow-2xl p-2 backdrop-blur-xl space-y-1"
-                    >
-                      <div className="px-3 py-1.5 text-[10px] uppercase font-bold tracking-wider text-muted-foreground">
-                        Select Neural Execution Phase
-                      </div>
-                      {phasesList.map(p => {
-                        const isSelected = activePhase === p.id;
-                        return (
-                          <button
-                            key={p.id}
-                            onClick={() => {
-                              setActivePhase(p.id);
-                              setPhaseMenuOpen(false);
-                              toast.success(`Switched to ${p.name}`);
-                            }}
-                            className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-xl text-left transition-colors ${
-                              isSelected ? 'bg-primary/15 text-primary font-bold border border-primary/30' : 'hover:bg-secondary/60 text-foreground/85'
-                            }`}
-                          >
-                            <div className="mt-0.5 p-1 rounded-lg bg-background/50">
-                              <p.icon className="h-4 w-4 text-primary" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-xs font-semibold">{p.name}</div>
-                              <div className="text-[10px] text-muted-foreground">{p.desc}</div>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-            </div>
-
-            <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5 rounded-xl" onClick={handleNewChat}>
-              <Plus className="h-3.5 w-3.5" /> New Chat
+          {/* Top-Right Compact Popup Phase Switcher ONLY */}
+          <div className="relative">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 text-xs font-semibold rounded-xl bg-secondary/80 border-border hover:bg-secondary"
+              onClick={() => setPhaseMenuOpen(v => !v)}
+            >
+              <currentPhaseMeta.icon className="h-3.5 w-3.5 text-primary" />
+              <span>⚡ Phase {activePhase}: {currentPhaseMeta.name.split(':')[1]?.trim() || 'Core'}</span>
+              <ChevronDown className={`h-3 w-3 transition-transform ${phaseMenuOpen ? 'rotate-180' : ''}`} />
             </Button>
+
+            <AnimatePresence>
+              {phaseMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setPhaseMenuOpen(false)} />
+                  <motion.div
+                    initial={{ opacity: 0, y: 6, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 6, scale: 0.95 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute right-0 top-10 z-40 w-72 rounded-2xl border border-border bg-card shadow-2xl p-2 backdrop-blur-xl space-y-1"
+                  >
+                    <div className="px-3 py-1.5 text-[10px] uppercase font-bold tracking-wider text-muted-foreground">
+                      Select Neural Execution Phase
+                    </div>
+                    {phasesList.map(p => {
+                      const isSelected = activePhase === p.id;
+                      return (
+                        <button
+                          key={p.id}
+                          onClick={() => {
+                            setActivePhase(p.id);
+                            setPhaseMenuOpen(false);
+                            toast.success(`Switched to ${p.name}`);
+                          }}
+                          className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-xl text-left transition-colors ${
+                            isSelected ? 'bg-primary/15 text-primary font-bold border border-primary/30' : 'hover:bg-secondary/60 text-foreground/85'
+                          }`}
+                        >
+                          <div className="mt-0.5 p-1 rounded-lg bg-background/50">
+                            <p.icon className="h-4 w-4 text-primary" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-semibold">{p.name}</div>
+                            <div className="text-[10px] text-muted-foreground">{p.desc}</div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
           </div>
         </div>
 
-        {/* Main Workspace Layout (Strictly 0px overflow below input container, no public footer) */}
+        {/* Main Workspace Layout */}
         <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden min-w-0">
           {isMobile && hasCanvas && (
             <div className="flex border-b border-border shrink-0 bg-card">
@@ -946,8 +887,8 @@ export default function AveriaAI() {
                   </div>
                 </ScrollArea>
 
-                {/* Input Bar (Footer-free, pinned at bottom) */}
-                <div className="border-t border-white/5 backdrop-blur-sm p-3 md:p-4 shrink-0 bg-background/80">
+                {/* Input Bar (Footer-free, pinned at bottom with 0px overflow below) */}
+                <div className="border-t border-white/5 backdrop-blur-sm p-3 md:p-4 shrink-0 bg-background/90">
                   <div className="max-w-3xl mx-auto">
                     {attachments.length > 0 && (
                       <div className="flex flex-wrap gap-2 mb-2">

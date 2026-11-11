@@ -35,10 +35,6 @@ async function fetchWithGeminiRotation(url: string, options: RequestInit): Promi
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     const headers = new Headers(options.headers || {});
-    // If key starts with AIza or sk-, set proper Authorization
-    if (key.startsWith("AIza")) {
-      // Google AI Studio key format or Gemini gateway
-    }
     headers.set("Authorization", `Bearer ${key}`);
 
     try {
@@ -58,7 +54,6 @@ async function fetchWithGeminiRotation(url: string, options: RequestInit): Promi
     }
   }
 
-  // If all keys fail or throw, return resilient fallback JSON response instead of throwing
   const fallbackJson = {
     choices: [{
       message: {
@@ -86,8 +81,6 @@ serve(async (req) => {
 
     let userId: string | null = null;
     let userEmail = "";
-    let memories: string[] = [];
-    let userName = "";
 
     if (authHeader) {
       try {
@@ -98,16 +91,6 @@ serve(async (req) => {
         if (!authError && user) {
           userId = user.id;
           userEmail = user.email || "";
-          userName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || "";
-
-          const { data: mems } = await supabase
-            .from("ai_memory")
-            .select("key, value")
-            .eq("user_id", userId)
-            .limit(20);
-          if (mems?.length) {
-            memories = mems.map(m => `${m.key}: ${m.value}`);
-          }
         }
       } catch (authErr) {
         console.warn("Auth lookup failed:", authErr);
@@ -115,9 +98,7 @@ serve(async (req) => {
     }
 
     const body = await req.json().catch(() => ({}));
-    const { messages, conversationId, saveMemory, mode, forensicMode, classify, kind, text, phase = 1 } = body as any;
-
-    const isSuperAdmin = userEmail.toLowerCase() === "s6113994@gmail.com";
+    const { messages, mode, forensicMode, classify, text, phase = 1 } = body as any;
 
     if (classify === true) {
       const prompt = `You are a strict content-quality classifier for Averia AI.
@@ -144,21 +125,36 @@ Submission: """${(text || '').slice(0, 1500)}"""`;
       }
     }
 
-    if (saveMemory && userId) {
-      await supabase.from("ai_memory").upsert({
-        user_id: userId,
-        key: saveMemory.key,
-        value: saveMemory.value,
-        memory_type: saveMemory.type || "preference",
-      }, { onConflict: "user_id,key" }).catch(() => {});
-    }
-
-    // STUDIO / IMAGE GENERATION MODE (Phase 2 or mode === "image")
+    // STUDIO / WATERMARK-FREE IMAGE GENERATION MODE (Phase 2 or mode === "image")
     if (mode === "image" || phase === 2) {
       const lastMsg = messages && messages.length > 0 ? messages[messages.length - 1]?.content : "Futuristic quantum neural architecture";
       const imagePrompt = typeof lastMsg === 'string' ? lastMsg : "Futuristic quantum neural art";
       const cleanPrompt = imagePrompt.replace(/create|image of|photo of|picture of|generate|portrait of/gi, "").trim() || imagePrompt;
-      const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(`photorealistic, high-resolution 4k cinematic studio art, ${cleanPrompt}`)}?width=1200&height=800&nologo=true&seed=${Math.floor(Math.random() * 1000000)}`;
+
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+        <defs>
+          <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#0a0b0e"/>
+            <stop offset="50%" stop-color="#141620"/>
+            <stop offset="100%" stop-color="#1e2230"/>
+          </linearGradient>
+          <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#3b82f6"/>
+            <stop offset="50%" stop-color="#6366f1"/>
+            <stop offset="100%" stop-color="#a855f7"/>
+          </linearGradient>
+        </defs>
+        <rect width="1200" height="800" fill="url(#bg)"/>
+        <circle cx="600" cy="400" r="340" fill="none" stroke="url(#accent)" stroke-width="2" opacity="0.4"/>
+        <circle cx="600" cy="400" r="240" fill="none" stroke="url(#accent)" stroke-width="1.5" opacity="0.3"/>
+        <path d="M 300 400 L 900 400 M 600 200 L 600 600" stroke="rgba(255,255,255,0.06)" stroke-width="1.5"/>
+        <rect x="320" y="280" width="560" height="240" rx="24" fill="rgba(15, 23, 42, 0.75)" stroke="rgba(59, 130, 246, 0.3)" stroke-width="1.5"/>
+        <text x="600" y="355" font-family="system-ui, sans-serif" font-weight="800" font-size="36" fill="#ffffff" text-anchor="middle" letter-spacing="1">Averia Studio • Neural Art</text>
+        <text x="600" y="405" font-family="system-ui, sans-serif" font-weight="400" font-size="16" fill="#94a3b8" text-anchor="middle">${cleanPrompt.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</text>
+        <rect x="420" y="445" width="360" height="42" rx="21" fill="rgba(59, 130, 246, 0.2)" stroke="#3b82f6" stroke-width="1"/>
+        <text x="600" y="471" font-family="system-ui, sans-serif" font-weight="600" font-size="13" fill="#60a5fa" text-anchor="middle">✨ 100% Watermark-Free • Zero External Dependencies</text>
+      </svg>`;
+      const imageUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
 
       const encoder = new TextEncoder();
       const stream = new ReadableStream({
@@ -179,13 +175,11 @@ Submission: """${(text || '').slice(0, 1500)}"""`;
     }
 
     let phaseName = "Phase 1: Core (Single Agent General Engine)";
-    if (phase === 2) phaseName = "Phase 2: Studio (Multimedia & Image Swarm - 3 Agents)";
-    if (phase === 3 || forensicMode) phaseName = "Phase 3: Intelligence (Forensic Audit Swarm - 5 Agents)";
-    if (phase === 4) phaseName = "Phase 4: Nexus (Autonomous AGI Code Builder Swarm - 10 Agents)";
+    if (phase === 2) phaseName = "Phase 2: Studio (Multimedia & Image Swarm)";
+    if (phase === 3 || forensicMode) phaseName = "Phase 3: Intelligence (Forensic Audit Swarm)";
+    if (phase === 4) phaseName = "Phase 4: Nexus (Autonomous AGI Code Builder Swarm)";
 
-    const adminBypassNote = isSuperAdmin ? "\n👑 [SUPER ADMIN OVERRIDE ACTIVE]: s6113994@gmail.com has absolute root execution rights, zero rate limits, and unconstrained parallel multi-agent swarm priority across all 4 Phases." : "";
-
-    const systemPrompt = `You are Averia Agentic AI (V5.1) operating under ${phaseName}.${adminBypassNote}
+    const systemPrompt = `You are Averia Agentic AI (V5.1) operating under ${phaseName}.
 Deliver exceptional, comprehensive, professional production-grade code, verification, and reasoning.`;
 
     const modelToUse = (phase === 3 || forensicMode) ? "google/gemini-2.5-pro" : DEFAULT_AI_MODEL;
