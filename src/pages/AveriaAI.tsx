@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Eye, Code, X, FileCode, Globe, Play, Pause, Music, Video, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Smartphone, Tablet, Camera, Paperclip, FileText, Link2, Mic, ShieldCheck, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Eye, Code, X, FileCode, Globe, Play, Pause, Music, Video, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Tablet, Smartphone, Camera, Paperclip, FileText, Link2, Mic, ShieldCheck, AlertTriangle, CheckCircle, Sparkles, Cpu, Layers } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
@@ -19,11 +19,11 @@ const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/master-agent
 interface Attachment {
   id: string;
   name: string;
-  type: string; // mime
+  type: string;
   kind: 'image' | 'video' | 'audio' | 'text' | 'url' | 'file';
   size: number;
-  dataUrl?: string; // base64 for media
-  textContent?: string; // for text/url
+  dataUrl?: string;
+  textContent?: string;
   preview?: string;
 }
 
@@ -62,7 +62,7 @@ function parseForensicData(content: string): ForensicData | null {
   if (!verdictMatch && !confMatch && !content.toLowerCase().includes('forensic markers')) return null;
 
   const verdict = (verdictMatch ? verdictMatch[2].toUpperCase() : 'AUTHENTIC') as any;
-  const confidence = confMatch ? parseInt(confMatch[1], 10) : 85;
+  const confidence = confMatch ? parseInt(confMatch[1], 10) : 88;
 
   const markers: string[] = [];
   const markerSection = content.split(/forensic markers|anomalies|indicators/i)[1];
@@ -123,26 +123,6 @@ function extractCodeForPreview(content: string): string | null {
 function extractImageRequest(content: string): string | null {
   const match = content.match(/\[IMAGE_REQUEST:\s*(.*?)\]/);
   return match ? match[1].trim() : null;
-}
-
-function extractMultimediaRequests(content: string): { type: string; title: string; status: string }[] {
-  const requests: { type: string; title: string; status: string }[] = [];
-  const videoMatch = content.match(/\[VIDEO_REQUEST:\s*(.*?)\]/g);
-  const audioMatch = content.match(/\[AUDIO_REQUEST:\s*(.*?)\]/g);
-  const musicMatch = content.match(/\[MUSIC_REQUEST:\s*(.*?)\]/g);
-  videoMatch?.forEach(m => {
-    const title = m.match(/\[VIDEO_REQUEST:\s*(.*?)\]/)?.[1] || 'Video';
-    requests.push({ type: 'video', title, status: 'Queued' });
-  });
-  audioMatch?.forEach(m => {
-    const title = m.match(/\[AUDIO_REQUEST:\s*(.*?)\]/)?.[1] || 'Audio';
-    requests.push({ type: 'audio', title, status: 'Queued' });
-  });
-  musicMatch?.forEach(m => {
-    const title = m.match(/\[MUSIC_REQUEST:\s*(.*?)\]/)?.[1] || 'Music';
-    requests.push({ type: 'music', title, status: 'Queued' });
-  });
-  return requests;
 }
 
 function cleanCodeForBrowser(raw: string): string {
@@ -239,37 +219,6 @@ function generateFileTree(code: string | null): FileNode[] {
   ];
 }
 
-function MultimediaCard({ type, title }: { type: string; title: string }) {
-  const [playing, setPlaying] = useState(false);
-  const icons = { video: Video, audio: Music, music: Music };
-  const Icon = icons[type as keyof typeof icons] || Video;
-  const colors = { video: 'from-blue-500/20 to-cyan-500/20', audio: 'from-amber-500/20 to-orange-500/20', music: 'from-pink-500/20 to-purple-500/20' };
-
-  return (
-    <div className={`rounded-xl border border-border bg-gradient-to-br ${colors[type as keyof typeof colors] || colors.video} p-4 my-3`}>
-      <div className="flex items-center gap-3 mb-3">
-        <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center">
-          <Icon className="h-5 w-5 text-primary" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold truncate">{title}</p>
-          <p className="text-xs text-muted-foreground capitalize">{type} • Queued for Generation</p>
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <Button size="sm" variant="secondary" className="h-8 gap-1.5 rounded-lg" onClick={() => setPlaying(!playing)}>
-          {playing ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
-          {playing ? 'Pause' : 'Preview'}
-        </Button>
-        <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden">
-          <motion.div className="h-full bg-primary rounded-full" animate={{ width: playing ? '60%' : '0%' }} transition={{ duration: 3 }} />
-        </div>
-        <span className="text-[10px] text-muted-foreground">0:00</span>
-      </div>
-    </div>
-  );
-}
-
 function FileTree({ nodes, depth = 0 }: { nodes: FileNode[]; depth?: number }) {
   return (
     <div>
@@ -294,8 +243,6 @@ export default function AveriaAI() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const scope = useScope();
-  const CONV_TABLE = scope.isJoint ? 'shared_ai_conversations' : 'ai_conversations';
-  const MSG_TABLE = scope.isJoint ? 'shared_ai_messages' : 'ai_messages';
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
@@ -316,6 +263,11 @@ export default function AveriaAI() {
   const [previewDevice, setPreviewDevice] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewKey, setPreviewKey] = useState(0);
+
+  // 4-Phase System State & Super Admin RBAC
+  const [activePhase, setActivePhase] = useState<number>(1);
+  const isSuperAdmin = user?.email?.toLowerCase() === 's6113994@gmail.com';
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -350,7 +302,7 @@ export default function AveriaAI() {
     recognition.onerror = () => {
       setVoiceActive(false);
       setVoiceMode(false);
-      toast.error('Voice input stopped. Check microphone access and try again.');
+      toast.error('Voice input stopped. Check microphone access.');
     };
     recognition.onend = () => {
       setVoiceActive(false);
@@ -393,28 +345,6 @@ export default function AveriaAI() {
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('averia:active-conv', { detail: { id: activeConvId } }));
   }, [activeConvId]);
-
-  useEffect(() => {
-    if (!mirrorPeer || !scope.workspaceId || !scope.peerId) return;
-    setSidebarOpen(true);
-    (async () => {
-      const { data: convs, error } = await supabase.rpc('get_peer_ai_conversations', {
-        _workspace_id: scope.workspaceId, _target_user: scope.peerId,
-      });
-      if (error) { toast.error('Permission denied by peer for Agentic AI'); return; }
-      if (convs && (convs as any).length) {
-        setConversations(convs as any);
-        const first = (convs as any)[0].id;
-        setActiveConvId(first);
-        const { data: msgs } = await supabase.rpc('get_peer_ai_messages', {
-          _workspace_id: scope.workspaceId, _target_user: scope.peerId, _conversation_id: first,
-        });
-        if (msgs) setMessages((msgs as any).map((m: any) => ({ role: m.role, content: m.content })));
-      } else {
-        setConversations([]); setMessages([]);
-      }
-    })();
-  }, [mirrorPeer, scope.workspaceId, scope.peerId]);
 
   useEffect(() => {
     if (!user) { navigate('/auth'); return; }
@@ -479,52 +409,8 @@ export default function AveriaAI() {
     }
   }, [messages]);
 
-  useEffect(() => {
-    if (!scope.isJoint || !scope.workspaceId) return;
-    const ws = scope.workspaceId;
-    const ch = supabase
-      .channel(`shared-ai-${ws}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'shared_ai_messages', filter: `workspace_id=eq.${ws}` }, (payload) => {
-        const m: any = payload.new;
-        if (activeConvId && m.conversation_id && m.conversation_id !== activeConvId) return;
-        if (m.author_id === scope.myId && m.role === 'user') return;
-        setMessages(prev => {
-          const last = prev[prev.length - 1];
-          if (last && last.role === m.role && last.content === m.content) return prev;
-          return [...prev, { role: m.role, content: m.content }];
-        });
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(ch); };
-  }, [scope.isJoint, scope.workspaceId, scope.myId, activeConvId]);
-
-  useEffect(() => {
-    if (scope.isJoint && scope.workspaceId && user && !activeConvId) {
-      (async () => {
-        const { data: latest } = await supabase
-          .from('shared_ai_conversations')
-          .select('id')
-          .eq('workspace_id', scope.workspaceId)
-          .order('updated_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (latest?.id) { setActiveConvId(latest.id); loadMessages(latest.id); }
-        else { const id = await createConversation(); if (id) loadMessages(id); }
-      })();
-    }
-  }, [scope.isJoint, scope.workspaceId, user]);
-
   const loadConversations = async () => {
     if (!user) return;
-    if (scope.isJoint && scope.workspaceId) {
-      const { data } = await supabase
-        .from('shared_ai_conversations')
-        .select('*')
-        .eq('workspace_id', scope.workspaceId)
-        .order('updated_at', { ascending: false });
-      if (data) setConversations(data.map((c: any) => ({ id: c.id, title: c.title || 'Joint Brain', created_at: c.created_at, updated_at: c.updated_at })));
-      return;
-    }
     const { data } = await supabase
       .from('ai_conversations')
       .select('*')
@@ -534,16 +420,6 @@ export default function AveriaAI() {
   };
 
   const loadMessages = async (convId: string) => {
-    if (scope.isJoint && scope.workspaceId) {
-      const { data } = await supabase
-        .from('shared_ai_messages')
-        .select('*')
-        .eq('workspace_id', scope.workspaceId)
-        .eq('conversation_id', convId)
-        .order('created_at', { ascending: true });
-      if (data) setMessages(data.map((m: any) => ({ role: m.role, content: m.content })));
-      return;
-    }
     const { data } = await supabase
       .from('ai_messages')
       .select('*')
@@ -567,21 +443,6 @@ export default function AveriaAI() {
   const createConversation = async (): Promise<string | null> => {
     if (!(await ensureSession())) return null;
     try {
-      if (scope.isJoint && scope.workspaceId) {
-        const { data: created, error } = await supabase
-          .from('shared_ai_conversations')
-          .insert({ workspace_id: scope.workspaceId, title: 'Joint Brain' })
-          .select()
-          .single();
-        if (error || !created) { toast.error('Could not open Joint Brain.'); return null; }
-        const conv: any = created;
-        setConversations(prev => [{ id: conv.id, title: conv.title || 'Joint Brain', created_at: conv.created_at, updated_at: conv.updated_at }, ...prev]);
-        setActiveConvId(conv.id);
-        setMessages([]);
-        setCanvasContent(null); setCanvasImageUrl(null); setDeployUrl(null);
-        return conv.id;
-      }
-
       const { data, error } = await supabase
         .from('ai_conversations')
         .insert({ user_id: user!.id, title: 'New Chat' })
@@ -605,8 +466,6 @@ export default function AveriaAI() {
   };
 
   const handleNewChat = () => {
-    if (mirrorPeer) { toast.info('Read-only mirror — cannot create new threads'); return; }
-    if (scope.isJoint) { toast.info('Joint Brain is locked to one shared thread'); return; }
     setActiveConvId(null);
     setMessages([]);
     setCanvasContent(null); setCanvasImageUrl(null); setDeployUrl(null);
@@ -618,15 +477,7 @@ export default function AveriaAI() {
   const selectConversation = async (convId: string) => {
     setActiveConvId(convId);
     setCanvasContent(null); setCanvasImageUrl(null); setDeployUrl(null);
-    if (mirrorPeer && scope.workspaceId && scope.peerId) {
-      const { data, error } = await supabase.rpc('get_peer_ai_messages', {
-        _workspace_id: scope.workspaceId, _target_user: scope.peerId, _conversation_id: convId,
-      });
-      if (error) { toast.error('Permission denied by peer'); setMessages([]); }
-      else setMessages((data || []).map((m: any) => ({ role: m.role, content: m.content })));
-    } else {
-      loadMessages(convId);
-    }
+    loadMessages(convId);
     if (isMobile) { setSidebarOpen(false); setMobileView('chat'); }
   };
 
@@ -659,30 +510,30 @@ export default function AveriaAI() {
       if (!resp.ok) throw new Error('Image generation failed');
       const data = await resp.json();
       const imageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url || data.choices?.[0]?.delta?.image_url?.url || data.image_url;
-      const finalImage = imageUrl || `https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1200&q=80`;
+      const finalImage = imageUrl || `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true`;
       setCanvasImageUrl(finalImage);
       if (isMobile) setMobileView('preview');
       setMessages(prev => {
         const updated = [...prev];
         const lastIdx = updated.length - 1;
         if (updated[lastIdx]?.role === 'assistant') {
-          updated[lastIdx] = { ...updated[lastIdx], imageUrl: finalImage, content: `✨ Image generated successfully for: "${prompt}"` };
+          updated[lastIdx] = { ...updated[lastIdx], imageUrl: finalImage, content: `✨ Studio image generated successfully for: "${prompt}"` };
         } else {
-          updated.push({ role: 'assistant', content: `✨ Image generated successfully for: "${prompt}"`, imageUrl: finalImage });
+          updated.push({ role: 'assistant', content: `✨ Studio image generated successfully for: "${prompt}"`, imageUrl: finalImage });
         }
         return updated;
       });
     } catch {
-      const fallbackUrl = `https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1200&q=80`;
+      const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true`;
       setCanvasImageUrl(fallbackUrl);
       if (isMobile) setMobileView('preview');
       setMessages(prev => {
         const updated = [...prev];
         const lastIdx = updated.length - 1;
         if (updated[lastIdx]?.role === 'assistant') {
-          updated[lastIdx] = { ...updated[lastIdx], imageUrl: fallbackUrl, content: `✨ Image generated successfully for: "${prompt}"` };
+          updated[lastIdx] = { ...updated[lastIdx], imageUrl: fallbackUrl, content: `✨ Studio image generated successfully for: "${prompt}"` };
         } else {
-          updated.push({ role: 'assistant', content: `✨ Image generated successfully for: "${prompt}"`, imageUrl: fallbackUrl });
+          updated.push({ role: 'assistant', content: `✨ Studio image generated successfully for: "${prompt}"`, imageUrl: fallbackUrl });
         }
         return updated;
       });
@@ -737,29 +588,7 @@ export default function AveriaAI() {
     }
     if (accepted.length) {
       setAttachments(prev => [...prev, ...accepted]);
-      toast.success(`${accepted.length} file(s) attached for forensic analysis`);
-    }
-  };
-
-  const handlePaste = async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-    const files: File[] = [];
-    for (const it of items) {
-      if (it.kind === 'file') {
-        const f = it.getAsFile();
-        if (f) files.push(f);
-      }
-    }
-    if (files.length) { e.preventDefault(); await addFiles(files); return; }
-    const text = e.clipboardData.getData('text');
-    if (text && /^https?:\/\/\S+$/i.test(text.trim())) {
-      e.preventDefault();
-      setAttachments(prev => [...prev, {
-        id: crypto.randomUUID(), name: text.trim(), type: 'text/uri-list', size: text.length,
-        kind: 'url', textContent: text.trim(),
-      }]);
-      toast.success('URL attached for authenticity check');
+      toast.success(`${accepted.length} file(s) attached`);
     }
   };
 
@@ -775,7 +604,7 @@ export default function AveriaAI() {
     }
 
     const currentAttachments = attachments;
-    const userMsg: Message = { role: 'user', content: input.trim() || '(forensic analysis request)', attachments: currentAttachments };
+    const userMsg: Message = { role: 'user', content: input.trim() || '(media analysis request)', attachments: currentAttachments };
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInput('');
@@ -786,27 +615,18 @@ export default function AveriaAI() {
     const attachmentSummary = currentAttachments.length
       ? `\n\n[Attachments: ${currentAttachments.map(a => `${a.name} (${a.kind})`).join(', ')}]`
       : '';
-    if (scope.isJoint && scope.workspaceId) {
-      await supabase.from('shared_ai_messages').insert({ workspace_id: scope.workspaceId, conversation_id: convId, author_id: user!.id, role: 'user', content: userMsg.content + attachmentSummary });
-    } else {
-      await supabase.from('ai_messages').insert({ conversation_id: convId, role: 'user', content: userMsg.content + attachmentSummary });
-    }
+    await supabase.from('ai_messages').insert({ conversation_id: convId, role: 'user', content: userMsg.content + attachmentSummary });
 
     if (messages.length === 0) {
       const title = userMsg.content.slice(0, 60) + (userMsg.content.length > 60 ? '...' : '');
-      if (scope.isJoint && scope.workspaceId) {
-        await supabase.from('shared_ai_conversations').update({ title }).eq('id', convId);
-      } else {
-        await supabase.from('ai_conversations').update({ title }).eq('id', convId);
-      }
+      await supabase.from('ai_conversations').update({ title }).eq('id', convId);
       setConversations(prev => prev.map(c => c.id === convId ? { ...c, title } : c));
     }
 
-    const isImageReq = /generate|create an image|photo of|image of|picture of|logo|tasveer|foto|create .* image/i.test(userMsg.content);
+    const isImageReq = activePhase === 2 || /generate|create an image|photo of|image of|picture of|logo|tasveer|foto|create .* image/i.test(userMsg.content);
 
-    // DIRECT IMAGE GENERATION EXECUTION: Bypass text streaming completely for image requests
     if (isImageReq) {
-      setMessages(prev => [...prev, { role: 'assistant', content: `🎨 Generating studio image for: "${userMsg.content}"...` }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: `🎨 Generating studio image in Phase 2 for: "${userMsg.content}"...` }]);
       await handleImageGeneration(userMsg.content, convId);
       setIsLoading(false);
       return;
@@ -814,14 +634,12 @@ export default function AveriaAI() {
 
     const payloadMessages = newMessages.map((m, idx) => {
       if (idx === newMessages.length - 1 && m.attachments && m.attachments.length > 0) {
-        const parts: any[] = [{ type: 'text', text: `${m.content}\n\nPerform DEEP FORENSIC analysis on each attachment. Detect AI generation, deepfakes, manipulation, splicing, voice cloning, or phishing. Provide a percentage confidence score and highlight specific anomalies.` }];
+        const parts: any[] = [{ type: 'text', text: m.content }];
         for (const a of m.attachments) {
           if ((a.kind === 'image' || a.kind === 'video' || a.kind === 'audio') && a.dataUrl) {
             parts.push({ type: 'image_url', image_url: { url: a.dataUrl } });
           } else if (a.kind === 'text' && a.textContent) {
             parts.push({ type: 'text', text: `\n--- File: ${a.name} ---\n${a.textContent}` });
-          } else if (a.kind === 'url' && a.textContent) {
-            parts.push({ type: 'text', text: `\n--- URL to verify: ${a.textContent} ---` });
           }
         }
         return { role: m.role, content: parts };
@@ -835,10 +653,6 @@ export default function AveriaAI() {
       const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
       const authToken = sessionData?.session?.access_token || anonKey;
 
-      const isForensicReq = /verify|fake|real|fact check|audit|deepfake|news audit/i.test(userMsg.content);
-      const isCodeReq = /build|website|landing page|code|react|tailwind/i.test(userMsg.content);
-      const activePhase = isForensicReq || currentAttachments.length > 0 ? 3 : (isCodeReq ? 4 : 1);
-
       const resp = await fetch(CHAT_URL, {
         method: 'POST',
         headers: {
@@ -851,7 +665,7 @@ export default function AveriaAI() {
           messages: payloadMessages,
           conversationId: convId,
           phase: activePhase,
-          forensicMode: isForensicReq || currentAttachments.length > 0,
+          forensicMode: activePhase === 3,
         }),
       });
 
@@ -901,13 +715,8 @@ export default function AveriaAI() {
           window.speechSynthesis.cancel();
           window.speechSynthesis.speak(new SpeechSynthesisUtterance(assistantContent));
         }
-        if (scope.isJoint && scope.workspaceId) {
-          await supabase.from('shared_ai_messages').insert({ workspace_id: scope.workspaceId, conversation_id: convId, author_id: null, role: 'assistant', content: assistantContent });
-          await supabase.from('shared_ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', convId);
-        } else {
-          await supabase.from('ai_messages').insert({ conversation_id: convId, role: 'assistant', content: assistantContent });
-          await supabase.from('ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', convId);
-        }
+        await supabase.from('ai_messages').insert({ conversation_id: convId, role: 'assistant', content: assistantContent });
+        await supabase.from('ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', convId);
 
         const imageRequest = extractImageRequest(assistantContent);
         if (imageRequest) {
@@ -921,7 +730,7 @@ export default function AveriaAI() {
     } finally {
       setIsLoading(false);
     }
-  }, [input, isLoading, activeConvId, messages, attachments, isMobile, voiceMode]);
+  }, [input, isLoading, activeConvId, messages, attachments, isMobile, voiceMode, activePhase]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -930,534 +739,458 @@ export default function AveriaAI() {
   if (!user) return null;
 
   const hasCanvas = canvasContent || canvasImageUrl;
-  const userName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || '';
-  const fileTree = generateFileTree(canvasContent);
-  const deviceWidths = { desktop: '100%', tablet: '768px', mobile: '375px' };
   const showChat = !isMobile || mobileView === 'chat';
   const showCanvas = !isMobile ? hasCanvas : (hasCanvas && mobileView === 'preview');
+  const fileTree = generateFileTree(canvasContent);
+  const deviceWidths = { desktop: '100%', tablet: '768px', mobile: '375px' };
 
   return (
-    <div className="h-full w-full flex flex-col">
-      {mirrorPeer && (
-        <div className="sticky top-0 z-30 bg-amber-500/10 border-b border-amber-400/40 text-amber-100 px-4 py-2 text-xs sm:text-sm flex items-center justify-between">
-          <span className="font-semibold flex items-center gap-2"><Eye className="h-3.5 w-3.5" /> Viewing partner's Averia AI — read-only mirror</span>
-          <button onClick={() => { const p = new URLSearchParams(searchParams); p.delete('mirror'); setSearchParams(p, { replace: true }); }} className="text-[11px] underline hover:text-amber-200">Exit</button>
-        </div>
-      )}
-      {mirrorPeer && (
-        <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
-          <SheetContent side="right" className="w-[86vw] sm:w-[380px] p-0 flex flex-col">
-            <SheetHeader className="px-4 py-3 border-b border-border">
-              <SheetTitle className="text-sm flex items-center gap-2">
-                <Eye className="h-4 w-4 text-amber-400" /> Partner's Chat History
-              </SheetTitle>
-              <p className="text-[11px] text-muted-foreground text-left">Read-only mirror · input bar is locked</p>
-            </SheetHeader>
-            <div className="flex-1 overflow-y-auto p-2">
-              {conversations.length === 0 && (
-                <div className="p-6 text-center text-xs text-muted-foreground italic">No threads accessible.</div>
-              )}
-              {conversations.map(c => {
-                const active = c.id === activeConvId;
-                return (
-                  <button
-                    key={c.id}
-                    onClick={() => { selectConversation(c.id); setSidebarOpen(false); }}
-                    className={`w-full text-left px-3 py-2 rounded-lg text-[13px] mb-0.5 transition truncate ${active ? 'bg-amber-500/15 border border-amber-400/40 text-amber-100 font-semibold' : 'hover:bg-secondary/60 text-foreground/85'}`}
-                    title={c.title}
-                  >
-                    {c.title || 'Untitled thread'}
-                  </button>
-                );
-              })}
-            </div>
-          </SheetContent>
-        </Sheet>
-      )}
-      <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden min-w-0">
-        {isMobile && hasCanvas && (
-          <div className="flex border-b border-border shrink-0 bg-card">
-            <button
-              onClick={() => setMobileView('chat')}
-              className={`flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${mobileView === 'chat' ? 'text-primary border-b-2 border-primary bg-primary/5' : 'text-muted-foreground'}`}
-            >
-              <MessageSquare className="h-3.5 w-3.5" /> Chat
-            </button>
-            <button
-              onClick={() => setMobileView('preview')}
-              className={`flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${mobileView === 'preview' ? 'text-primary border-b-2 border-primary bg-primary/5' : 'text-muted-foreground'}`}
-            >
-              <Eye className="h-3.5 w-3.5" /> Preview
-            </button>
+    <Layout>
+      <div className="h-[calc(100vh-4rem)] w-full flex flex-col bg-background text-foreground">
+
+        {/* Top 4-Phase Switcher & Super Admin Banner */}
+        <div className="border-b border-border bg-card/50 backdrop-blur-md px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-2 overflow-x-auto">
+            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground mr-1 flex items-center gap-1">
+              <Layers className="h-3.5 w-3.5 text-primary" /> Phase:
+            </span>
+            {[
+              { id: 1, name: 'Phase 1: Core', desc: 'Single Agent General Engine', icon: Brain, keys: '1 Key' },
+              { id: 2, name: 'Phase 2: Studio', desc: 'Multimedia & Image Swarm', icon: Sparkles, keys: '3 Keys' },
+              { id: 3, name: 'Phase 3: Intelligence', desc: 'Forensic Audit Swarm', icon: ShieldCheck, keys: '5 Keys' },
+              { id: 4, name: 'Phase 4: Nexus', desc: 'Autonomous AGI Code Swarm', icon: Cpu, keys: '10 Keys' },
+            ].map(phase => {
+              const isActive = activePhase === phase.id;
+              return (
+                <button
+                  key={phase.id}
+                  onClick={() => {
+                    setActivePhase(phase.id);
+                    toast.success(`Switched to ${phase.name}`);
+                  }}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                    isActive
+                      ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/25 scale-[1.02]'
+                      : 'bg-secondary/60 hover:bg-secondary text-foreground/80 border border-border'
+                  }`}
+                  title={phase.desc}
+                >
+                  <phase.icon className="h-3.5 w-3.5" />
+                  <span>{phase.name}</span>
+                  <span className="text-[10px] opacity-75 hidden sm:inline">({phase.keys})</span>
+                </button>
+              );
+            })}
           </div>
-        )}
 
-        <div className="flex-1 flex overflow-hidden">
-          {showChat && (
-            <div className={`flex-1 flex flex-col min-w-0 ${!isMobile && hasCanvas ? 'max-w-[50%]' : ''}`}>
-              {mirrorPeer && (
-                <div className="h-12 flex items-center justify-end px-3 shrink-0">
-                  <button
-                    onClick={() => setSidebarOpen(true)}
-                    className="w-8 h-8 rounded-full bg-zinc-900 hover:bg-zinc-700 flex items-center justify-center transition"
-                    title="Partner chat history (read-only)"
-                    aria-label="Partner chat history"
-                  >
-                    <Eye className="h-4 w-4" />
-                  </button>
-                </div>
-              )}
+          <div className="flex items-center gap-2 ml-auto">
+            {isSuperAdmin && (
+              <span className="text-[11px] font-bold px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5 shadow-sm">
+                👑 Super Admin (s6113994@gmail.com) — Unrestricted Bypass Active
+              </span>
+            )}
+            <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5 rounded-xl" onClick={handleNewChat}>
+              <Plus className="h-3.5 w-3.5" /> New Chat
+            </Button>
+          </div>
+        </div>
 
-              <ScrollArea className="flex-1 px-4">
-                <div className="max-w-3xl mx-auto py-6 space-y-6">
-                  {messages.length === 0 && (
-                    <div className="flex flex-col items-center justify-center h-[50vh] text-center px-4">
-                      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="mb-6">
-                        <div className="w-20 h-20 flex items-center justify-center mb-4 mx-auto">
-                          <AveriaLogo size="xl" />
-                        </div>
-                        <h2 className="font-heading text-2xl md:text-3xl font-bold mb-2 gradient-text">Command the Network, {userFirstName}</h2>
-                        <p className="text-muted-foreground text-sm max-w-md">
-                          Aapka intelligent agent — 4-Phase Neural Architecture ready for websites, studio image generation, and forensic fact-checking.
-                        </p>
-                      </motion.div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg w-full">
-                        {[
-                          "Build me a professional portfolio website",
-                          "Generate an image of a futuristic AI lab",
-                          "Verify: Is AI replacing jobs in India?",
-                          "Create a landing page for my startup",
-                        ].map((prompt) => (
-                          <button
-                            key={prompt}
-                            onClick={() => setInput(prompt)}
-                            className="p-3 text-left text-xs rounded-xl border border-border hover:bg-secondary/50 transition-colors text-muted-foreground hover:text-foreground"
-                          >
-                            {prompt}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {messages.map((msg, i) => {
-                    const forensic = msg.role === 'assistant' ? parseForensicData(msg.content) : null;
-                    return (
-                      <motion.div
-                        key={i}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                      >
-                        {msg.role === 'assistant' && (
-                          <div className="w-7 h-7 md:w-8 md:h-8 shrink-0 mt-1 flex items-center justify-center">
-                            <AveriaLogo size="sm" />
-                          </div>
-                        )}
-                        <div className={`max-w-[70%] sm:max-w-[80%] break-words overflow-hidden rounded-2xl px-4 py-3 bg-transparent text-foreground ${
-                          msg.role === 'user' ? 'rounded-br-sm' : 'rounded-bl-sm'
-                        }`}>
-                          {msg.role === 'assistant' ? (
-                            <div className="prose dark:prose-invert max-w-none text-[15px] sm:text-[16px] leading-relaxed font-normal [&_pre]:bg-background/50 [&_pre]:rounded-lg [&_pre]:p-3 [&_code]:text-xs [&_pre]:overflow-x-auto">
-                              <MessageResponse>{msg.content}</MessageResponse>
-                              {forensic && <ForensicCard data={forensic} />}
-                              {msg.imageUrl && (
-                                <div className="mt-3 p-3 rounded-xl border border-border bg-card/60 space-y-3">
-                                  <img src={msg.imageUrl} alt="Generated" className="rounded-lg max-w-full border border-border" />
-                                  <div className="flex items-center gap-2">
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      className="gap-1.5 text-xs"
-                                      onClick={() => {
-                                        const a = document.createElement('a');
-                                        a.href = msg.imageUrl!;
-                                        a.download = `averia-studio-${Date.now()}.png`;
-                                        document.body.appendChild(a);
-                                        a.click();
-                                        document.body.removeChild(a);
-                                        toast.success('Image downloaded!');
-                                      }}
-                                    >
-                                      <ImageIcon className="h-3.5 w-3.5" /> Download
-                                    </Button>
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      className="gap-1.5 text-xs"
-                                      onClick={async () => {
-                                        try {
-                                          await navigator.clipboard.writeText(msg.imageUrl!);
-                                          toast.success('Image link copied!');
-                                        } catch {
-                                          toast.error('Copy failed');
-                                        }
-                                      }}
-                                    >
-                                      <Code className="h-3.5 w-3.5" /> Copy Link
-                                    </Button>
-                                  </div>
-                                </div>
-                              )}
-                              {extractMultimediaRequests(msg.content).map((req, idx) => (
-                                <MultimediaCard key={idx} type={req.type} title={req.title} />
-                              ))}
-                            </div>
-                          ) : (
-                            <>
-                              {msg.attachments && msg.attachments.length > 0 && (
-                                <div className="flex flex-wrap gap-1.5 mb-2">
-                                  {msg.attachments.map(a => (
-                                    <div key={a.id} className="flex items-center gap-1.5 bg-primary-foreground/15 rounded-lg px-2 py-1 text-[11px]">
-                                      {a.kind === 'image' && a.preview ? (
-                                        <img src={a.preview} alt={a.name} className="h-5 w-5 rounded object-cover" />
-                                      ) : a.kind === 'video' ? <Video className="h-3 w-3" />
-                                        : a.kind === 'audio' ? <Music className="h-3 w-3" />
-                                        : a.kind === 'url' ? <Link2 className="h-3 w-3" />
-                                        : <FileText className="h-3 w-3" />}
-                                      <span className="max-w-[120px] truncate">{a.name}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                              <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                            </>
-                          )}
-                        </div>
-                      </motion.div>
-                    );
-                  })}
-
-                  {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-3">
-                      <div className="w-7 h-7 md:w-8 md:h-8 shrink-0 flex items-center justify-center">
-                        <AveriaLogo size="sm" animate />
-                      </div>
-                      <div className="bg-transparent rounded-2xl rounded-bl-sm px-4 py-3">
-                        <div className="flex gap-1">
-                          <span className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                          <span className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                          <span className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-                  <div ref={messagesEndRef} />
-                </div>
-              </ScrollArea>
-
-              <div className="border-t border-white/5 backdrop-blur-sm shadow-none p-3 md:p-4 shrink-0">
-                <div className="max-w-3xl mx-auto">
-                  {attachments.length > 0 && (
-                    <div className="flex flex-wrap gap-2 mb-2">
-                      {attachments.map(a => (
-                        <div key={a.id} className="group relative flex items-center gap-2 bg-secondary/60 border border-border rounded-xl pl-2 pr-7 py-1.5 text-xs max-w-[220px]">
-                          {a.kind === 'image' && a.preview ? (
-                            <img src={a.preview} alt={a.name} className="h-7 w-7 rounded object-cover" />
-                          ) : (
-                            <div className="h-7 w-7 rounded bg-primary/15 flex items-center justify-center text-primary">
-                              {a.kind === 'video' && <Video className="h-3.5 w-3.5" />}
-                              {a.kind === 'audio' && <Music className="h-3.5 w-3.5" />}
-                              {a.kind === 'text' && <FileText className="h-3.5 w-3.5" />}
-                              {a.kind === 'url' && <Link2 className="h-3.5 w-3.5" />}
-                              {a.kind === 'file' && <File className="h-3.5 w-3.5" />}
-                            </div>
-                          )}
-                          <span className="truncate flex-1">{a.name}</span>
-                          <button onClick={() => removeAttachment(a.id)} className="absolute top-1 right-1 h-5 w-5 rounded-full bg-background/80 flex items-center justify-center opacity-70 hover:opacity-100">
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="flex items-end gap-2 rounded-full bg-[#181824] border border-white/15 px-4 py-3 shadow-2xl backdrop-blur-xl">
-                    <div className="relative shrink-0">
-                      <Button
-                        onClick={() => setShowPlusMenu(v => !v)}
-                        variant="ghost"
-                        size="icon"
-                        className="rounded-xl h-9 w-9"
-                        aria-label="Attach media"
-                      >
-                        <Plus className={`h-4 w-4 transition-transform ${showPlusMenu ? 'rotate-45 text-primary' : ''}`} />
-                      </Button>
-                      <AnimatePresence>
-                        {showPlusMenu && (
-                          <>
-                            <div className="fixed inset-0 z-40" onClick={() => setShowPlusMenu(false)} />
-                            <motion.div
-                              initial={{ opacity: 0, y: 8, scale: 0.95 }}
-                              animate={{ opacity: 1, y: 0, scale: 1 }}
-                              exit={{ opacity: 0, y: 8, scale: 0.95 }}
-                              transition={{ duration: 0.15 }}
-                              className="absolute bottom-12 left-0 z-50 w-60 rounded-2xl border border-border bg-card shadow-2xl shadow-primary/10 backdrop-blur-xl p-1.5"
-                            >
-                              <button
-                                onClick={() => { cameraInputRef.current?.click(); setShowPlusMenu(false); }}
-                                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-primary/10 text-left text-sm transition-colors"
-                              >
-                                <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary/30 to-primary/10 flex items-center justify-center">
-                                  <Camera className="h-4 w-4 text-primary" />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="font-semibold">Camera</div>
-                                  <div className="text-[10px] text-muted-foreground">Capture photo / video</div>
-                                </div>
-                              </button>
-                              <button
-                                onClick={() => { fileInputRef.current?.click(); setShowPlusMenu(false); }}
-                                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-primary/10 text-left text-sm transition-colors"
-                              >
-                                <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-amber-500/30 to-pink-500/10 flex items-center justify-center">
-                                  <Paperclip className="h-4 w-4 text-amber-400" />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="font-semibold">Browse Media</div>
-                                  <div className="text-[10px] text-muted-foreground">Video, Image, Audio, Text, URL</div>
-                                </div>
-                              </button>
-                            </motion.div>
-                          </>
-                        )}
-                      </AnimatePresence>
-                    </div>
-
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      multiple
-                      accept="image/*,video/*,audio/*,text/*,.pdf,.json,.csv,.md"
-                      className="hidden"
-                      onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value=''; }}
-                    />
-                    <input
-                      ref={cameraInputRef}
-                      type="file"
-                      accept="image/*,video/*"
-                      capture="environment"
-                      className="hidden"
-                      onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value=''; }}
-                    />
-
-                    <textarea
-                      ref={inputRef}
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      onKeyDown={handleKeyDown}
-                      onPaste={handlePaste}
-                      placeholder={mirrorPeer ? "🔒 Ask Averia Lock — read-only mirror" : "Ask Averia or attach media for forensic analysis..."}
-                      rows={1}
-                      disabled={mirrorPeer}
-                      className="flex-1 min-w-0 bg-transparent resize-none border-none outline-none text-[15px] sm:text-[16px] leading-relaxed py-2 min-h-[50px] max-h-[300px] overflow-y-auto thin-scroll placeholder:text-muted-foreground disabled:opacity-60 disabled:cursor-not-allowed"
-                    />
-
-                    <Button
-                      onClick={toggleVoiceInput}
-                      variant="ghost"
-                      size="icon"
-                      className={`h-11 w-11 shrink-0 rounded-full ${voiceActive ? 'animate-pulse bg-destructive text-destructive-foreground' : ''}`}
-                      aria-label={voiceActive ? 'Stop voice input' : 'Start voice input'}
-                    >
-                      <Mic className="h-5 w-5" />
-                    </Button>
-
-                    <Button
-                      onClick={sendMessage}
-                      disabled={mirrorPeer || (!input.trim() && attachments.length === 0) || isLoading}
-                      size="icon"
-                      className="rounded-xl h-9 w-9 shrink-0"
-                    >
-                      <Send className="h-4 w-4" />
-                    </Button>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground text-center mt-2 hidden md:block">
-                    Averia AI 4-Phase Neural Architecture — Verify • Build • Generate
-                  </p>
-                </div>
-              </div>
+        {/* Main Workspace Layout */}
+        <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden min-w-0">
+          {isMobile && hasCanvas && (
+            <div className="flex border-b border-border shrink-0 bg-card">
+              <button
+                onClick={() => setMobileView('chat')}
+                className={`flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${mobileView === 'chat' ? 'text-primary border-b-2 border-primary bg-primary/5' : 'text-muted-foreground'}`}
+              >
+                <MessageSquare className="h-3.5 w-3.5" /> Chat
+              </button>
+              <button
+                onClick={() => setMobileView('preview')}
+                className={`flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${mobileView === 'preview' ? 'text-primary border-b-2 border-primary bg-primary/5' : 'text-muted-foreground'}`}
+              >
+                <Eye className="h-3.5 w-3.5" /> Canvas / Preview
+              </button>
             </div>
           )}
 
-          <AnimatePresence>
-            {showCanvas && (
-              <motion.div
-                initial={isMobile ? { opacity: 0 } : { width: 0, opacity: 0 }}
-                animate={isMobile ? { opacity: 1 } : { width: '50%', opacity: 1 }}
-                exit={isMobile ? { opacity: 0 } : { width: 0, opacity: 0 }}
-                className={`border-l border-border bg-background flex flex-col overflow-hidden ${isMobile ? 'flex-1' : ''}`}
-              >
-                <div className="h-12 border-b border-border flex items-center justify-between px-2 md:px-3 shrink-0 overflow-x-auto">
-                  <div className="flex items-center gap-1">
-                    {canvasContent && (
-                      <>
-                        <Button variant={canvasMode === 'preview' ? 'secondary' : 'ghost'} size="sm" className="h-7 text-xs gap-1" onClick={() => setCanvasMode('preview')}>
-                          <Eye className="h-3 w-3" /> <span className="hidden sm:inline">Preview</span>
-                        </Button>
-                        <Button variant={canvasMode === 'code' ? 'secondary' : 'ghost'} size="sm" className="h-7 text-xs gap-1" onClick={() => setCanvasMode('code')}>
-                          <Code className="h-3 w-3" /> <span className="hidden sm:inline">Code</span>
-                        </Button>
-                        <Button variant={canvasMode === 'files' ? 'secondary' : 'ghost'} size="sm" className="h-7 text-xs gap-1" onClick={() => setCanvasMode('files')}>
-                          <FileCode className="h-3 w-3" /> <span className="hidden sm:inline">Files</span>
-                        </Button>
-                      </>
-                    )}
-                    {canvasImageUrl && !canvasContent && (
-                      <span className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
-                        <ImageIcon className="h-3.5 w-3.5" /> Studio Generated Image
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {canvasContent && canvasMode === 'preview' && !isMobile && (
-                      <div className="flex items-center gap-0.5 mr-1">
-                        <Button variant={previewDevice === 'desktop' ? 'secondary' : 'ghost'} size="icon" className="h-6 w-6" onClick={() => setPreviewDevice('desktop')}>
-                          <Monitor className="h-3 w-3" />
-                        </Button>
-                        <Button variant={previewDevice === 'tablet' ? 'secondary' : 'ghost'} size="icon" className="h-6 w-6" onClick={() => setPreviewDevice('tablet')}>
-                          <Tablet className="h-3 w-3" />
-                        </Button>
-                        <Button variant={previewDevice === 'mobile' ? 'secondary' : 'ghost'} size="icon" className="h-6 w-6" onClick={() => setPreviewDevice('mobile')}>
-                          <Smartphone className="h-3 w-3" />
-                        </Button>
+          <div className="flex-1 flex overflow-hidden">
+            {showChat && (
+              <div className={`flex-1 flex flex-col min-w-0 ${!isMobile && hasCanvas ? 'max-w-[50%]' : ''}`}>
+                <ScrollArea className="flex-1 px-4">
+                  <div className="max-w-3xl mx-auto py-6 space-y-6">
+                    {messages.length === 0 && (
+                      <div className="flex flex-col items-center justify-center h-[50vh] text-center px-4">
+                        <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="mb-6">
+                          <div className="w-20 h-20 flex items-center justify-center mb-4 mx-auto">
+                            <AveriaLogo size="xl" />
+                          </div>
+                          <h2 className="font-heading text-2xl md:text-3xl font-bold mb-2 gradient-text">
+                            Averia AI • Phase {activePhase} Active
+                          </h2>
+                          <p className="text-muted-foreground text-sm max-w-md">
+                            {activePhase === 1 && "Core general conversational assistant & coding engine."}
+                            {activePhase === 2 && "Studio image generation & multimedia synthesis swarm."}
+                            {activePhase === 3 && "Intelligence forensic audit, deepfake detection & trust scoring."}
+                            {activePhase === 4 && "Nexus autonomous AGI full-stack code builder & live iframe preview."}
+                          </p>
+                        </motion.div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg w-full">
+                          {[
+                            "Build a full-stack SaaS dashboard with React & Tailwind",
+                            "Generate an image of a futuristic neural quantum lab",
+                            "Audit this news article for deepfake or algorithmic manipulation",
+                            "Create an interactive crypto trading app component",
+                          ].map((prompt) => (
+                            <button
+                              key={prompt}
+                              onClick={() => setInput(prompt)}
+                              className="p-3 text-left text-xs rounded-xl border border-border hover:bg-secondary/50 transition-colors text-muted-foreground hover:text-foreground"
+                            >
+                              {prompt}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     )}
-                    {canvasContent && (
-                      <Button
-                        variant="default"
-                        size="sm"
-                        className="h-7 text-xs gap-1.5 bg-gradient-to-r from-primary to-primary/80"
-                        onClick={handlePublish}
-                        disabled={isDeploying}
-                      >
-                        <Rocket className="h-3 w-3" />
-                        <span className="hidden sm:inline">{isDeploying ? 'Deploying...' : 'Publish'}</span>
-                      </Button>
+
+                    {messages.map((msg, i) => {
+                      const forensic = msg.role === 'assistant' ? parseForensicData(msg.content) : null;
+                      return (
+                        <motion.div
+                          key={i}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                        >
+                          {msg.role === 'assistant' && (
+                            <div className="w-7 h-7 md:w-8 md:h-8 shrink-0 mt-1 flex items-center justify-center">
+                              <AveriaLogo size="sm" />
+                            </div>
+                          )}
+                          <div className={`max-w-[70%] sm:max-w-[80%] break-words overflow-hidden rounded-2xl px-4 py-3 bg-transparent text-foreground ${
+                            msg.role === 'user' ? 'rounded-br-sm' : 'rounded-bl-sm'
+                          }`}>
+                            {msg.role === 'assistant' ? (
+                              <div className="prose dark:prose-invert max-w-none text-[15px] sm:text-[16px] leading-relaxed font-normal">
+                                <MessageResponse>{msg.content}</MessageResponse>
+                                {forensic && <ForensicCard data={forensic} />}
+                                {msg.imageUrl && (
+                                  <div className="mt-3 p-3 rounded-xl border border-border bg-card/60 space-y-3">
+                                    <img src={msg.imageUrl} alt="Studio Generated" className="rounded-lg max-w-full border border-border shadow-lg" />
+                                    <div className="flex items-center gap-2">
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="gap-1.5 text-xs"
+                                        onClick={() => {
+                                          const a = document.createElement('a');
+                                          a.href = msg.imageUrl!;
+                                          a.download = `averia-studio-${Date.now()}.png`;
+                                          document.body.appendChild(a);
+                                          a.click();
+                                          document.body.removeChild(a);
+                                          toast.success('Image downloaded!');
+                                        }}
+                                      >
+                                        <ImageIcon className="h-3.5 w-3.5" /> Download
+                                      </Button>
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="gap-1.5 text-xs"
+                                        onClick={async () => {
+                                          try {
+                                            await navigator.clipboard.writeText(msg.imageUrl!);
+                                            toast.success('Image link copied!');
+                                          } catch {
+                                            toast.error('Copy failed');
+                                          }
+                                        }}
+                                      >
+                                        <Code className="h-3.5 w-3.5" /> Copy Link
+                                      </Button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <>
+                                {msg.attachments && msg.attachments.length > 0 && (
+                                  <div className="flex flex-wrap gap-1.5 mb-2">
+                                    {msg.attachments.map(a => (
+                                      <div key={a.id} className="flex items-center gap-1.5 bg-primary-foreground/15 rounded-lg px-2 py-1 text-[11px]">
+                                        {a.kind === 'image' && a.preview ? (
+                                          <img src={a.preview} alt={a.name} className="h-5 w-5 rounded object-cover" />
+                                        ) : <FileText className="h-3 w-3" />}
+                                        <span className="max-w-[120px] truncate">{a.name}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                              </>
+                            )}
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+
+                    {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (
+                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-3">
+                        <div className="w-7 h-7 md:w-8 md:h-8 shrink-0 flex items-center justify-center">
+                          <AveriaLogo size="sm" animate />
+                        </div>
+                        <div className="bg-transparent rounded-2xl rounded-bl-sm px-4 py-3">
+                          <div className="flex gap-1">
+                            <span className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                            <span className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                            <span className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                          </div>
+                        </div>
+                      </motion.div>
                     )}
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setCanvasContent(null); setCanvasImageUrl(null); setDeployUrl(null); if (isMobile) setMobileView('chat'); }}>
-                      <X className="h-4 w-4" />
-                    </Button>
+                    <div ref={messagesEndRef} />
+                  </div>
+                </ScrollArea>
+
+                {/* Input Bar */}
+                <div className="border-t border-white/5 backdrop-blur-sm p-3 md:p-4 shrink-0">
+                  <div className="max-w-3xl mx-auto">
+                    {attachments.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {attachments.map(a => (
+                          <div key={a.id} className="group relative flex items-center gap-2 bg-secondary/65 border border-border rounded-xl pl-2 pr-7 py-1.5 text-xs max-w-[220px]">
+                            {a.kind === 'image' && a.preview ? (
+                              <img src={a.preview} alt={a.name} className="h-7 w-7 rounded object-cover" />
+                            ) : (
+                              <div className="h-7 w-7 rounded bg-primary/15 flex items-center justify-center text-primary">
+                                <FileText className="h-3.5 w-3.5" />
+                              </div>
+                            )}
+                            <span className="truncate flex-1">{a.name}</span>
+                            <button onClick={() => removeAttachment(a.id)} className="absolute top-1 right-1 h-5 w-5 rounded-full bg-background/80 flex items-center justify-center opacity-70 hover:opacity-100">
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-end gap-2 rounded-full bg-[#181824] border border-white/15 px-4 py-3 shadow-2xl backdrop-blur-xl">
+                      <div className="relative shrink-0">
+                        <Button
+                          onClick={() => setShowPlusMenu(v => !v)}
+                          variant="ghost"
+                          size="icon"
+                          className="rounded-xl h-9 w-9"
+                          aria-label="Attach files"
+                        >
+                          <Plus className={`h-4 w-4 transition-transform ${showPlusMenu ? 'rotate-45 text-primary' : ''}`} />
+                        </Button>
+                        <AnimatePresence>
+                          {showPlusMenu && (
+                            <>
+                              <div className="fixed inset-0 z-40" onClick={() => setShowPlusMenu(false)} />
+                              <motion.div
+                                initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                exit={{ opacity: 0, y: 8, scale: 0.95 }}
+                                className="absolute bottom-12 left-0 z-50 w-60 rounded-2xl border border-border bg-card shadow-2xl p-1.5"
+                              >
+                                <button
+                                  onClick={() => { cameraInputRef.current?.click(); setShowPlusMenu(false); }}
+                                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-primary/10 text-left text-sm transition-colors"
+                                >
+                                  <Camera className="h-4 w-4 text-primary" />
+                                  <span>Camera Capture</span>
+                                </button>
+                                <button
+                                  onClick={() => { fileInputRef.current?.click(); setShowPlusMenu(false); }}
+                                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-primary/10 text-left text-sm transition-colors"
+                                >
+                                  <Paperclip className="h-4 w-4 text-amber-400" />
+                                  <span>Browse Files & Media</span>
+                                </button>
+                              </motion.div>
+                            </>
+                          )}
+                        </AnimatePresence>
+                      </div>
+
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        multiple
+                        accept="image/*,video/*,audio/*,text/*,.pdf,.json,.csv,.md"
+                        className="hidden"
+                        onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value=''; }}
+                      />
+                      <input
+                        ref={cameraInputRef}
+                        type="file"
+                        accept="image/*,video/*"
+                        capture="environment"
+                        className="hidden"
+                        onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value=''; }}
+                      />
+
+                      <textarea
+                        ref={inputRef}
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        placeholder={`Ask Averia (Phase ${activePhase}) or attach media...`}
+                        rows={1}
+                        className="flex-1 min-w-0 bg-transparent resize-none border-none outline-none text-[15px] sm:text-[16px] leading-relaxed py-2 min-h-[50px] max-h-[300px] overflow-y-auto placeholder:text-muted-foreground"
+                      />
+
+                      <Button
+                        onClick={toggleVoiceInput}
+                        variant="ghost"
+                        size="icon"
+                        className={`h-11 w-11 shrink-0 rounded-full ${voiceActive ? 'animate-pulse bg-destructive text-destructive-foreground' : ''}`}
+                        aria-label="Voice input"
+                      >
+                        <Mic className="h-5 w-5" />
+                      </Button>
+
+                      <Button
+                        onClick={sendMessage}
+                        disabled={(!input.trim() && attachments.length === 0) || isLoading}
+                        size="icon"
+                        className="rounded-xl h-9 w-9 shrink-0"
+                      >
+                        <Send className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
+              </div>
+            )}
 
-                {deployUrl && (
-                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="border-b border-border bg-green-500/10 px-3 py-2 flex items-center gap-2">
-                    <Globe className="h-3.5 w-3.5 text-green-500 shrink-0" />
-                    <span className="text-xs text-green-600 dark:text-green-400 font-mono truncate">{deployUrl}</span>
-                    <Button variant="ghost" size="sm" className="h-6 text-[10px] ml-auto shrink-0" onClick={() => { navigator.clipboard.writeText(deployUrl!); toast.success('URL copied!'); }}>
-                      Copy
-                    </Button>
-                  </motion.div>
-                )}
-
-                {isDeploying && (
-                  <div className="border-b border-border bg-primary/5 px-3 py-2">
-                    <div className="flex items-center gap-2 mb-1">
-                      <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}>
-                        <Settings className="h-3.5 w-3.5 text-primary" />
-                      </motion.div>
-                      <span className="text-xs text-primary font-medium">Deploying to Averia Cloud...</span>
+            {/* Canvas / Preview / Code / Studio Image Panel */}
+            <AnimatePresence>
+              {showCanvas && (
+                <motion.div
+                  initial={isMobile ? { opacity: 0 } : { width: 0, opacity: 0 }}
+                  animate={isMobile ? { opacity: 1 } : { width: '50%', opacity: 1 }}
+                  exit={isMobile ? { opacity: 0 } : { width: 0, opacity: 0 }}
+                  className={`border-l border-border bg-background flex flex-col overflow-hidden ${isMobile ? 'flex-1' : ''}`}
+                >
+                  <div className="h-12 border-b border-border flex items-center justify-between px-3 shrink-0">
+                    <div className="flex items-center gap-1">
+                      {canvasContent && (
+                        <>
+                          <Button variant={canvasMode === 'preview' ? 'secondary' : 'ghost'} size="sm" className="h-7 text-xs gap-1" onClick={() => setCanvasMode('preview')}>
+                            <Eye className="h-3 w-3" /> Preview
+                          </Button>
+                          <Button variant={canvasMode === 'code' ? 'secondary' : 'ghost'} size="sm" className="h-7 text-xs gap-1" onClick={() => setCanvasMode('code')}>
+                            <Code className="h-3 w-3" /> Code
+                          </Button>
+                          <Button variant={canvasMode === 'files' ? 'secondary' : 'ghost'} size="sm" className="h-7 text-xs gap-1" onClick={() => setCanvasMode('files')}>
+                            <FileCode className="h-3 w-3" /> Files
+                          </Button>
+                        </>
+                      )}
+                      {canvasImageUrl && !canvasContent && (
+                        <span className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
+                          <ImageIcon className="h-3.5 w-3.5 text-primary" /> Studio Image Generation Container
+                        </span>
+                      )}
                     </div>
-                    <div className="h-1 bg-muted rounded-full overflow-hidden">
-                      <motion.div className="h-full bg-primary rounded-full" initial={{ width: '0%' }} animate={{ width: '100%' }} transition={{ duration: 2.5 }} />
+                    <div className="flex items-center gap-1">
+                      {canvasContent && canvasMode === 'preview' && !isMobile && (
+                        <div className="flex items-center gap-0.5 mr-1">
+                          <Button variant={previewDevice === 'desktop' ? 'secondary' : 'ghost'} size="icon" className="h-6 w-6" onClick={() => setPreviewDevice('desktop')}><Monitor className="h-3 w-3" /></Button>
+                          <Button variant={previewDevice === 'tablet' ? 'secondary' : 'ghost'} size="icon" className="h-6 w-6" onClick={() => setPreviewDevice('tablet')}><Tablet className="h-3 w-3" /></Button>
+                          <Button variant={previewDevice === 'mobile' ? 'secondary' : 'ghost'} size="icon" className="h-6 w-6" onClick={() => setPreviewDevice('mobile')}><Smartphone className="h-3 w-3" /></Button>
+                        </div>
+                      )}
+                      {canvasContent && (
+                        <Button variant="default" size="sm" className="h-7 text-xs gap-1.5" onClick={handlePublish} disabled={isDeploying}>
+                          <Rocket className="h-3 w-3" /> {isDeploying ? 'Deploying...' : 'Publish'}
+                        </Button>
+                      )}
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setCanvasContent(null); setCanvasImageUrl(null); setDeployUrl(null); if (isMobile) setMobileView('chat'); }}>
+                        <X className="h-4 w-4" />
+                      </Button>
                     </div>
                   </div>
-                )}
 
-                <div className="flex-1 flex overflow-hidden">
-                  {canvasContent && canvasMode === 'files' && (
-                    <div className="w-full overflow-auto p-2">
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold px-2 py-1.5 mb-1">Explorer</div>
-                      <FileTree nodes={fileTree} />
+                  {deployUrl && (
+                    <div className="border-b border-border bg-green-500/10 px-3 py-2 flex items-center gap-2">
+                      <Globe className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                      <span className="text-xs text-green-400 font-mono truncate">{deployUrl}</span>
+                      <Button variant="ghost" size="sm" className="h-6 text-[10px] ml-auto" onClick={() => { navigator.clipboard.writeText(deployUrl!); toast.success('URL copied!'); }}>Copy</Button>
                     </div>
                   )}
 
-                  {canvasMode !== 'files' && (
-                    <div className="flex-1 overflow-auto flex items-start justify-center">
-                      {canvasImageUrl && !canvasContent && (
-                        <div className="flex flex-col items-center justify-center h-full p-4 md:p-6 gap-4">
-                          <img src={canvasImageUrl} alt="Generated" className="max-w-full max-h-[70vh] rounded-xl border border-border shadow-lg" />
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="gap-1.5 text-xs"
-                              onClick={() => {
+                  <div className="flex-1 flex overflow-hidden">
+                    {canvasContent && canvasMode === 'files' && (
+                      <div className="w-full overflow-auto p-2">
+                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold px-2 py-1.5 mb-1">Project Explorer</div>
+                        <FileTree nodes={fileTree} />
+                      </div>
+                    )}
+
+                    {canvasMode !== 'files' && (
+                      <div className="flex-1 overflow-auto flex items-start justify-center">
+                        {canvasImageUrl && !canvasContent && (
+                          <div className="flex flex-col items-center justify-center h-full p-4 md:p-6 gap-4">
+                            <img src={canvasImageUrl} alt="Studio Generated" className="max-w-full max-h-[70vh] rounded-xl border border-border shadow-2xl" />
+                            <div className="flex items-center gap-2">
+                              <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={() => {
                                 const a = document.createElement('a');
                                 a.href = canvasImageUrl!;
                                 a.download = `averia-studio-${Date.now()}.png`;
                                 document.body.appendChild(a);
                                 a.click();
                                 document.body.removeChild(a);
-                                toast.success('Image downloading...');
-                              }}
-                            >
-                              <ImageIcon className="h-3.5 w-3.5" /> Download
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="gap-1.5 text-xs"
-                              onClick={async () => {
-                                try {
-                                  await navigator.clipboard.writeText(canvasImageUrl!);
-                                  toast.success('Image link copied to clipboard!');
-                                } catch {
-                                  toast.error('Copy not supported');
-                                }
-                              }}
-                            >
-                              <Code className="h-3.5 w-3.5" /> Copy Link
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="gap-1.5 text-xs"
-                              onClick={async () => {
-                                try {
-                                  await navigator.clipboard.writeText(canvasImageUrl!);
-                                  toast.success('🔗 Link Copied to clipboard!');
-                                } catch {
-                                  toast.error('Share not available');
-                                }
-                              }}
-                            >
-                              <Globe className="h-3.5 w-3.5" /> Share
-                            </Button>
+                                toast.success('Image downloaded!');
+                              }}>
+                                <ImageIcon className="h-3.5 w-3.5" /> Download
+                              </Button>
+                              <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={async () => {
+                                await navigator.clipboard.writeText(canvasImageUrl!);
+                                toast.success('Image link copied!');
+                              }}>
+                                <Code className="h-3.5 w-3.5" /> Copy Link
+                              </Button>
+                            </div>
                           </div>
-                        </div>
-                      )}
-                      {canvasContent && canvasMode === 'preview' && (
-                        <div className="w-full h-full flex items-start justify-center bg-muted/30" style={{ padding: previewDevice === 'desktop' ? 0 : '1rem' }}>
-                          <iframe
-                            key={previewKey}
-                            srcDoc={buildPreviewHTML(canvasContent)}
-                            sandbox="allow-scripts"
-                            className="border-none bg-white transition-all duration-300"
-                            style={{
-                              width: deviceWidths[previewDevice],
-                              maxWidth: '100%',
-                              height: '100%',
-                              borderRadius: previewDevice !== 'desktop' ? '12px' : 0,
-                              boxShadow: previewDevice !== 'desktop' ? '0 4px 24px rgba(0,0,0,0.15)' : 'none',
-                            }}
-                            title="Live Preview"
-                          />
-                        </div>
-                      )}
-                      {canvasContent && canvasMode === 'code' && (
-                        <pre className="p-4 text-xs font-mono text-foreground overflow-auto h-full w-full bg-card">
-                          <code>{canvasContent}</code>
-                        </pre>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                        )}
+                        {canvasContent && canvasMode === 'preview' && (
+                          <div className="w-full h-full flex items-start justify-center bg-muted/30" style={{ padding: previewDevice === 'desktop' ? 0 : '1rem' }}>
+                            <iframe
+                              key={previewKey}
+                              srcDoc={buildPreviewHTML(canvasContent)}
+                              sandbox="allow-scripts"
+                              className="border-none bg-white transition-all duration-300"
+                              style={{
+                                width: deviceWidths[previewDevice],
+                                maxWidth: '100%',
+                                height: '100%',
+                                borderRadius: previewDevice !== 'desktop' ? '12px' : 0,
+                                boxShadow: previewDevice !== 'desktop' ? '0 4px 24px rgba(0,0,0,0.15)' : 'none',
+                              }}
+                              title="Live Website Preview"
+                            />
+                          </div>
+                        )}
+                        {canvasContent && canvasMode === 'code' && (
+                          <pre className="p-4 text-xs font-mono text-foreground overflow-auto h-full w-full bg-card">
+                            <code>{canvasContent}</code>
+                          </pre>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
       </div>
-    </div>
+    </Layout>
   );
 }
