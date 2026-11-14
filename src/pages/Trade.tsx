@@ -86,9 +86,19 @@ function EmailOtpStep({ email, code, setCode, sent, verified, sending, onSend, o
   email: string; code: string; setCode: (value: string) => void; sent: boolean; verified: boolean; sending: boolean; onSend: () => void; onVerify: () => void;
 }) {
   return <div className="space-y-3 rounded-2xl bg-white/[0.04] p-4">
-    <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-success" /><p className="text-sm font-medium">Email verification (6-digit numeric code)</p>{verified && <CheckCircle2 className="ml-auto h-4 w-4 text-success" />}</div>
-    <div className="flex flex-col gap-2 sm:flex-row"><Input value={email} readOnly aria-label="Signed-in email" /><Button type="button" variant="outline" onClick={onSend} disabled={sending || !email}>{sending ? <Loader2 className="animate-spin" /> : sent ? 'Resend 6-digit OTP' : 'Send 6-digit OTP to Email'}</Button></div>
-    {sent && <div className="flex flex-col gap-2 sm:flex-row"><Input value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="Enter 6-digit numeric OTP code" inputMode="numeric" maxLength={6} disabled={verified} /><Button type="button" variant="outline" onClick={onVerify} disabled={sending || verified || code.length !== 6}>{verified ? 'Verified' : 'Verify OTP'}</Button></div>}
+    <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-success" /><p className="text-sm font-medium">Email confirmation</p>{verified && <CheckCircle2 className="ml-auto h-4 w-4 text-success" />}</div>
+    <div className="flex flex-col gap-2 sm:flex-row"><Input value={email} readOnly aria-label="Signed-in email" /><Button type="button" variant="outline" onClick={onSend} disabled={sending || !email}>{sending ? <Loader2 className="animate-spin" /> : sent ? 'Resend OTP' : 'Send OTP to Email'}</Button></div>
+    {sent && <div className="flex flex-col gap-2 sm:flex-row"><Input value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="Enter 6-digit OTP code" inputMode="numeric" maxLength={6} disabled={verified} /><Button type="button" variant="outline" onClick={onVerify} disabled={sending || verified || code.length !== 6}>{verified ? 'Verified' : 'Verify OTP'}</Button></div>}
+  </div>;
+}
+
+function PhoneOtpStep({ phone, setPhone, code, setCode, sent, sending, onSend }: {
+  phone: string; setPhone: (value: string) => void; code: string; setCode: (value: string) => void; sent: boolean; sending: boolean; onSend: () => void;
+}) {
+  return <div className="space-y-3 rounded-2xl bg-white/[0.04] p-4">
+    <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-success" /><p className="text-sm font-medium">Phone confirmation</p></div>
+    <div className="flex flex-col gap-2 sm:flex-row"><Input value={phone} onChange={e => setPhone(e.target.value)} placeholder="+91 98765 43210" inputMode="tel" /><Button type="button" variant="outline" onClick={onSend} disabled={sending || !phone.trim()}>{sending ? <Loader2 className="animate-spin" /> : sent ? 'Resend' : 'Send OTP'}</Button></div>
+    {sent && <Input value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit OTP" inputMode="numeric" maxLength={6} />}
   </div>;
 }
 
@@ -109,15 +119,23 @@ function ListingModal({ open, onOpenChange, onCreated }: { open: boolean; onOpen
   const [otp, setOtp] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otpVerified, setOtpVerified] = useState(false);
+  const [otpUserId, setOtpUserId] = useState<string | null>(null);
+  const [verifiedUserId, setVerifiedUserId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [sendingOtp, setSendingOtp] = useState(false);
 
-  const reset = () => { setTitle(''); setDescription(''); setCategory('Website'); setDemoUrl(''); setTechStack(''); setPrice(''); setUpiId(''); setUpiName(''); setQrFile(null); setZipFile(null); setQrMessage(''); setOtp(''); setOtpSent(false); setOtpVerified(false); };
+  const reset = () => { setTitle(''); setDescription(''); setCategory('Website'); setDemoUrl(''); setTechStack(''); setPrice(''); setUpiId(''); setUpiName(''); setQrFile(null); setZipFile(null); setQrMessage(''); setOtp(''); setOtpSent(false); setOtpVerified(false); setOtpUserId(null); setVerifiedUserId(null); };
   const close = (value: boolean) => { if (!value) reset(); onOpenChange(value); };
 
   useEffect(() => {
     if (!open) return;
-    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? user?.email ?? ''));
+    let active = true;
+    supabase.auth.getUser().then(({ data }) => {
+      if (!active) return;
+      setEmail(data.user?.email ?? user?.email ?? '');
+      setOtpUserId(data.user?.id ?? null);
+    });
+    return () => { active = false; };
   }, [open, user?.email]);
 
   const onQrFile = async (file: File | null) => {
@@ -129,29 +147,68 @@ function ListingModal({ open, onOpenChange, onCreated }: { open: boolean; onOpen
   };
 
   const sendOtp = async () => {
-    if (!email) return;
     setSendingOtp(true);
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { shouldCreateUser: false }
-    });
-    setSendingOtp(false);
-    if (error) { toast.error(error.message); return; }
-    setOtpSent(true); setOtpVerified(false); toast.success('6-digit OTP code sent to your email');
+    try {
+      const { data, error: userError } = await supabase.auth.getUser();
+      const activeUser = data.user;
+      if (userError || !activeUser?.email || (user && activeUser.id !== user.id)) {
+        throw new Error('Please sign in again before verifying your listing email.');
+      }
+      const { error } = await supabase.auth.signInWithOtp({ email: activeUser.email, options: { shouldCreateUser: false } });
+      if (error) throw error;
+      setEmail(activeUser.email);
+      setOtpUserId(activeUser.id);
+      setOtp('');
+      setOtpSent(true);
+      setOtpVerified(false);
+      setVerifiedUserId(null);
+      toast.success('A verification code was sent to your signed-in email.');
+    } catch (error: any) {
+      toast.error(error?.message || 'Could not send the verification code. Please try again.');
+    } finally {
+      setSendingOtp(false);
+    }
   };
 
   const verifyOtp = async () => {
-    if (!email || otp.length !== 6) return;
+    if (!email || otp.length !== 6 || !otpUserId) return;
     setSendingOtp(true);
-    const { error } = await supabase.auth.verifyOtp({ email, token: otp, type: 'email' });
-    setSendingOtp(false);
-    if (error) { toast.error(error.message); return; }
-    setOtpVerified(true); toast.success('Email verified');
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({ email, token: otp, type: 'email' });
+      if (error) {
+        const message = error.message.toLowerCase();
+        if (message.includes('expired') || message.includes('otp_expired')) {
+          setOtp('');
+          setOtpVerified(false);
+          setVerifiedUserId(null);
+          toast.error('That code has expired. Resend a fresh code to continue.');
+          return;
+        }
+        throw error;
+      }
+      if (data.user?.id !== otpUserId || data.user.email?.toLowerCase() !== email.toLowerCase()) {
+        setOtpVerified(false);
+        setVerifiedUserId(null);
+        throw new Error('The verified account does not match the signed-in listing account.');
+      }
+      setOtpVerified(true);
+      setVerifiedUserId(data.user.id);
+      toast.success('Email verified');
+    } catch (error: any) {
+      toast.error(error?.message || 'The code could not be verified. Resend a fresh code and try again.');
+    } finally {
+      setSendingOtp(false);
+    }
   };
 
   const submit = async () => {
     if (!user) { toast.error('Sign in to list a project'); return; }
-    if (!title.trim() || !description.trim() || !price || !upiId.trim() || !upiName.trim() || !zipFile || !qrFile || !otpVerified) { toast.error('Complete every listing and verification field'); return; }
+    const { data: activeSession } = await supabase.auth.getUser();
+    if (!otpVerified || verifiedUserId !== user.id || otpUserId !== user.id || activeSession.user?.id !== user.id) {
+      toast.error('Verify the signed-in email before submitting this listing.');
+      return;
+    }
+    if (!title.trim() || !description.trim() || !price || !upiId.trim() || !upiName.trim() || !zipFile || !qrFile) { toast.error('Complete every listing field'); return; }
     setSaving(true);
     try {
       const { data: profile } = await sb.from('profiles').select('full_name, averia_id').eq('user_id', user.id).maybeSingle();
@@ -201,46 +258,25 @@ function BuyModal({ project, open, onOpenChange, onComplete }: { project: Projec
   const { user } = useAuth();
   const [receipt, setReceipt] = useState<File | null>(null);
   const [utr, setUtr] = useState('');
-  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [otp, setOtp] = useState('');
   const [otpSent, setOtpSent] = useState(false);
-  const [otpVerified, setOtpVerified] = useState(false);
   const [sending, setSending] = useState(false);
   const [processing, setProcessing] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? user?.email ?? ''));
-  }, [open, user?.email]);
-
   if (!project) return null;
   const sellerAmount = project.asking_price_inr * 0.8;
   const escrowAmount = project.asking_price_inr * 0.2;
   const upiLink = `upi://pay?pa=${encodeURIComponent(project.seller_upi_id)}&pn=${encodeURIComponent(project.seller_upi_registered_name)}&am=${project.asking_price_inr}&cu=INR&tn=Averia_Asset_Purchase_${project.id}`;
   const sendOtp = async () => {
-    if (!email) return;
-    setSending(true);
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { shouldCreateUser: false }
-    });
-    setSending(false);
-    if (error) { toast.error(error.message); return; }
-    setOtpSent(true); setOtpVerified(false); toast.success('6-digit OTP code sent to your email');
-  };
-  const verifyOtp = async () => {
-    if (!email || otp.length !== 6) return;
-    setSending(true);
-    const { error } = await supabase.auth.verifyOtp({ email, token: otp, type: 'email' });
-    setSending(false);
-    if (error) { toast.error(error.message); return; }
-    setOtpVerified(true); toast.success('Email verified');
+    setSending(true); const { error } = await supabase.auth.signInWithOtp({ phone: phone.trim() }); setSending(false);
+    if (error) toast.error(error.message); else { setOtpSent(true); toast.success('OTP sent to your phone'); }
   };
   const submit = async () => {
     if (!user) { toast.error('Sign in to buy this asset'); return; }
-    if (!receipt || !/^\d{12}$/.test(utr) || !otpVerified) { toast.error('Add the receipt, the 12-digit UTR, and verify your email OTP'); return; }
+    if (!receipt || !/^\d{12}$/.test(utr) || !otpSent || otp.length !== 6) { toast.error('Add the receipt, 12-digit UTR, and OTP'); return; }
     setProcessing(true);
     try {
+      const { error: otpError } = await supabase.auth.verifyOtp({ phone: phone.trim(), token: otp, type: 'sms' }); if (otpError) throw otpError;
       const path = `${user.id}/${crypto.randomUUID()}-${receipt.name}`;
       const upload = await sb.storage.from('payment-proofs').upload(path, receipt, { upsert: false }); if (upload.error) throw upload.error;
       const buyer = identity(user);
@@ -264,8 +300,8 @@ function BuyModal({ project, open, onOpenChange, onComplete }: { project: Projec
       <div className="rounded-2xl bg-white/[0.04] p-4"><p className="text-xs text-muted-foreground">Paying {project.seller_upi_registered_name}</p><p className="mt-1 font-mono text-sm">{project.seller_upi_id}</p><Button asChild className="mt-4 w-full bg-purple-600 text-white shadow-lg shadow-purple-500/20 hover:bg-purple-700"><a href={upiLink}>Pay {money(project.asking_price_inr)} via UPI <ArrowUpRight /></a></Button></div>
       <Field label="Payment receipt"><FileDrop accept="image/*,application/pdf" onChange={setReceipt} icon={<ImagePlus className="h-6 w-6" />} title={receipt?.name || 'Upload payment receipt'} subtitle="Private payment-proofs storage" /></Field>
       <Field label="12-digit UTR"><Input value={utr} onChange={e => setUtr(e.target.value.replace(/\D/g, '').slice(0, 12))} placeholder="123456789012" inputMode="numeric" maxLength={12} /></Field>
-      <EmailOtpStep email={email} code={otp} setCode={setOtp} sent={otpSent} verified={otpVerified} sending={sending} onSend={sendOtp} onVerify={verifyOtp} />
-      <Button onClick={submit} disabled={processing || !otpVerified} className="w-full">{processing ? <Loader2 className="animate-spin" /> : <Check />} Verify payment &amp; transfer ownership</Button>
+      <PhoneOtpStep phone={phone} setPhone={setPhone} code={otp} setCode={setOtp} sent={otpSent} sending={sending} onSend={sendOtp} />
+      <Button onClick={submit} disabled={processing} className="w-full">{processing ? <Loader2 className="animate-spin" /> : <Check />} Verify payment & transfer ownership</Button>
     </div>
   </DialogContent></Dialog>;
 }

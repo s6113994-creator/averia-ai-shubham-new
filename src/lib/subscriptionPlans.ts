@@ -7,8 +7,6 @@ export interface SubscriptionPlan {
   period: string;
   badge?: string;
   features: string[];
-  tagline: string;
-  cta: string;
 }
 
 export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
@@ -23,8 +21,6 @@ export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
       '+10 ATS per public post · 500 ATS earns one month of Pro',
       '1 Joint Brain Connection',
     ],
-    tagline: 'Everything you need to try the AI for free',
-    cta: 'Start Free',
   },
   {
     id: 'starter',
@@ -38,8 +34,6 @@ export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
       '3 Trade Listings',
       '2 Joint Brain Accounts',
     ],
-    tagline: 'For daily makers building and shipping',
-    cta: 'Upgrade to Starter',
   },
   {
     id: 'pro',
@@ -54,8 +48,6 @@ export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
       '15 Trade Listings',
       '5 Joint Brain Accounts with Granular Sharing',
     ],
-    tagline: 'Unlimited everything for power users',
-    cta: 'Upgrade to Pro',
   },
   {
     id: 'enterprise',
@@ -70,15 +62,9 @@ export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
       'Unlimited Joint Brain Accounts',
       'Custom 3D Shaders & VIP Badge',
     ],
-    tagline: 'Priority throughput and zero marketplace fees',
-    cta: 'Upgrade to Enterprise',
   },
 ];
 
 export function getSubscriptionPlan(planId: SubscriptionPlanId): SubscriptionPlan {
   return SUBSCRIPTION_PLANS.find((plan) => plan.id === planId) ?? SUBSCRIPTION_PLANS[0];
-}
-
-export function isSubscriptionPlanId(value: string | null | undefined): value is SubscriptionPlanId {
-  return SUBSCRIPTION_PLANS.some((plan) => plan.id === value);
 }

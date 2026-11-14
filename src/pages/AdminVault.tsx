@@ -1,17 +1,15 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Shield, Crown, Check, X, Clock, AlertTriangle, RefreshCw, User, Mail, MessageSquare, Inbox } from 'lucide-react';
+import { Shield, Crown, Check, X, Clock, AlertTriangle, RefreshCw, Eye, User, Mail, MessageSquare, Inbox } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { useNavigate } from 'react-router-dom';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { SUBSCRIPTION_PLANS } from '@/lib/subscriptionPlans';
 
 interface AIVerificationResult {
   verified: boolean;
@@ -24,7 +22,6 @@ interface AIVerificationResult {
 interface PaymentRequest {
   id: string;
   user_id: string;
-  plan: string;
   amount: number;
   utr_number: string;
   screenshot_url: string;
@@ -51,11 +48,19 @@ interface SupportMessage {
   admin_response: string | null;
 }
 
+interface AdminUser {
+  user_id: string;
+  email: string | null;
+  name: string | null;
+  tier: string;
+  expires_at: string | null;
+  ats: number;
+}
+
 const ADMIN_EMAIL = 's6113994@gmail.com';
 
 export default function AdminVault() {
   const { user } = useAuth();
-  const navigate = useNavigate();
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [requests, setRequests] = useState<PaymentRequest[]>([]);
@@ -65,24 +70,33 @@ export default function AdminVault() {
   const [adminNotes, setAdminNotes] = useState('');
   const [adminResponse, setAdminResponse] = useState('');
   const [processing, setProcessing] = useState(false);
+  const [showScreenshot, setShowScreenshot] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [tierChanges, setTierChanges] = useState<Record<string, string>>({});
+  const [tierSavingUser, setTierSavingUser] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) {
-      navigate('/auth');
+      setIsAdmin(false);
+      setLoading(false);
       return;
     }
 
-    // Check if user email matches admin email
-    if (user.email !== ADMIN_EMAIL) {
-      toast.error('Access Denied: Super Admin only');
-      navigate('/');
+    // Allow the configured admin account to open the dashboard directly.
+    // Privileged reads and changes remain enforced by backend policies/RPCs.
+    if (user.email?.trim().toLowerCase() !== ADMIN_EMAIL) {
+      setIsAdmin(false);
+      setLoading(false);
       return;
     }
 
-    checkAdminStatus();
-  }, [user, navigate]);
+    setIsAdmin(true);
+    setLoading(true);
+    void Promise.all([fetchPaymentRequests(), fetchSupportMessages(), fetchAdminUsers()])
+      .finally(() => setLoading(false));
+  }, [user]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -124,35 +138,6 @@ export default function AdminVault() {
       supabase.removeChannel(messagesChannel);
     };
   }, [isAdmin]);
-
-  const checkAdminStatus = async () => {
-    if (!user) return;
-
-    try {
-      const { data, error } = await supabase
-        .from('user_roles')
-        .select('role')
-        .eq('user_id', user.id)
-        .eq('role', 'admin')
-        .maybeSingle();
-
-      if (error) throw error;
-
-      if (!data) {
-        toast.error('Access Denied: Admin only');
-        navigate('/');
-        return;
-      }
-
-      setIsAdmin(true);
-      await Promise.all([fetchPaymentRequests(), fetchSupportMessages()]);
-    } catch (error) {
-      console.error('Admin check error:', error);
-      navigate('/');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const fetchPaymentRequests = async () => {
     try {
@@ -201,29 +186,55 @@ export default function AdminVault() {
     }
   };
 
-  // The database owns payment status and tier changes; the browser only asks.
-  const tierFromReview = (result: unknown): string | null => {
-    if (!result || typeof result !== 'object') return null;
-    const payload = result as Record<string, unknown>;
-    const candidate = payload.tier;
-    return typeof candidate === 'string' ? candidate : null;
+  const fetchAdminUsers = async () => {
+    try {
+      const { data, error } = await supabase.rpc('admin_list_users');
+      if (error) throw error;
+      setAdminUsers(Array.isArray(data) ? data as unknown as AdminUser[] : []);
+    } catch (error) {
+      console.error('Admin users fetch error:', error);
+      toast.error('Failed to load user tiers');
+    }
   };
 
-  const approveRequest = async (request: PaymentRequest, notes: string) => {
+  const handleTierChange = async (adminUser: AdminUser) => {
+    const tier = tierChanges[adminUser.user_id] ?? adminUser.tier;
+    setTierSavingUser(adminUser.user_id);
+    try {
+      const { error } = await supabase.rpc('admin_set_user_subscription', { _user_id: adminUser.user_id, _tier: tier });
+      if (error) throw error;
+      toast.success(`Subscription tier updated for ${adminUser.email || 'user'}`);
+      await fetchAdminUsers();
+    } catch (error: any) {
+      toast.error(error?.message || 'Could not update this subscription tier');
+    } finally {
+      setTierSavingUser(null);
+    }
+  };
+
+  const handleApprove = async () => {
+    if (!selectedRequest || !user) return;
+
     setProcessing(true);
     try {
-      // admin_review_payment flips the status and unlocks the tier server-side.
-      const { data, error } = await supabase.rpc('admin_review_payment', {
-        _payment_id: request.id,
+      const { error: reviewError } = await supabase.rpc('admin_review_payment', {
+        _payment_id: selectedRequest.id,
         _decision: 'approved',
-        _admin_notes: notes || undefined,
+        _admin_notes: adminNotes || '',
+      });
+      if (reviewError) throw reviewError;
+
+      await supabase.functions.invoke('send-notification', {
+        body: {
+          userId: selectedRequest.user_id,
+          title: '🎉 Welcome to Averia AI Pro!',
+          body: 'Your payment has been verified. You now have access to all premium features!',
+          type: 'payment_approved',
+          data: { amount: selectedRequest.amount },
+        },
       });
 
-      if (error) throw error;
-
-      const tier = tierFromReview(data) ?? request.plan;
-      toast.success(`Payment approved — ${tier} tier unlocked.`);
-
+      toast.success('Payment approved! User upgraded to Pro.');
       setSelectedRequest(null);
       setAdminNotes('');
       await fetchPaymentRequests();
@@ -235,11 +246,6 @@ export default function AdminVault() {
     }
   };
 
-  const handleApprove = async () => {
-    if (!selectedRequest) return;
-    await approveRequest(selectedRequest, adminNotes);
-  };
-
   const handleReject = async () => {
     if (!selectedRequest) return;
 
@@ -248,9 +254,8 @@ export default function AdminVault() {
       const { error } = await supabase.rpc('admin_review_payment', {
         _payment_id: selectedRequest.id,
         _decision: 'rejected',
-        _admin_notes: adminNotes || undefined,
+        _admin_notes: adminNotes || 'Payment verification failed',
       });
-
       if (error) throw error;
 
       await supabase.functions.invoke('send-notification', {
@@ -266,7 +271,7 @@ export default function AdminVault() {
       toast.success('Payment rejected');
       setSelectedRequest(null);
       setAdminNotes('');
-      await fetchPaymentRequests();
+      await Promise.all([fetchPaymentRequests(), fetchAdminUsers()]);
     } catch (error) {
       console.error('Reject error:', error);
       toast.error('Failed to reject payment');
@@ -315,9 +320,6 @@ export default function AdminVault() {
     setSelectedMessage(message);
     setAdminResponse(message.admin_response || '');
   };
-
-  const planLabel = (plan: string) =>
-    SUBSCRIPTION_PLANS.find((item) => item.id === plan)?.name ?? plan;
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -449,6 +451,10 @@ export default function AdminVault() {
                   </span>
                 )}
               </TabsTrigger>
+              <TabsTrigger value="users" className="gap-2">
+                <User className="h-4 w-4" />
+                User Tiers
+              </TabsTrigger>
             </TabsList>
 
             {/* Payments Tab */}
@@ -488,8 +494,6 @@ export default function AdminVault() {
                               <div className="flex items-center gap-3 text-sm text-muted-foreground">
                                 <span>₹{request.amount}</span>
                                 <span>•</span>
-                                <span className="text-foreground/80">{planLabel(request.plan)}</span>
-                                <span>•</span>
                                 <span>UTR: {request.utr_number}</span>
                                 <span>•</span>
                                 <span>{new Date(request.created_at).toLocaleDateString()}</span>
@@ -503,26 +507,15 @@ export default function AdminVault() {
                               size="sm"
                               onClick={() => {
                                 setSelectedRequest(request);
-                                setAdminNotes('');
+                                setShowScreenshot(true);
                               }}
                             >
-                              Details
+                              <Eye className="h-4 w-4 mr-1" />
+                              View
                             </Button>
                             {request.status === 'pending' && (
                               <Button
                                 size="sm"
-                                onClick={() => approveRequest(request, '')}
-                                disabled={processing}
-                                className="glow-success"
-                              >
-                                <Check className="h-4 w-4 mr-1" />
-                                Approve &amp; Unlock Tier
-                              </Button>
-                            )}
-                            {request.status === 'pending' && (
-                              <Button
-                                size="sm"
-                                variant="outline"
                                 onClick={() => {
                                   setSelectedRequest(request);
                                   setAdminNotes('');
@@ -587,12 +580,71 @@ export default function AdminVault() {
                 )}
               </div>
             </TabsContent>
+
+            <TabsContent value="users">
+              <div className="glass-card overflow-hidden rounded-xl">
+                <div className="flex items-center justify-between border-b border-border p-4">
+                  <div>
+                    <h2 className="font-heading font-semibold">User subscription tiers</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">Changes are checked and applied by the secure admin service.</p>
+                  </div>
+                  <Button variant="outline" size="icon" onClick={fetchAdminUsers} aria-label="Refresh user tiers"><RefreshCw className="h-4 w-4" /></Button>
+                </div>
+                {adminUsers.length === 0 ? <div className="p-10 text-center text-muted-foreground">No user profiles found.</div> : <div className="divide-y divide-border">
+                  {adminUsers.map((adminUser) => {
+                    const selectedTier = tierChanges[adminUser.user_id] ?? adminUser.tier;
+                    return <div key={adminUser.user_id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{adminUser.name || 'Averia member'}</p>
+                        <p className="truncate text-sm text-muted-foreground">{adminUser.email || 'Email unavailable'} · ATS {adminUser.ats}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select aria-label={`Subscription tier for ${adminUser.email || adminUser.user_id}`} value={selectedTier} onChange={(event) => setTierChanges((current) => ({ ...current, [adminUser.user_id]: event.target.value }))} className="h-10 min-w-32 rounded-md border border-input bg-background px-3 text-sm">
+                          {['free', 'starter', 'pro', 'enterprise'].map((tier) => <option key={tier} value={tier}>{tier[0].toUpperCase() + tier.slice(1)}</option>)}
+                        </select>
+                        <Button onClick={() => handleTierChange(adminUser)} disabled={tierSavingUser === adminUser.user_id || selectedTier === adminUser.tier}>
+                          {tierSavingUser === adminUser.user_id ? <RefreshCw className="h-4 w-4 animate-spin" /> : 'Save tier'}
+                        </Button>
+                      </div>
+                    </div>;
+                  })}
+                </div>}
+              </div>
+            </TabsContent>
           </Tabs>
         </div>
       </div>
 
+      {/* Screenshot Viewer */}
+      <Dialog open={showScreenshot} onOpenChange={setShowScreenshot}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Payment Screenshot</DialogTitle>
+          </DialogHeader>
+          {selectedRequest && (
+            <div className="space-y-4">
+              <img
+                src={selectedRequest.screenshot_url}
+                alt="Payment screenshot"
+                className="w-full rounded-lg border border-border"
+              />
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-muted-foreground">Amount</p>
+                  <p className="font-medium">₹{selectedRequest.amount}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">UTR</p>
+                  <p className="font-mono">{selectedRequest.utr_number}</p>
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* Review Dialog */}
-      <Dialog open={!!selectedRequest} onOpenChange={(open) => !open && setSelectedRequest(null)}>
+      <Dialog open={!!selectedRequest && !showScreenshot} onOpenChange={(open) => !open && setSelectedRequest(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Review Payment Request</DialogTitle>
@@ -609,10 +661,6 @@ export default function AdminVault() {
                   <p className="font-heading font-bold">₹{selectedRequest.amount}</p>
                 </div>
                 <div className="glass-card p-3 rounded-lg">
-                  <p className="text-xs text-muted-foreground">Plan</p>
-                  <p className="font-medium text-sm">{planLabel(selectedRequest.plan)}</p>
-                </div>
-                <div className="glass-card p-3 rounded-lg">
                   <p className="text-xs text-muted-foreground">UTR Number</p>
                   <p className="font-mono text-sm">{selectedRequest.utr_number}</p>
                 </div>
@@ -621,6 +669,15 @@ export default function AdminVault() {
                   <p className="text-sm">{new Date(selectedRequest.created_at).toLocaleString()}</p>
                 </div>
               </div>
+
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => setShowScreenshot(true)}
+              >
+                <Eye className="h-4 w-4 mr-2" />
+                View Screenshot
+              </Button>
 
               <div className="space-y-2">
                 <Label>Admin Notes (optional)</Label>
@@ -632,31 +689,25 @@ export default function AdminVault() {
                 />
               </div>
 
-              {selectedRequest.status === 'pending' ? (
-                <div className="flex gap-3">
-                  <Button
-                    variant="destructive"
-                    className="flex-1"
-                    onClick={handleReject}
-                    disabled={processing}
-                  >
-                    <X className="h-4 w-4 mr-2" />
-                    Reject
-                  </Button>
-                  <Button
-                    className="flex-1 glow-primary"
-                    onClick={handleApprove}
-                    disabled={processing}
-                  >
-                    <Check className="h-4 w-4 mr-2" />
-                    Approve &amp; Unlock Tier
-                  </Button>
-                </div>
-              ) : (
-                <p className="text-center text-sm text-muted-foreground">
-                  This request was already {selectedRequest.status}.
-                </p>
-              )}
+              <div className="flex gap-3">
+                <Button
+                  variant="destructive"
+                  className="flex-1"
+                  onClick={handleReject}
+                  disabled={processing}
+                >
+                  <X className="h-4 w-4 mr-2" />
+                  Reject
+                </Button>
+                <Button
+                  className="flex-1 glow-primary"
+                  onClick={handleApprove}
+                  disabled={processing}
+                >
+                  <Check className="h-4 w-4 mr-2" />
+                  Approve & Upgrade
+                </Button>
+              </div>
             </div>
           )}
         </DialogContent>

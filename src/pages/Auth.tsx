@@ -63,25 +63,11 @@ export default function Auth() {
   const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
     try {
-      const isLovable = window.location.hostname.includes('lovableproject.com') || window.location.hostname.includes('lovable.app');
-      let error = null;
-
-      if (isLovable) {
-        const { lovable } = await import('@/integrations/lovable');
-        const res = await lovable.auth.signInWithOAuth('google', {
-          redirect_uri: `${window.location.origin}/news`,
-        });
-        error = res.error;
-      } else {
-        const res = await supabase.auth.signInWithOAuth({
-          provider: 'google',
-          options: {
-            redirectTo: window.location.origin,
-          },
-        });
-        error = res.error;
-      }
-
+      const { lovable } = await import('@/integrations/lovable');
+      const { error } = await lovable.auth.signInWithOAuth('google', {
+        redirect_uri: `${window.location.origin}/news`,
+      });
+      
       if (error) {
         console.error('Google OAuth error:', error);
         toast.error('Google sign in failed. Please try again.');

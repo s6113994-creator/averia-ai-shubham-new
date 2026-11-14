@@ -119,16 +119,17 @@ export default function News() {
   }, []);
 
   const searchApiCacheFirst = useCallback(async (query: string): Promise<MediaNewsArticle[]> => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return [];
+
+    const word = normalized.split(/\s+/).find(w => w.length > 2) || normalized;
+    const categoryKey = selectedCategory === 'all' ? '' : selectedCategory;
+
     try {
-      const normalized = query.trim().toLowerCase();
-      if (!normalized) return [];
-
-      const word = normalized.split(/\s+/).find(w => w.length > 2) || normalized;
-      const categoryKey = selectedCategory === 'all' ? '' : selectedCategory;
-
-      const { data: { session } } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+      // Ensure valid session before search queries
+      const { data: { session } } = await supabase.auth.getSession();
       if (session?.expires_at && session.expires_at - Math.floor(Date.now() / 1000) < 60) {
-        await supabase.auth.refreshSession().catch(() => {});
+        await supabase.auth.refreshSession();
       }
       const [newsResult, longResult, shortResult] = await Promise.all([
         supabase
@@ -136,22 +137,19 @@ export default function News() {
           .select('data, created_at')
           .like('cache_key', categoryKey ? `news:${categoryKey}:%${word}%` : `news:%${word}%`)
           .order('created_at', { ascending: false })
-          .limit(30)
-          .catch(() => ({ data: [] })),
+          .limit(30),
         supabase
           .from('api_cache')
           .select('data, created_at')
           .like('cache_key', `yt:long:%${word}%`)
           .order('created_at', { ascending: false })
-          .limit(20)
-          .catch(() => ({ data: [] })),
+          .limit(20),
         supabase
           .from('api_cache')
           .select('data, created_at')
           .like('cache_key', `yt:short:%${word}%`)
           .order('created_at', { ascending: false })
-          .limit(20)
-          .catch(() => ({ data: [] })),
+          .limit(20),
       ]);
 
       const rows = [
@@ -221,23 +219,16 @@ export default function News() {
       }
 
       // PARALLEL: Fetch from API AND Supabase archive simultaneously
-      const { data: { session } } = await supabase.auth.getSession();
-      const [newsRes, archiveLongRes, archiveShortRes, archiveNewsRes] = await Promise.allSettled([
-        fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fetch-news`, {
-          method: 'POST',
-          headers: {
-            'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-            'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
+      const [newsResult, archiveLongRes, archiveShortRes, archiveNewsRes] = await Promise.allSettled([
+        supabase.functions.invoke('fetch-news', {
+          body: {
             category: selectedCategory === 'all' ? 'general' : selectedCategory,
             pageSize: 30,
             page: 1,
             query: searchText || undefined,
-            bypassCache: true,
-          }),
-        }).then(r => r.json()),
+            bypassCache: true, // Force fresh fetch on app init
+          },
+        }),
         getHistoricalFeed('long', 0, 15),
         getHistoricalFeed('short', 0, 15),
         getHistoricalNewsFeed(0, 20),
@@ -246,7 +237,7 @@ export default function News() {
       let newsArticles: MediaNewsArticle[] = [];
       const headlines: string[] = [];
 
-      const newsData = newsRes.status === 'fulfilled' ? newsRes.value : null;
+      const newsData = newsResult.status === 'fulfilled' ? newsResult.value.data : null;
       if (newsData?.success && newsData.articles?.length > 0) {
         newsArticles = newsData.articles.map((article: any) => ({
           ...article,
@@ -292,10 +283,9 @@ export default function News() {
       let longVideos: MediaNewsArticle[] = [];
       let shortVideos: MediaNewsArticle[] = [];
 
-      if (dualSync.status === 'fulfilled' && dualSync.value) {
-        const val: any = dualSync.value;
-        if (Array.isArray(val.long)) longVideos.push(...val.long);
-        if (Array.isArray(val.short)) shortVideos.push(...val.short);
+      if (dualSync.status === 'fulfilled') {
+        longVideos.push(...dualSync.value.long);
+        shortVideos.push(...dualSync.value.short);
       }
 
       if (trendingLong.status === 'fulfilled') {
@@ -705,9 +695,9 @@ export default function News() {
           style={{ width: `${scrollProgress}%` }}
         />
       </div>
-      <div className="container mx-auto px-4 pt-20 pb-6">
+      <div className="container mx-auto px-4 pt-0 pb-3">
         {/* ROW 1 — compact: centered "News" + [+], refresh on the right */}
-        <div className="sticky top-0 z-[100] w-full bg-[#0c0d12] bg-opacity-100 backdrop-blur-md border-b border-white/15 shadow-lg flex h-[52px] max-h-[52px] flex-row items-center justify-between pl-14 pr-14 md:pl-0">
+        <div className="sticky top-0 z-40 flex h-[52px] max-h-[52px] flex-row items-center justify-between bg-background/90 pl-14 pr-14 backdrop-blur-xl md:pl-0">
           <div className="flex items-center gap-2">
             <h1 className="font-heading text-lg md:text-xl font-semibold leading-none whitespace-nowrap">News</h1>
             <button

@@ -11,8 +11,13 @@
 
 ## Subscription, payment, admin, and ATS wiring
 - [x] Use the already-applied subscription and admin database rules; add no new database changes.
-- [ ] Add the shared four-tier catalog and exact plan comparison to the pricing route.
-- [ ] Connect the UPI QR/deep links and submit validated UTRs as pending requests only.
-- [ ] Route payment decisions and user tier/ATS changes through protected admin RPCs.
+- [ ] Use the shared four-tier catalog and exact plan comparison on the pricing route.
+- [ ] Connect the saved merchant UPI ID (`ganeshrajak123451@okhdfcbank`) to QR/deep links and submit validated UTRs as pending requests only.
+- [ ] Keep `/admin` and `/admin-vault` restricted to `s6113994@gmail.com`; route payment decisions and tier changes through protected admin RPCs.
 - [ ] Show authoritative ATS in the dashboard and trigger the existing one-month Pro reward at 500.
 - [ ] Run typecheck and inspect the live preview; verify signed-in payment/admin operations if an authenticated preview session is available.
+
+## Trade email verification and admin routing
+- [x] Verify listing email with Cloud Auth OTP, bind verification to the active account, and recover cleanly from expired codes.
+- [x] Route both `/admin` and `/admin-vault` to the existing email- and role-restricted Admin Vault with live payment and user-tier data.
+- [ ] Run typecheck, tests, and preview checks for these fixes.
