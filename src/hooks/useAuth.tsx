@@ -28,7 +28,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(currentSession?.user ?? null);
         setLoading(false);
 
-        if (currentSession && (window.location.search.includes('code=') || window.location.hash.includes('access_token='))) {
+        if (
+          currentSession &&
+          (window.location.search.includes('code=') || window.location.hash.includes('access_token='))
+        ) {
           window.history.replaceState(null, '', window.location.pathname);
         }
       }
@@ -88,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signUp = async (email: string, password: string, fullName?: string) => {
-    const redirectUrl = `${window.location.origin}/averia-ai`;
+    const redirectUrl = `${window.location.origin}/auth`;
 
     const { error } = await supabase.auth.signUp({
       email,
@@ -113,6 +116,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     await supabase.auth.signOut();
+    setUser(null);
+    setSession(null);
   };
 
   return (

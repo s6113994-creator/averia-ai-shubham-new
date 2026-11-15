@@ -27,11 +27,12 @@ export default function Auth() {
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string; fullName?: string }>({});
-  
+
   const { user, signIn, signUp } = useAuth();
   const navigate = useNavigate();
 
-useEffect(() => {
+  // Redirect automatically as soon as user session is confirmed
+  useEffect(() => {
     if (user) {
       navigate('/averia-ai', { replace: true });
     }
@@ -60,13 +61,14 @@ useEffect(() => {
     }
   };
 
-const handleGoogleSignIn = async () => {
+  const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/averia-ai`,
+          // Redirect back to /auth so useAuth parses the session cleanly before navigating to /averia-ai
+          redirectTo: `${window.location.origin}/auth`,
           queryParams: {
             prompt: 'select_account',
           },
@@ -84,9 +86,9 @@ const handleGoogleSignIn = async () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!validateForm()) return;
-    
+
     setIsLoading(true);
 
     try {
@@ -98,7 +100,7 @@ const handleGoogleSignIn = async () => {
           } else {
             toast.error(error.message);
           }
-       } else {
+        } else {
           toast.success('Welcome to Averia AI!');
           navigate('/averia-ai', { replace: true });
         }
@@ -112,7 +114,7 @@ const handleGoogleSignIn = async () => {
           }
         } else {
           toast.success('Welcome back!');
-          navigate('/averia-ai');
+          navigate('/averia-ai', { replace: true });
         }
       }
     } catch (error: any) {
@@ -150,6 +152,7 @@ const handleGoogleSignIn = async () => {
           {/* Toggle */}
           <div className="flex gap-2 p-1 bg-secondary/50 rounded-lg mb-6">
             <button
+              type="button"
               onClick={() => setIsSignUp(false)}
               className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all ${
                 !isSignUp
@@ -160,6 +163,7 @@ const handleGoogleSignIn = async () => {
               Sign In
             </button>
             <button
+              type="button"
               onClick={() => setIsSignUp(true)}
               className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all ${
                 isSignUp
@@ -302,6 +306,7 @@ const handleGoogleSignIn = async () => {
             <p className="text-muted-foreground text-sm">
               {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
               <button
+                type="button"
                 onClick={() => setIsSignUp(!isSignUp)}
                 className="text-primary hover:underline font-medium"
               >
