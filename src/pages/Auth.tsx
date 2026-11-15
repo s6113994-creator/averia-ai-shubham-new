@@ -35,7 +35,7 @@ export default function Auth() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
-        navigate('/averia-ai', { replace: true });
+        navigate('/news', { replace: true });
       }
     });
 
