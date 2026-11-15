@@ -18,7 +18,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
-useEffect(() => {
+  useEffect(() => {
     let mounted = true;
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
@@ -27,6 +27,10 @@ useEffect(() => {
         setSession(currentSession);
         setUser(currentSession?.user ?? null);
         setLoading(false);
+
+        if (currentSession && (window.location.search.includes('code=') || window.location.hash.includes('access_token='))) {
+          window.history.replaceState(null, '', window.location.pathname);
+        }
       }
     );
 
@@ -38,7 +42,6 @@ useEffect(() => {
           const access_token = params.get('access_token');
           const refresh_token = params.get('refresh_token') || '';
 
-          // Clean URL hash immediately so UI never gets stuck on token hash
           window.history.replaceState(null, '', window.location.pathname + window.location.search);
 
           if (access_token) {
@@ -56,11 +59,20 @@ useEffect(() => {
           }
         }
 
-        const { data: { session: existing } } = await supabase.auth.getSession();
+        const { data: { session: existing }, error } = await supabase.auth.getSession();
         if (!mounted) return;
+
+        if (error) {
+          console.error('Get session error:', error);
+        }
+
         setSession(existing);
         setUser(existing?.user ?? null);
         setLoading(false);
+
+        if (window.location.search.includes('code=')) {
+          window.history.replaceState(null, '', window.location.pathname);
+        }
       } catch (e) {
         console.error('Auth bootstrap failed:', e);
         if (mounted) setLoading(false);
@@ -76,8 +88,8 @@ useEffect(() => {
   }, []);
 
   const signUp = async (email: string, password: string, fullName?: string) => {
-    const redirectUrl = `${window.location.origin}/`;
-    
+    const redirectUrl = `${window.location.origin}/averia-ai`;
+
     const { error } = await supabase.auth.signUp({
       email,
       password,

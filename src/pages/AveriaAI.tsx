@@ -376,6 +376,22 @@ useEffect(() => {
         loadConversations();
         return;
       }
+
+      // If URL has code= or access_token, wait briefly for Supabase client to finish code/token exchange
+      if (window.location.search.includes('code=') || window.location.hash.includes('access_token=')) {
+        let attempts = 0;
+        while (attempts < 10 && !cancelled) {
+          await new Promise(r => setTimeout(r, 200));
+          const { data: { session: refreshedSession } } = await supabase.auth.getSession();
+          if (refreshedSession?.user) {
+            if (cancelled) return;
+            loadConversations();
+            return;
+          }
+          attempts++;
+        }
+      }
+
       const { data: { session } } = await supabase.auth.getSession();
       if (cancelled) return;
       if (!session?.user) {
@@ -387,7 +403,7 @@ useEffect(() => {
 
     initPage();
     return () => { cancelled = true; };
-  }, [user, authLoading]);
+  }, [user, authLoading, navigate]);
 
   useEffect(() => {
     if (!initialQueryHandled.current && user) {
