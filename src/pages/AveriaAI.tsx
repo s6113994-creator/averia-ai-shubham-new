@@ -231,7 +231,7 @@ function FileTree({ nodes, depth = 0 }: { nodes: FileNode[]; depth?: number }) {
 import { useScope } from '@/lib/scope';
 
 export default function AveriaAI() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const scope = useScope();
@@ -367,10 +367,11 @@ export default function AveriaAI() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mirrorPeer, scope.workspaceId, scope.peerId]);
 
-  useEffect(() => {
+useEffect(() => {
+    if (authLoading) return;
     if (!user) { navigate('/auth'); return; }
     loadConversations();
-  }, [user]);
+  }, [user, authLoading]);
 
   useEffect(() => {
     if (!initialQueryHandled.current && user) {

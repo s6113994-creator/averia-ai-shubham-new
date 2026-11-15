@@ -31,9 +31,9 @@ export default function Auth() {
   const { user, signIn, signUp } = useAuth();
   const navigate = useNavigate();
 
-  useEffect(() => {
+useEffect(() => {
     if (user) {
-      navigate('/news');
+      navigate('/averia-ai', { replace: true });
     }
   }, [user, navigate]);
 
@@ -101,9 +101,9 @@ const handleGoogleSignIn = async () => {
           } else {
             toast.error(error.message);
           }
-        } else {
+       } else {
           toast.success('Welcome to Averia AI!');
-          navigate('/news');
+          navigate('/averia-ai', { replace: true });
         }
       } else {
         const { error } = await signIn(email, password);
