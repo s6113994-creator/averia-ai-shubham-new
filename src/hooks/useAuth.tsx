@@ -18,35 +18,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+ useEffect(() => {
+    let mounted = true;
+    const hasOAuthCallback =
+      window.location.search.includes('code=') ||
+      window.location.hash.includes('access_token=') ||
+      window.location.hash.includes('refresh_token=');
+
     // Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
+      (event, currentSession) => {
+        if (!mounted) return;
         if (event === 'TOKEN_REFRESHED') {
           console.log('[Auth] Token refreshed successfully');
         }
-        if (event === 'SIGNED_IN' && window.location.hash.includes('access_token')) {
-          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        if (event === 'SIGNED_IN') {
+          if (window.location.hash.includes('access_token') || window.location.search.includes('code=')) {
+            window.history.replaceState(null, '', window.location.pathname);
+          }
         }
         if (event === 'SIGNED_OUT') {
           console.log('[Auth] User signed out');
         }
-        setSession(session);
-        setUser(session?.user ?? null);
+        setSession(currentSession);
+        setUser(currentSession?.user ?? null);
         setLoading(false);
       }
     );
 
-    // THEN check for existing session and force refresh if expired
+    // THEN check for existing session
     supabase.auth.getSession().then(async ({ data: { session: existingSession } }) => {
+      if (!mounted) return;
+
+      // If OAuth callback is in URL and session isn't ready yet, wait for onAuthStateChange
+      if (!existingSession && hasOAuthCallback) {
+        return;
+      }
+
       if (existingSession) {
-        // Check if token is about to expire (within 60 seconds)
         const expiresAt = existingSession.expires_at;
         const now = Math.floor(Date.now() / 1000);
         if (expiresAt && expiresAt - now < 60) {
           console.log('[Auth] Token expired or expiring, refreshing...');
           const { data: refreshData } = await supabase.auth.refreshSession();
-          if (refreshData?.session) {
+          if (refreshData?.session && mounted) {
             setSession(refreshData.session);
             setUser(refreshData.session.user ?? null);
             setLoading(false);
@@ -59,7 +74,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signUp = async (email: string, password: string, fullName?: string) => {
