@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link, Navigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Mail, Lock, User, ArrowRight, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { AveriaLogo } from '@/components/AveriaLogo';
@@ -31,12 +31,15 @@ export default function Auth() {
   const { user, session, loading, signIn, signUp } = useAuth();
   const navigate = useNavigate();
 
-  // Check session and listen to auth state changes to redirect to averia-ai by default
+  // Instant redirect to /averia-ai the instant user or session?.user becomes available
   useEffect(() => {
-    if (!loading && (user || session?.user)) {
+    if (user || session?.user) {
       navigate('/averia-ai', { replace: true });
     }
+  }, [user, session, navigate]);
 
+  // Direct supabase onAuthStateChange listener for instantaneous navigation upon SIGNED_IN
+  useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, currentSession) => {
       if (currentSession?.user) {
         navigate('/averia-ai', { replace: true });
@@ -46,7 +49,10 @@ export default function Auth() {
     return () => {
       subscription.unsubscribe();
     };
-  }, [user, session, loading, navigate]);
+  }, [navigate]);
+
+  const hasOAuthCallback = typeof window !== 'undefined' &&
+    (window.location.search.includes('code=') || window.location.hash.includes('access_token='));
 
   const validateForm = () => {
     try {
@@ -77,7 +83,7 @@ export default function Auth() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          // Redirect back to /auth so useAuth parses the session cleanly before navigating to /averia-ai
+          // Direct OAuth redirect to /auth so useAuth captures the session and instantly transitions to /averia-ai
           redirectTo: `${window.location.origin}/auth`,
           queryParams: {
             prompt: 'select_account',
@@ -133,6 +139,26 @@ export default function Auth() {
       setIsLoading(false);
     }
   };
+
+  // If already authenticated, redirect immediately
+  if (user || session?.user) {
+    return <Navigate to="/averia-ai" replace />;
+  }
+
+  // If OAuth callback is currently resolving, show a clean loader rather than a flash of the form
+  if (hasOAuthCallback && loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4 text-center px-4">
+          <AveriaLogo size="lg" animate />
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          <p className="text-sm font-medium text-muted-foreground animate-pulse">
+            Authenticating with Google... Redirecting to Averia AI
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center relative overflow-hidden bg-background">

@@ -362,7 +362,7 @@ export default function AveriaAI() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mirrorPeer, scope.workspaceId, scope.peerId]);
 
-  // Clean auth guard without redirect loop race condition
+  // Clean auth guard: never redirect while auth is loading or OAuth params are resolving
   useEffect(() => {
     if (authLoading) return;
 
@@ -373,13 +373,13 @@ export default function AveriaAI() {
 
     // Only redirect if there is genuinely no OAuth callback in progress and no user
     const hasOAuthParams =
-      window.location.search.includes('code=') ||
-      window.location.hash.includes('access_token=');
+      typeof window !== 'undefined' &&
+      (window.location.search.includes('code=') ||
+       window.location.hash.includes('access_token='));
 
     if (!hasOAuthParams) {
       navigate('/auth', { replace: true });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, session, authLoading, navigate]);
 
   useEffect(() => {
@@ -913,7 +913,12 @@ export default function AveriaAI() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
 
-  if (authLoading) {
+  const hasOAuthParams =
+    typeof window !== 'undefined' &&
+    (window.location.search.includes('code=') ||
+     window.location.hash.includes('access_token='));
+
+  if (authLoading || (hasOAuthParams && !user && !session?.user)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#1A1A24] text-[#EDEDED]">
         <div className="animate-pulse text-sm font-medium">Loading Averia AI...</div>

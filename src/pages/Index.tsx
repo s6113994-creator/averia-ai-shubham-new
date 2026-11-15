@@ -17,9 +17,9 @@ import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
 
 export default function Index() {
-  const { user, loading } = useAuth();
+  const { user, session, loading } = useAuth();
 
-  if (!loading && user) return <Navigate to="/averia-ai" replace />;
+  if (!loading && (user || session?.user)) return <Navigate to="/averia-ai" replace />;
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background text-foreground">

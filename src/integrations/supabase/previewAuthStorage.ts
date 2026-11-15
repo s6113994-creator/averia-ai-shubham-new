@@ -37,10 +37,22 @@ function readBrokerReply(data: unknown, requestId: string): BrokerReply | null {
 /**
  * On a Lovable preview surface, broker the auth session to the editor over
  * postMessage so the project's preview surfaces share one login; else localStorage.
+ * Production host averia-ai.vercel.app and vercel.app domains always use standard localStorage.
  */
 export function brokeredPreviewStorage(): PreviewAuthStorage | undefined {
   if (typeof window === 'undefined') return undefined;
   const host = location.hostname;
+
+  // Ensure production and Vercel deployments never isolate or drop PKCE / session tokens
+  if (
+    host === 'averia-ai.vercel.app' ||
+    host.endsWith('.vercel.app') ||
+    host === 'localhost' ||
+    host === '127.0.0.1'
+  ) {
+    return localStorage;
+  }
+
   const PREVIEW_ZONES = ['lovableproject.com', 'lovableproject-dev.com', 'lovable.app', 'gpt-eng.com', 'gptengineer.run'];
   const onPreviewZone = PREVIEW_ZONES.some((z) => host === z || host.endsWith('.' + z));
   // Read the id only from non-user-controlled host positions, so a user-named
@@ -103,6 +115,10 @@ export function brokeredPreviewStorage(): PreviewAuthStorage | undefined {
 
   return {
     getItem: async (key) => {
+      // PKCE code_verifier is strictly local to this browser window and must never be delayed or dropped
+      if (key.includes('code-verifier')) {
+        return readLocal(key) ?? null;
+      }
       // Sent with GET and REMOVE so an editor that never cached this session can check or revoke it.
       const local = readLocal(key);
       let res = await request('lovable-preview-auth:get', key, local ?? undefined);
@@ -128,6 +144,7 @@ export function brokeredPreviewStorage(): PreviewAuthStorage | undefined {
     },
     setItem: (key, value) => {
       localStorage.setItem(key, value);
+      if (key.includes('code-verifier')) return;
       return request('lovable-preview-auth:set', key, value).then((res) => {
         if (res?.ok && res.value !== null && localStorage.getItem(key) === value) {
           if (res.value === '') localStorage.removeItem(key);
@@ -138,6 +155,7 @@ export function brokeredPreviewStorage(): PreviewAuthStorage | undefined {
     removeItem: (key) => {
       const local = readLocal(key);
       localStorage.removeItem(key);
+      if (key.includes('code-verifier')) return;
       return request('lovable-preview-auth:remove', key, local ?? undefined).then(() => {});
     },
   };

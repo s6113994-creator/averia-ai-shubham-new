@@ -2,8 +2,8 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { AuthProvider } from "@/hooks/useAuth";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { MediaPlayerProvider } from "@/contexts/MediaPlayerContext";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { EnvironmentProvider } from "@/contexts/EnvironmentContext";
@@ -33,6 +33,15 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
+// Route guard to ensure authenticated users visiting '/' or '/auth' land directly in '/averia-ai'
+function AuthenticatedRedirect({ children }: { children: React.ReactNode }) {
+  const { user, session, loading } = useAuth();
+  if (!loading && (user || session?.user)) {
+    return <Navigate to="/averia-ai" replace />;
+  }
+  return <>{children}</>;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
@@ -49,9 +58,9 @@ const App = () => (
           <AppErrorBoundary>
           <AppShell>
           <Routes>
-            <Route path="/" element={<Index />} />
-            <Route path="/index" element={<Index />} />
-            <Route path="/auth" element={<Auth />} />
+            <Route path="/" element={<AuthenticatedRedirect><Index /></AuthenticatedRedirect>} />
+            <Route path="/index" element={<AuthenticatedRedirect><Index /></AuthenticatedRedirect>} />
+            <Route path="/auth" element={<AuthenticatedRedirect><Auth /></AuthenticatedRedirect>} />
             <Route path="/news" element={<News />} />
             <Route path="/scanner" element={<Scanner />} />
             <Route path="/pricing" element={<Pricing />} />

@@ -21,58 +21,105 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let mounted = true;
     const hasOAuthCallback =
-      window.location.search.includes('code=') ||
-      window.location.hash.includes('access_token=');
+      typeof window !== 'undefined' &&
+      (window.location.search.includes('code=') ||
+       window.location.hash.includes('access_token='));
 
-    // 1. Listen to Supabase's native auth state changes (handles PKCE & implicit OAuth automatically)
+    const stripOAuthParams = () => {
+      if (typeof window === 'undefined') return;
+      try {
+        const url = new URL(window.location.href);
+        if (
+          url.searchParams.has('code') ||
+          url.searchParams.has('state') ||
+          url.searchParams.has('error') ||
+          url.searchParams.has('error_code') ||
+          url.searchParams.has('error_description') ||
+          url.hash.includes('access_token=')
+        ) {
+          url.searchParams.delete('code');
+          url.searchParams.delete('state');
+          url.searchParams.delete('error');
+          url.searchParams.delete('error_code');
+          url.searchParams.delete('error_description');
+          url.hash = '';
+          const newSearch = url.searchParams.toString();
+          const cleanUrl = url.pathname + (newSearch ? `?${newSearch}` : '');
+          window.history.replaceState(null, '', cleanUrl);
+        }
+      } catch (e) {
+        console.error('Failed to clean OAuth params:', e);
+      }
+    };
+
+    // 1. Attach onAuthStateChange listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, currentSession) => {
         if (!mounted) return;
 
-        // If OAuth callback is still in progress and session isn't ready on INITIAL_SESSION, wait for SIGNED_IN
+        if (currentSession?.user) {
+          setSession(currentSession);
+          setUser(currentSession.user);
+          setLoading(false);
+          stripOAuthParams();
+          return;
+        }
+
+        if (event === 'SIGNED_OUT') {
+          setSession(null);
+          setUser(null);
+          setLoading(false);
+          return;
+        }
+
+        // If INITIAL_SESSION has no session yet but we are resolving an OAuth callback,
+        // keep loading: true while Supabase's detectSessionInUrl handler completes.
         if (event === 'INITIAL_SESSION' && !currentSession && hasOAuthCallback) {
           return;
         }
 
-        setSession(currentSession);
-        setUser(currentSession?.user ?? null);
-        setLoading(false);
-
-        // Clean OAuth params from URL only AFTER session is safely established
-        if (
-          currentSession &&
-          (window.location.search.includes('code=') || window.location.hash.includes('access_token='))
-        ) {
-          window.history.replaceState(null, '', window.location.pathname);
+        if (!hasOAuthCallback) {
+          setSession(null);
+          setUser(null);
+          setLoading(false);
         }
       }
     );
 
-    // 2. Fallback session check (only if not waiting on an active OAuth code exchange)
-    const initSession = async () => {
-      if (hasOAuthCallback) {
-        // Safety timeout: if OAuth fails/aborts after 6s, stop loading so UI doesn't hang
-        setTimeout(async () => {
-          if (!mounted) return;
-          const { data: { session: fallbackSession } } = await supabase.auth.getSession();
-          if (!mounted) return;
-          setSession(fallbackSession);
-          setUser(fallbackSession?.user ?? null);
-          setLoading(false);
-        }, 6000);
-        return;
-      }
-
-      const { data: { session: existing }, error } = await supabase.auth.getSession();
+    // 2. Fetch session (getSession internally waits for initializePromise and detectSessionInUrl)
+    supabase.auth.getSession().then(({ data: { session: existingSession }, error }) => {
       if (!mounted) return;
       if (error) console.error('Get session error:', error);
 
-      setSession(existing);
-      setUser(existing?.user ?? null);
-      setLoading(false);
-    };
+      if (existingSession?.user) {
+        setSession(existingSession);
+        setUser(existingSession.user);
+        setLoading(false);
+        stripOAuthParams();
+      } else if (!hasOAuthCallback) {
+        setSession(null);
+        setUser(null);
+        setLoading(false);
+      } else {
+        // If an OAuth callback code was in the URL, wait a brief safety window for the in-flight
+        // token exchange before releasing loading.
+        const safetyTimer = setTimeout(async () => {
+          if (!mounted) return;
+          const { data: { session: fallbackSession } } = await supabase.auth.getSession();
+          if (!mounted) return;
+          if (fallbackSession?.user) {
+            setSession(fallbackSession);
+            setUser(fallbackSession.user);
+            stripOAuthParams();
+          } else {
+            stripOAuthParams();
+          }
+          setLoading(false);
+        }, 2500);
 
-    initSession();
+        return () => clearTimeout(safetyTimer);
+      }
+    });
 
     return () => {
       mounted = false;
