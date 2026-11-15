@@ -368,20 +368,16 @@ export default function AveriaAI() {
   }, [mirrorPeer, scope.workspaceId, scope.peerId]);
 
 useEffect(() => {
-    const hasTokenInUrl =
-      window.location.hash.includes('access_token=') ||
-      window.location.search.includes('code=');
-    if (authLoading || hasTokenInUrl) return;
-
+    if (authLoading) return;
     let cancelled = false;
-    const verifyAndLoad = async () => {
+
+    const initPage = async () => {
       if (user) {
         loadConversations();
         return;
       }
       const { data: { session } } = await supabase.auth.getSession();
       if (cancelled) return;
-
       if (!session?.user) {
         navigate('/auth', { replace: true });
       } else {
@@ -389,7 +385,7 @@ useEffect(() => {
       }
     };
 
-    verifyAndLoad();
+    initPage();
     return () => { cancelled = true; };
   }, [user, authLoading]);
 
@@ -932,7 +928,7 @@ useEffect(() => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
 
- if (authLoading || window.location.hash.includes('access_token=') || window.location.search.includes('code=')) {
+if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#1A1A24] text-[#EDEDED]">
         <div className="animate-pulse text-sm font-medium">Loading Averia AI...</div>

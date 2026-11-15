@@ -18,39 +18,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
- useEffect(() => {
+useEffect(() => {
     let mounted = true;
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, currentSession) => {
+      (_event, currentSession) => {
         if (!mounted) return;
-        if (currentSession) {
-          setSession(currentSession);
-          setUser(currentSession.user);
-          setLoading(false);
-        } else if (event === 'SIGNED_OUT') {
-          setSession(null);
-          setUser(null);
-          setLoading(false);
-        }
+        setSession(currentSession);
+        setUser(currentSession?.user ?? null);
+        setLoading(false);
       }
     );
 
-    const initAuth = async () => {
+    const bootstrapSession = async () => {
       try {
-        if (window.location.hash && window.location.hash.includes('access_token=')) {
-          const hashParams = new URLSearchParams(window.location.hash.substring(1));
-          const accessToken = hashParams.get('access_token');
-          const refreshToken = hashParams.get('refresh_token') || '';
+        const rawHash = window.location.hash;
+        if (rawHash && rawHash.includes('access_token=')) {
+          const params = new URLSearchParams(rawHash.replace(/^#/, ''));
+          const access_token = params.get('access_token');
+          const refresh_token = params.get('refresh_token') || '';
 
-          if (accessToken) {
+          // Clean URL hash immediately so UI never gets stuck on token hash
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+
+          if (access_token) {
             const { data, error } = await supabase.auth.setSession({
-              access_token: accessToken,
-              refresh_token: refreshToken,
+              access_token,
+              refresh_token,
             });
             if (!mounted) return;
             if (!error && data?.session) {
-              window.history.replaceState(null, '', window.location.pathname);
               setSession(data.session);
               setUser(data.session.user);
               setLoading(false);
@@ -59,32 +56,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        const urlParams = new URLSearchParams(window.location.search);
-        const authCode = urlParams.get('code');
-        if (authCode) {
-          const { data, error } = await supabase.auth.exchangeCodeForSession(authCode);
-          if (!mounted) return;
-          if (!error && data?.session) {
-            window.history.replaceState(null, '', window.location.pathname);
-            setSession(data.session);
-            setUser(data.session.user);
-            setLoading(false);
-            return;
-          }
-        }
-
-        const { data: { session: existingSession } } = await supabase.auth.getSession();
+        const { data: { session: existing } } = await supabase.auth.getSession();
         if (!mounted) return;
-        setSession(existingSession);
-        setUser(existingSession?.user ?? null);
+        setSession(existing);
+        setUser(existing?.user ?? null);
         setLoading(false);
-      } catch (err) {
-        console.error('[Auth] Session init error:', err);
+      } catch (e) {
+        console.error('Auth bootstrap failed:', e);
         if (mounted) setLoading(false);
       }
     };
 
-    initAuth();
+    bootstrapSession();
 
     return () => {
       mounted = false;
