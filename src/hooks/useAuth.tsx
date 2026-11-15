@@ -38,13 +38,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const initAuth = async () => {
       try {
-        // 1. Directly parse #access_token & #refresh_token from URL hash if present
         if (window.location.hash && window.location.hash.includes('access_token=')) {
           const hashParams = new URLSearchParams(window.location.hash.substring(1));
           const accessToken = hashParams.get('access_token');
-          const refreshToken = hashParams.get('refresh_token');
+          const refreshToken = hashParams.get('refresh_token') || '';
 
-          if (accessToken && refreshToken) {
+          if (accessToken) {
             const { data, error } = await supabase.auth.setSession({
               access_token: accessToken,
               refresh_token: refreshToken,
@@ -60,7 +59,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        // 2. Directly exchange ?code= if PKCE flow is used
         const urlParams = new URLSearchParams(window.location.search);
         const authCode = urlParams.get('code');
         if (authCode) {
@@ -75,7 +73,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        // 3. Normal existing session check
         const { data: { session: existingSession } } = await supabase.auth.getSession();
         if (!mounted) return;
         setSession(existingSession);
