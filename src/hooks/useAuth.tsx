@@ -62,6 +62,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         }
 
+        // Explicitly handle PKCE auth code exchange for Google OAuth redirect
+        const searchParams = new URLSearchParams(window.location.search);
+        const code = searchParams.get('code');
+        if (code) {
+          try {
+            const { data, error } = await supabase.auth.exchangeCodeForSession(window.location.href);
+            if (!mounted) return;
+            if (!error && data?.session) {
+              setSession(data.session);
+              setUser(data.session.user);
+              setLoading(false);
+              window.history.replaceState(null, '', window.location.pathname);
+              return;
+            } else if (error) {
+              console.error('Code exchange error:', error);
+            }
+          } catch (err) {
+            console.error('Code exchange exception:', err);
+          }
+        }
+
         const { data: { session: existing }, error } = await supabase.auth.getSession();
         if (!mounted) return;
 

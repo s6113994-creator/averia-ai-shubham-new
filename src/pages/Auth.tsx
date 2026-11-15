@@ -28,19 +28,17 @@ export default function Auth() {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string; fullName?: string }>({});
 
-  const { user, signIn, signUp } = useAuth();
+  const { user, session, loading, signIn, signUp } = useAuth();
   const navigate = useNavigate();
 
-  // Check session on mount and listen to auth state changes to redirect to dashboard
+  // Check session and listen to auth state changes to redirect to averia-ai by default
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        navigate('/averia-ai', { replace: true });
-      }
-    });
+    if (!loading && (user || session?.user)) {
+      navigate('/averia-ai', { replace: true });
+    }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, currentSession) => {
+      if (currentSession?.user) {
         navigate('/averia-ai', { replace: true });
       }
     });
@@ -48,7 +46,7 @@ export default function Auth() {
     return () => {
       subscription.unsubscribe();
     };
-  }, [navigate]);
+  }, [user, session, loading, navigate]);
 
   const validateForm = () => {
     try {
