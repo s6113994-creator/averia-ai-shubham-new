@@ -31,12 +31,24 @@ export default function Auth() {
   const { user, signIn, signUp } = useAuth();
   const navigate = useNavigate();
 
-  // Redirect automatically as soon as user session is confirmed
+  // Check session on mount and listen to auth state changes to redirect to dashboard
   useEffect(() => {
-    if (user) {
-      navigate('/averia-ai', { replace: true });
-    }
-  }, [user, navigate]);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        navigate('/averia-ai', { replace: true });
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        navigate('/averia-ai', { replace: true });
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [navigate]);
 
   const validateForm = () => {
     try {
