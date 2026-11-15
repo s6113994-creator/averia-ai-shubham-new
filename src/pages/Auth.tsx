@@ -76,33 +76,22 @@ export default function Auth() {
   const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
     try {
-      const isLovable = window.location.hostname.includes('lovableproject.com') || window.location.hostname.includes('lovable.app');
-      let error = null;
-
-      if (isLovable) {
-        const { lovable } = await import('@/integrations/lovable');
-        const res = await lovable.auth.signInWithOAuth('google', {
-          redirect_uri: `${window.location.origin}/news`,
-        });
-        error = res.error;
-      } else {
-        const res = await supabase.auth.signInWithOAuth({
-          provider: 'google',
-          options: {
-            redirectTo: window.location.origin,
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          // Redirect back to /auth so useAuth parses the session cleanly before navigating to /averia-ai
+          redirectTo: `${window.location.origin}/auth`,
+          queryParams: {
+            prompt: 'select_account',
           },
-        });
-        error = res.error;
-      }
-
+        },
+      });
       if (error) {
-        console.error('Google OAuth error:', error);
-        toast.error('Google sign in failed. Please try again.');
+        toast.error(error.message || 'Google sign-in failed');
+        setIsGoogleLoading(false);
       }
-    } catch (error) {
-      console.error('Google sign in error:', error);
-      toast.error('Something went wrong. Please try again.');
-    } finally {
+    } catch (err: any) {
+      toast.error(err?.message || 'Google sign-in failed');
       setIsGoogleLoading(false);
     }
   };
