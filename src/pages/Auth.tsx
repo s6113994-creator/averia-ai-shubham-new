@@ -61,7 +61,7 @@ useEffect(() => {
   };
 
 const handleGoogleSignIn = async () => {
-    setIsGoogleLoading(true);
+    setGoogleLoading(true);
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
@@ -72,16 +72,13 @@ const handleGoogleSignIn = async () => {
           },
         },
       });
-
       if (error) {
-        console.error('Google OAuth error:', error);
-        toast.error(error.message || 'Google sign in failed. Please try again.');
+        toast.error(error.message || 'Google sign-in failed');
+        setGoogleLoading(false);
       }
-    } catch (error) {
-      console.error('Google sign in error:', error);
-      toast.error('Something went wrong. Please try again.');
-    } finally {
-      setIsGoogleLoading(false);
+    } catch (err: any) {
+      toast.error(err?.message || 'Google sign-in failed');
+      setGoogleLoading(false);
     }
   };
 

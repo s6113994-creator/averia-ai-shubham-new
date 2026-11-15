@@ -20,59 +20,69 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
  useEffect(() => {
     let mounted = true;
-    const hasOAuthCallback =
-      window.location.search.includes('code=') ||
+    const urlParams = new URLSearchParams(window.location.search);
+    const authCode = urlParams.get('code');
+    const hasHashToken =
       window.location.hash.includes('access_token=') ||
       window.location.hash.includes('refresh_token=');
 
-    // Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, currentSession) => {
         if (!mounted) return;
-        if (event === 'TOKEN_REFRESHED') {
-          console.log('[Auth] Token refreshed successfully');
-        }
-        if (event === 'SIGNED_IN') {
-          if (window.location.hash.includes('access_token') || window.location.search.includes('code=')) {
-            window.history.replaceState(null, '', window.location.pathname);
-          }
-        }
-        if (event === 'SIGNED_OUT') {
-          console.log('[Auth] User signed out');
-        }
-        setSession(currentSession);
-        setUser(currentSession?.user ?? null);
-        setLoading(false);
-      }
-    );
-
-    // THEN check for existing session
-    supabase.auth.getSession().then(async ({ data: { session: existingSession } }) => {
-      if (!mounted) return;
-
-      // If OAuth callback is in URL and session isn't ready yet, wait for onAuthStateChange
-      if (!existingSession && hasOAuthCallback) {
-        return;
-      }
-
-      if (existingSession) {
-        const expiresAt = existingSession.expires_at;
-        const now = Math.floor(Date.now() / 1000);
-        if (expiresAt && expiresAt - now < 60) {
-          console.log('[Auth] Token expired or expiring, refreshing...');
-          const { data: refreshData } = await supabase.auth.refreshSession();
-          if (refreshData?.session && mounted) {
-            setSession(refreshData.session);
-            setUser(refreshData.session.user ?? null);
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
+          if (currentSession) {
+            if (window.location.hash.includes('access_token') || window.location.search.includes('code=')) {
+              window.history.replaceState(null, '', window.location.pathname);
+            }
+            setSession(currentSession);
+            setUser(currentSession.user);
             setLoading(false);
             return;
           }
         }
+        if (event === 'SIGNED_OUT') {
+          setSession(null);
+          setUser(null);
+          setLoading(false);
+        }
       }
-      setSession(existingSession);
-      setUser(existingSession?.user ?? null);
-      setLoading(false);
-    });
+    );
+
+    const initAuth = async () => {
+      try {
+        if (authCode) {
+          const { data, error } = await supabase.auth.exchangeCodeForSession(authCode);
+          if (!mounted) return;
+          if (!error && data?.session) {
+            window.history.replaceState(null, '', window.location.pathname);
+            setSession(data.session);
+            setUser(data.session.user);
+            setLoading(false);
+            return;
+          }
+        }
+
+        const { data: { session: existingSession } } = await supabase.auth.getSession();
+        if (!mounted) return;
+
+        if (!existingSession && hasHashToken) {
+          // Wait up to 3 seconds for onAuthStateChange to parse hash token
+          setTimeout(() => {
+            if (mounted) setLoading(false);
+          }, 3000);
+          return;
+        }
+
+        setSession(existingSession);
+        setUser(existingSession?.user ?? null);
+        setLoading(false);
+      } catch (err) {
+        console.error('[Auth] Init error:', err);
+        if (mounted) setLoading(false);
+      }
+    };
+
+    initAuth();
 
     return () => {
       mounted = false;
