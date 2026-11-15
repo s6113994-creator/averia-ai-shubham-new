@@ -60,13 +60,16 @@ export default function Auth() {
     }
   };
 
-  const handleGoogleSignIn = async () => {
+const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/news`,
+          redirectTo: `${window.location.origin}/averia-ai`,
+          queryParams: {
+            prompt: 'select_account',
+          },
         },
       });
 
@@ -112,7 +115,7 @@ export default function Auth() {
           }
         } else {
           toast.success('Welcome back!');
-          navigate('/news');
+          navigate('/averia-ai');
         }
       }
     } catch (error: any) {

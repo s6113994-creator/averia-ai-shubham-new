@@ -25,6 +25,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (event === 'TOKEN_REFRESHED') {
           console.log('[Auth] Token refreshed successfully');
         }
+        if (event === 'SIGNED_IN' && window.location.hash.includes('access_token')) {
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
         if (event === 'SIGNED_OUT') {
           console.log('[Auth] User signed out');
         }
