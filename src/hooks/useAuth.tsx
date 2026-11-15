@@ -20,27 +20,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
  useEffect(() => {
     let mounted = true;
-    const urlParams = new URLSearchParams(window.location.search);
-    const authCode = urlParams.get('code');
-    const hasHashToken =
-      window.location.hash.includes('access_token=') ||
-      window.location.hash.includes('refresh_token=');
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, currentSession) => {
         if (!mounted) return;
-        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
-          if (currentSession) {
-            if (window.location.hash.includes('access_token') || window.location.search.includes('code=')) {
-              window.history.replaceState(null, '', window.location.pathname);
-            }
-            setSession(currentSession);
-            setUser(currentSession.user);
-            setLoading(false);
-            return;
-          }
-        }
-        if (event === 'SIGNED_OUT') {
+        if (currentSession) {
+          setSession(currentSession);
+          setUser(currentSession.user);
+          setLoading(false);
+        } else if (event === 'SIGNED_OUT') {
           setSession(null);
           setUser(null);
           setLoading(false);
@@ -50,6 +38,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const initAuth = async () => {
       try {
+        // 1. Directly parse #access_token & #refresh_token from URL hash if present
+        if (window.location.hash && window.location.hash.includes('access_token=')) {
+          const hashParams = new URLSearchParams(window.location.hash.substring(1));
+          const accessToken = hashParams.get('access_token');
+          const refreshToken = hashParams.get('refresh_token');
+
+          if (accessToken && refreshToken) {
+            const { data, error } = await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            });
+            if (!mounted) return;
+            if (!error && data?.session) {
+              window.history.replaceState(null, '', window.location.pathname);
+              setSession(data.session);
+              setUser(data.session.user);
+              setLoading(false);
+              return;
+            }
+          }
+        }
+
+        // 2. Directly exchange ?code= if PKCE flow is used
+        const urlParams = new URLSearchParams(window.location.search);
+        const authCode = urlParams.get('code');
         if (authCode) {
           const { data, error } = await supabase.auth.exchangeCodeForSession(authCode);
           if (!mounted) return;
@@ -62,22 +75,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         }
 
+        // 3. Normal existing session check
         const { data: { session: existingSession } } = await supabase.auth.getSession();
         if (!mounted) return;
-
-        if (!existingSession && hasHashToken) {
-          // Wait up to 3 seconds for onAuthStateChange to parse hash token
-          setTimeout(() => {
-            if (mounted) setLoading(false);
-          }, 3000);
-          return;
-        }
-
         setSession(existingSession);
         setUser(existingSession?.user ?? null);
         setLoading(false);
       } catch (err) {
-        console.error('[Auth] Init error:', err);
+        console.error('[Auth] Session init error:', err);
         if (mounted) setLoading(false);
       }
     };
