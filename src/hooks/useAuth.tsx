@@ -20,14 +20,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
+    const hasOAuthCallback =
+      window.location.search.includes('code=') ||
+      window.location.hash.includes('access_token=');
 
+    // 1. Listen to Supabase's native auth state changes (handles PKCE & implicit OAuth automatically)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, currentSession) => {
+      (event, currentSession) => {
         if (!mounted) return;
+
+        // If OAuth callback is still in progress and session isn't ready on INITIAL_SESSION, wait for SIGNED_IN
+        if (event === 'INITIAL_SESSION' && !currentSession && hasOAuthCallback) {
+          return;
+        }
+
         setSession(currentSession);
         setUser(currentSession?.user ?? null);
         setLoading(false);
 
+        // Clean OAuth params from URL only AFTER session is safely established
         if (
           currentSession &&
           (window.location.search.includes('code=') || window.location.hash.includes('access_token='))
@@ -37,73 +48,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     );
 
-    const bootstrapSession = async () => {
-      try {
-        const rawHash = window.location.hash;
-        if (rawHash && rawHash.includes('access_token=')) {
-          const params = new URLSearchParams(rawHash.replace(/^#/, ''));
-          const access_token = params.get('access_token');
-          const refresh_token = params.get('refresh_token') || '';
-
-          window.history.replaceState(null, '', window.location.pathname + window.location.search);
-
-          if (access_token) {
-            const { data, error } = await supabase.auth.setSession({
-              access_token,
-              refresh_token,
-            });
-            if (!mounted) return;
-            if (!error && data?.session) {
-              setSession(data.session);
-              setUser(data.session.user);
-              setLoading(false);
-              return;
-            }
-          }
-        }
-
-        // Explicitly handle PKCE auth code exchange for Google OAuth redirect
-        const searchParams = new URLSearchParams(window.location.search);
-        const code = searchParams.get('code');
-        if (code) {
-          try {
-            const { data, error } = await supabase.auth.exchangeCodeForSession(window.location.href);
-            if (!mounted) return;
-            if (!error && data?.session) {
-              setSession(data.session);
-              setUser(data.session.user);
-              setLoading(false);
-              window.history.replaceState(null, '', window.location.pathname);
-              return;
-            } else if (error) {
-              console.error('Code exchange error:', error);
-            }
-          } catch (err) {
-            console.error('Code exchange exception:', err);
-          }
-        }
-
-        const { data: { session: existing }, error } = await supabase.auth.getSession();
-        if (!mounted) return;
-
-        if (error) {
-          console.error('Get session error:', error);
-        }
-
-        setSession(existing);
-        setUser(existing?.user ?? null);
-        setLoading(false);
-
-        if (window.location.search.includes('code=')) {
-          window.history.replaceState(null, '', window.location.pathname);
-        }
-      } catch (e) {
-        console.error('Auth bootstrap failed:', e);
-        if (mounted) setLoading(false);
+    // 2. Fallback session check (only if not waiting on an active OAuth code exchange)
+    const initSession = async () => {
+      if (hasOAuthCallback) {
+        // Safety timeout: if OAuth fails/aborts after 6s, stop loading so UI doesn't hang
+        setTimeout(async () => {
+          if (!mounted) return;
+          const { data: { session: fallbackSession } } = await supabase.auth.getSession();
+          if (!mounted) return;
+          setSession(fallbackSession);
+          setUser(fallbackSession?.user ?? null);
+          setLoading(false);
+        }, 6000);
+        return;
       }
+
+      const { data: { session: existing }, error } = await supabase.auth.getSession();
+      if (!mounted) return;
+      if (error) console.error('Get session error:', error);
+
+      setSession(existing);
+      setUser(existing?.user ?? null);
+      setLoading(false);
     };
 
-    bootstrapSession();
+    initSession();
 
     return () => {
       mounted = false;
