@@ -19,117 +19,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let mounted = true;
-    const hasOAuthCallback =
-      typeof window !== 'undefined' &&
-      (window.location.search.includes('code=') ||
-       window.location.hash.includes('access_token='));
-
-    const stripOAuthParams = () => {
-      if (typeof window === 'undefined') return;
-      try {
-        const url = new URL(window.location.href);
-        if (
-          url.searchParams.has('code') ||
-          url.searchParams.has('state') ||
-          url.searchParams.has('error') ||
-          url.searchParams.has('error_code') ||
-          url.searchParams.has('error_description') ||
-          url.hash.includes('access_token=')
-        ) {
-          url.searchParams.delete('code');
-          url.searchParams.delete('state');
-          url.searchParams.delete('error');
-          url.searchParams.delete('error_code');
-          url.searchParams.delete('error_description');
-          url.hash = '';
-          const newSearch = url.searchParams.toString();
-          const cleanUrl = url.pathname + (newSearch ? `?${newSearch}` : '');
-          window.history.replaceState(null, '', cleanUrl);
-        }
-      } catch (e) {
-        console.error('Failed to clean OAuth params:', e);
-      }
-    };
-
-    // 1. Attach onAuthStateChange listener FIRST
+    // Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, currentSession) => {
-        if (!mounted) return;
-
-        if (currentSession?.user) {
-          setSession(currentSession);
-          setUser(currentSession.user);
-          setLoading(false);
-          stripOAuthParams();
-          return;
+      (event, session) => {
+        if (event === 'TOKEN_REFRESHED') {
+          console.log('[Auth] Token refreshed successfully');
         }
-
         if (event === 'SIGNED_OUT') {
-          setSession(null);
-          setUser(null);
-          setLoading(false);
-          return;
+          console.log('[Auth] User signed out');
         }
-
-        // If INITIAL_SESSION has no session yet but we are resolving an OAuth callback,
-        // keep loading: true while Supabase's detectSessionInUrl handler completes.
-        if (event === 'INITIAL_SESSION' && !currentSession && hasOAuthCallback) {
-          return;
-        }
-
-        if (!hasOAuthCallback) {
-          setSession(null);
-          setUser(null);
-          setLoading(false);
-        }
+        setSession(session);
+        setUser(session?.user ?? null);
+        setLoading(false);
       }
     );
 
-    // 2. Fetch session (getSession internally waits for initializePromise and detectSessionInUrl)
-    supabase.auth.getSession().then(({ data: { session: existingSession }, error }) => {
-      if (!mounted) return;
-      if (error) console.error('Get session error:', error);
-
-      if (existingSession?.user) {
-        setSession(existingSession);
-        setUser(existingSession.user);
-        setLoading(false);
-        stripOAuthParams();
-      } else if (!hasOAuthCallback) {
-        setSession(null);
-        setUser(null);
-        setLoading(false);
-      } else {
-        // If an OAuth callback code was in the URL, wait a brief safety window for the in-flight
-        // token exchange before releasing loading.
-        const safetyTimer = setTimeout(async () => {
-          if (!mounted) return;
-          const { data: { session: fallbackSession } } = await supabase.auth.getSession();
-          if (!mounted) return;
-          if (fallbackSession?.user) {
-            setSession(fallbackSession);
-            setUser(fallbackSession.user);
-            stripOAuthParams();
-          } else {
-            stripOAuthParams();
+    // THEN check for existing session and force refresh if expired
+    supabase.auth.getSession().then(async ({ data: { session: existingSession } }) => {
+      if (existingSession) {
+        // Check if token is about to expire (within 60 seconds)
+        const expiresAt = existingSession.expires_at;
+        const now = Math.floor(Date.now() / 1000);
+        if (expiresAt && expiresAt - now < 60) {
+          console.log('[Auth] Token expired or expiring, refreshing...');
+          const { data: refreshData } = await supabase.auth.refreshSession();
+          if (refreshData?.session) {
+            setSession(refreshData.session);
+            setUser(refreshData.session.user ?? null);
+            setLoading(false);
+            return;
           }
-          setLoading(false);
-        }, 2500);
-
-        return () => clearTimeout(safetyTimer);
+        }
       }
+      setSession(existingSession);
+      setUser(existingSession?.user ?? null);
+      setLoading(false);
     });
 
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, []);
 
   const signUp = async (email: string, password: string, fullName?: string) => {
-    const redirectUrl = `${window.location.origin}/auth`;
-
+    const redirectUrl = `${window.location.origin}/`;
+    
     const { error } = await supabase.auth.signUp({
       email,
       password,
@@ -153,8 +85,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     await supabase.auth.signOut();
-    setUser(null);
-    setSession(null);
   };
 
   return (

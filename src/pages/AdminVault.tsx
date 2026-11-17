@@ -24,6 +24,8 @@ interface PaymentRequest {
   user_id: string;
   amount: number;
   utr_number: string;
+  plan: string;
+  payer_upi_username: string | null;
   screenshot_url: string;
   status: 'pending' | 'approved' | 'rejected';
   ai_verification_result: AIVerificationResult | null;
@@ -234,7 +236,7 @@ export default function AdminVault() {
         },
       });
 
-      toast.success('Payment approved! User upgraded to Pro.');
+      toast.success(`Payment approved! ${selectedRequest.plan} is active for 30 days.`);
       setSelectedRequest(null);
       setAdminNotes('');
       await fetchPaymentRequests();
@@ -496,6 +498,10 @@ export default function AdminVault() {
                                 <span>•</span>
                                 <span>UTR: {request.utr_number}</span>
                                 <span>•</span>
+                                <span>Plan: {request.plan}</span>
+                                <span>•</span>
+                                <span>UPI: {request.payer_upi_username || 'Not provided'}</span>
+                                <span>•</span>
                                 <span>{new Date(request.created_at).toLocaleDateString()}</span>
                               </div>
                             </div>
@@ -665,10 +671,20 @@ export default function AdminVault() {
                   <p className="font-mono text-sm">{selectedRequest.utr_number}</p>
                 </div>
                 <div className="glass-card p-3 rounded-lg">
+                  <p className="text-xs text-muted-foreground">Payer UPI username</p>
+                  <p className="font-mono text-sm break-all">{selectedRequest.payer_upi_username || 'Not provided'}</p>
+                </div>
+                <div className="glass-card p-3 rounded-lg">
+                  <p className="text-xs text-muted-foreground">Plan</p>
+                  <p className="font-medium text-sm">{selectedRequest.plan}</p>
+                </div>
+                <div className="glass-card p-3 rounded-lg">
                   <p className="text-xs text-muted-foreground">Date</p>
                   <p className="text-sm">{new Date(selectedRequest.created_at).toLocaleString()}</p>
                 </div>
               </div>
+
+              <p className="text-sm text-muted-foreground">Approving activates the selected plan immediately for 30 days.</p>
 
               <Button
                 variant="outline"

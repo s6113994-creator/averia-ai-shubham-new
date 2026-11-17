@@ -1,83 +1,37 @@
 import { motion } from 'framer-motion';
-import { Check, Crown, Zap, Shield, X } from 'lucide-react';
+import { Check, Crown, Zap, Shield } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { UPIPaymentModal } from '@/components/UPIPaymentModal';
+import { SUBSCRIPTION_PLANS, type SubscriptionPlan } from '@/lib/subscriptionPlans';
 
-const plans = [
-  {
-    id: 'free',
-    name: 'Free',
-    price: 0,
-    period: 'forever',
-    description: 'Perfect for getting started',
-    features: [
-      { text: '5 scans per day', included: true },
-      { text: 'URL scanning', included: true },
-      { text: 'Basic trust scores', included: true },
-      { text: 'Ad-supported', included: false },
-      { text: 'Deepfake detection', included: false },
-      { text: 'Priority support', included: false },
-    ],
-    cta: 'Get Started',
-    popular: false,
-  },
-  {
-    id: 'pro',
-    name: 'Pro',
-    price: 499,
-    period: '/month',
-    description: 'For power users and professionals',
-    features: [
-      { text: 'Unlimited scans', included: true },
-      { text: 'URL, Image & Video scanning', included: true },
-      { text: 'Advanced trust scores', included: true },
-      { text: 'No ads', included: true },
-      { text: 'Deepfake detection', included: true },
-      { text: 'Priority support', included: true },
-    ],
-    cta: 'Upgrade to Pro',
-    popular: true,
-  },
-  {
-    id: 'enterprise',
-    name: 'Enterprise',
-    price: 4999,
-    period: '/month',
-    description: 'For organizations and teams',
-    features: [
-      { text: 'Everything in Pro', included: true },
-      { text: 'Team management', included: true },
-      { text: 'API access', included: true },
-      { text: 'Custom integrations', included: true },
-      { text: 'Dedicated account manager', included: true },
-      { text: 'SLA guarantee', included: true },
-    ],
-    cta: 'Contact Sales',
-    popular: false,
-  },
-];
+const planDescriptions: Record<SubscriptionPlan['id'], string> = {
+  free: 'Start with the essentials',
+  starter: 'More room for daily work',
+  pro: 'For power users and professionals',
+  enterprise: 'Advanced access for teams',
+  enterprise_max: 'Expanded plan details are being finalized',
+};
 
 export default function Pricing() {
   const { user } = useAuth();
   const [showPayment, setShowPayment] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState<typeof plans[0] | null>(null);
+  const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan | null>(null);
 
-  const handleSelectPlan = (plan: typeof plans[0]) => {
+  const handleSelectPlan = (plan: SubscriptionPlan) => {
+    if (plan.comingSoon) {
+      toast.info('Enterprise Max is coming soon.');
+      return;
+    }
     if (plan.id === 'free') {
       if (!user) {
         window.location.href = '/auth?mode=signup';
       } else {
         toast.success('You already have access to the Free plan!');
       }
-      return;
-    }
-
-    if (plan.id === 'enterprise') {
-      toast.info('Our sales team will contact you shortly!');
       return;
     }
 
@@ -114,59 +68,56 @@ export default function Pricing() {
         </div>
 
         {/* Pricing Cards */}
-        <div className="grid md:grid-cols-3 gap-8 max-w-6xl mx-auto">
-          {plans.map((plan, i) => (
+        <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-5 max-w-[90rem] mx-auto">
+          {SUBSCRIPTION_PLANS.map((plan, i) => (
             <motion.div
               key={plan.id}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.1 }}
-              className={`relative glass-card rounded-2xl p-8 ${
-                plan.popular ? 'border-primary/50 glow-primary' : 'border-border/50'
+              className={`relative glass-card rounded-2xl p-6 ${
+                plan.badge === 'Most Popular' ? 'border-primary/50 glow-primary' : 'border-border/50'
               }`}
             >
-              {plan.popular && (
+              {plan.badge && (
                 <div className="absolute -top-3 left-1/2 -translate-x-1/2">
                   <span className="bg-primary text-primary-foreground px-4 py-1 rounded-full text-sm font-medium">
-                    Most Popular
+                    {plan.badge}
                   </span>
                 </div>
               )}
 
               <div className="text-center mb-6">
                 <h3 className="font-heading text-2xl font-bold mb-2">{plan.name}</h3>
-                <p className="text-muted-foreground text-sm mb-4">{plan.description}</p>
+                <p className="text-muted-foreground text-sm mb-4">{planDescriptions[plan.id]}</p>
                 <div className="flex items-baseline justify-center gap-1">
                   <span className="font-heading text-4xl font-bold">
-                    {plan.price === 0 ? 'Free' : `₹${plan.price}`}
+                  {plan.price === 0 ? 'Free' : `₹${plan.price.toLocaleString('en-IN')}`}
                   </span>
-                  {plan.price > 0 && (
+                  {plan.price > 0 && !plan.comingSoon && (
                     <span className="text-muted-foreground">{plan.period}</span>
                   )}
+                  {plan.comingSoon && <span className="text-muted-foreground">/month</span>}
                 </div>
               </div>
 
               <ul className="space-y-3 mb-8">
                 {plan.features.map((feature) => (
-                  <li key={feature.text} className="flex items-center gap-3">
-                    {feature.included ? (
-                      <Check className="h-5 w-5 text-primary shrink-0" />
-                    ) : (
-                      <X className="h-5 w-5 text-muted-foreground/50 shrink-0" />
-                    )}
-                    <span className={feature.included ? 'text-foreground' : 'text-muted-foreground/50'}>
-                      {feature.text}
-                    </span>
+                  <li key={feature} className="flex items-start gap-3">
+                    <Check className="h-5 w-5 text-primary shrink-0" />
+                    <span className="text-foreground">{feature}</span>
                   </li>
                 ))}
+                {plan.comingSoon && <li className="text-sm text-muted-foreground">Feature limits to be announced</li>}
               </ul>
 
               <Button
                 onClick={() => handleSelectPlan(plan)}
-                className={`w-full ${plan.popular ? 'glow-primary' : ''}`}
-                variant={plan.popular ? 'default' : 'outline'}
+                className={`w-full ${plan.badge === 'Most Popular' ? 'glow-primary' : ''}`}
+                variant={plan.badge === 'Most Popular' ? 'default' : 'outline'}
+                disabled={plan.comingSoon}
               >
-                {plan.cta}
+                {plan.comingSoon ? 'Coming soon' : plan.id === 'free' ? 'Get Started' : `Choose ${plan.name}`}
               </Button>
             </motion.div>
           ))}
@@ -257,6 +208,7 @@ export default function Pricing() {
         onOpenChange={setShowPayment}
         planName={selectedPlan?.name || 'Pro'}
         amount={selectedPlan?.price || 499}
+        planId={selectedPlan?.id ?? 'pro'}
       />
     </Layout>
   );

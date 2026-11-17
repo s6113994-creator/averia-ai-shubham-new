@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams, Link, Navigate } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Mail, Lock, User, ArrowRight, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { AveriaLogo } from '@/components/AveriaLogo';
@@ -27,32 +27,15 @@ export default function Auth() {
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string; fullName?: string }>({});
-
-  const { user, session, loading, signIn, signUp } = useAuth();
+  
+  const { user, signIn, signUp } = useAuth();
   const navigate = useNavigate();
 
-  // Instant redirect to /averia-ai the instant user or session?.user becomes available
   useEffect(() => {
-    if (user || session?.user) {
-      navigate('/averia-ai', { replace: true });
+    if (user) {
+      navigate('/news');
     }
-  }, [user, session, navigate]);
-
-  // Direct supabase onAuthStateChange listener for instantaneous navigation upon SIGNED_IN
-  useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, currentSession) => {
-      if (currentSession?.user) {
-        navigate('/averia-ai', { replace: true });
-      }
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [navigate]);
-
-  const hasOAuthCallback = typeof window !== 'undefined' &&
-    (window.location.search.includes('code=') || window.location.hash.includes('access_token='));
+  }, [user, navigate]);
 
   const validateForm = () => {
     try {
@@ -80,31 +63,28 @@ export default function Auth() {
   const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          // Direct OAuth redirect to /auth so useAuth captures the session and instantly transitions to /averia-ai
-          redirectTo: `${window.location.origin}/auth`,
-          queryParams: {
-            prompt: 'select_account',
-          },
-        },
+      const { lovable } = await import('@/integrations/lovable');
+      const { error } = await lovable.auth.signInWithOAuth('google', {
+        redirect_uri: `${window.location.origin}/news`,
       });
+      
       if (error) {
-        toast.error(error.message || 'Google sign-in failed');
-        setIsGoogleLoading(false);
+        console.error('Google OAuth error:', error);
+        toast.error('Google sign in failed. Please try again.');
       }
-    } catch (err: any) {
-      toast.error(err?.message || 'Google sign-in failed');
+    } catch (error) {
+      console.error('Google sign in error:', error);
+      toast.error('Something went wrong. Please try again.');
+    } finally {
       setIsGoogleLoading(false);
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
+    
     if (!validateForm()) return;
-
+    
     setIsLoading(true);
 
     try {
@@ -118,7 +98,7 @@ export default function Auth() {
           }
         } else {
           toast.success('Welcome to Averia AI!');
-          navigate('/averia-ai', { replace: true });
+          navigate('/news');
         }
       } else {
         const { error } = await signIn(email, password);
@@ -130,7 +110,7 @@ export default function Auth() {
           }
         } else {
           toast.success('Welcome back!');
-          navigate('/averia-ai', { replace: true });
+          navigate('/news');
         }
       }
     } catch (error: any) {
@@ -139,26 +119,6 @@ export default function Auth() {
       setIsLoading(false);
     }
   };
-
-  // If already authenticated, redirect immediately
-  if (user || session?.user) {
-    return <Navigate to="/averia-ai" replace />;
-  }
-
-  // If OAuth callback is currently resolving, show a clean loader rather than a flash of the form
-  if (hasOAuthCallback && loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="flex flex-col items-center gap-4 text-center px-4">
-          <AveriaLogo size="lg" animate />
-          <Loader2 className="h-6 w-6 animate-spin text-primary" />
-          <p className="text-sm font-medium text-muted-foreground animate-pulse">
-            Authenticating with Google... Redirecting to Averia AI
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen flex items-center justify-center relative overflow-hidden bg-background">
@@ -188,7 +148,6 @@ export default function Auth() {
           {/* Toggle */}
           <div className="flex gap-2 p-1 bg-secondary/50 rounded-lg mb-6">
             <button
-              type="button"
               onClick={() => setIsSignUp(false)}
               className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all ${
                 !isSignUp
@@ -199,7 +158,6 @@ export default function Auth() {
               Sign In
             </button>
             <button
-              type="button"
               onClick={() => setIsSignUp(true)}
               className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all ${
                 isSignUp
@@ -342,7 +300,6 @@ export default function Auth() {
             <p className="text-muted-foreground text-sm">
               {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
               <button
-                type="button"
                 onClick={() => setIsSignUp(!isSignUp)}
                 className="text-primary hover:underline font-medium"
               >

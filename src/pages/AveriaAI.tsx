@@ -4,7 +4,6 @@ import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Ey
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
-import { useScope } from '@/lib/scope';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -19,11 +18,11 @@ const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/averia-ai`;
 interface Attachment {
   id: string;
   name: string;
-  type: string;
+  type: string; // mime
   kind: 'image' | 'video' | 'audio' | 'text' | 'url' | 'file';
   size: number;
-  dataUrl?: string;
-  textContent?: string;
+  dataUrl?: string; // base64 for media
+  textContent?: string; // for text/url
   preview?: string;
 }
 
@@ -229,13 +228,17 @@ function FileTree({ nodes, depth = 0 }: { nodes: FileNode[]; depth?: number }) {
   );
 }
 
+import { useScope } from '@/lib/scope';
+
 export default function AveriaAI() {
-  const { user, session, loading: authLoading } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const scope = useScope();
+  // Scope-aware table accessors — PERSONAL uses ai_*; JOINT uses shared_ai_*
   const CONV_TABLE = scope.isJoint ? 'shared_ai_conversations' : 'ai_conversations';
   const MSG_TABLE = scope.isJoint ? 'shared_ai_messages' : 'ai_messages';
+
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
@@ -258,7 +261,6 @@ export default function AveriaAI() {
   const [previewKey, setPreviewKey] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-
   const toggleVoiceInput = () => {
     if (voiceActive) {
       recognitionRef.current?.stop();
@@ -308,12 +310,11 @@ export default function AveriaAI() {
       toast.error('Could not start voice input.');
     }
   };
-
   useEffect(() => () => {
     recognitionRef.current?.stop();
     if (typeof window !== 'undefined') window.speechSynthesis?.cancel();
   }, []);
-
+  // Gemini-style dynamic composer: grow with content, shrink back on send/clear.
   useEffect(() => {
     const el = inputRef.current;
     if (!el) return;
@@ -335,13 +336,17 @@ export default function AveriaAI() {
     : conversations;
   const userFirstName = (user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split('@')[0] || 'Friend').split(' ')[0];
 
+  // Broadcast the active conversation so the global sidebar can highlight it
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('averia:active-conv', { detail: { id: activeConvId } }));
   }, [activeConvId]);
 
+
+
+  // Load peer's PERSONAL conversations + messages when in mirror=peer mode (read-only)
   useEffect(() => {
     if (!mirrorPeer || !scope.workspaceId || !scope.peerId) return;
-    setSidebarOpen(true);
+    setSidebarOpen(true); // expose thread list immediately for browsing history
     (async () => {
       const { data: convs, error } = await supabase.rpc('get_peer_ai_conversations', {
         _workspace_id: scope.workspaceId, _target_user: scope.peerId,
@@ -362,25 +367,10 @@ export default function AveriaAI() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mirrorPeer, scope.workspaceId, scope.peerId]);
 
-  // Clean auth guard: never redirect while auth is loading or OAuth params are resolving
   useEffect(() => {
-    if (authLoading) return;
-
-    if (user || session?.user) {
-      loadConversations();
-      return;
-    }
-
-    // Only redirect if there is genuinely no OAuth callback in progress and no user
-    const hasOAuthParams =
-      typeof window !== 'undefined' &&
-      (window.location.search.includes('code=') ||
-       window.location.hash.includes('access_token='));
-
-    if (!hasOAuthParams) {
-      navigate('/auth', { replace: true });
-    }
-  }, [user, session, authLoading, navigate]);
+    if (!user) { navigate('/auth'); return; }
+    loadConversations();
+  }, [user]);
 
   useEffect(() => {
     if (!initialQueryHandled.current && user) {
@@ -392,6 +382,7 @@ export default function AveriaAI() {
     }
   }, [user, searchParams]);
 
+  // Global AppShell sidebar bridge — react to shell-driven actions.
   useEffect(() => {
     const onNew = () => handleNewChat();
     const onSelect = (e: any) => { const id = e?.detail?.id; if (id) selectConversation(id); };
@@ -408,6 +399,7 @@ export default function AveriaAI() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Auto-detect code and trigger preview + hot-reload + Creation auto-pipeline
   const savedProjectRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
@@ -415,9 +407,10 @@ export default function AveriaAI() {
       const code = extractCodeForPreview(lastAssistant.content);
       if (code && code !== canvasContent) {
         setCanvasContent(code);
-        setPreviewKey(k => k + 1);
+        setPreviewKey(k => k + 1); // force iframe remount for hot-reload
         setPreviewError(null);
         if (isMobile) setMobileView('preview');
+        // === Auto-pipeline: push generated app/code into Creation vault (agentic / project) ===
         const sig = `${activeConvId}::${code.slice(0, 80)}`;
         if (user && !scope.isJoint && activeConvId && !savedProjectRef.current.has(sig)) {
           savedProjectRef.current.add(sig);
@@ -441,6 +434,7 @@ export default function AveriaAI() {
     }
   }, [messages]);
 
+  // JOINT scope: subscribe to realtime shared brain messages so both devices sync live.
   useEffect(() => {
     if (!scope.isJoint || !scope.workspaceId) return;
     const ws = scope.workspaceId;
@@ -448,7 +442,9 @@ export default function AveriaAI() {
       .channel(`shared-ai-${ws}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'shared_ai_messages', filter: `workspace_id=eq.${ws}` }, (payload) => {
         const m: any = payload.new;
+        // Only render if it belongs to the active thread
         if (activeConvId && m.conversation_id && m.conversation_id !== activeConvId) return;
+        // Skip if it's our own message we already optimistically rendered
         if (m.author_id === scope.myId && m.role === 'user') return;
         setMessages(prev => {
           const last = prev[prev.length - 1];
@@ -460,6 +456,7 @@ export default function AveriaAI() {
     return () => { supabase.removeChannel(ch); };
   }, [scope.isJoint, scope.workspaceId, scope.myId, activeConvId]);
 
+  // JOINT scope: auto-open the most recent shared conversation on entry (or create one).
   useEffect(() => {
     if (scope.isJoint && scope.workspaceId && user && !activeConvId) {
       (async () => {
@@ -477,9 +474,9 @@ export default function AveriaAI() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope.isJoint, scope.workspaceId, user]);
 
+
   const loadConversations = async () => {
-    const activeUser = user || session?.user;
-    if (!activeUser) return;
+    if (!user) return;
     if (scope.isJoint && scope.workspaceId) {
       const { data } = await supabase
         .from('shared_ai_conversations')
@@ -492,13 +489,14 @@ export default function AveriaAI() {
     const { data } = await supabase
       .from('ai_conversations')
       .select('*')
-      .eq('user_id', activeUser.id)
+      .eq('user_id', user.id)
       .order('updated_at', { ascending: false });
     if (data) setConversations(data as Conversation[]);
   };
 
   const loadMessages = async (convId: string) => {
     if (scope.isJoint && scope.workspaceId) {
+      // Multi-thread: filter shared_ai_messages by conversation_id; fallback to workspace-only
       const { data } = await supabase
         .from('shared_ai_messages')
         .select('*')
@@ -516,38 +514,30 @@ export default function AveriaAI() {
     if (data) setMessages(data.map((m: any) => ({ role: m.role, content: m.content })));
   };
 
+
   const ensureSession = async (): Promise<boolean> => {
-    if (!user && !session?.user) {
-      toast.error('Please log in');
-      navigate('/auth', { replace: true });
-      return false;
-    }
+    if (!user) { toast.error('Please log in'); navigate('/auth'); return false; }
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
+      let { data: sessionData } = await supabase.auth.getSession();
       if (!sessionData?.session) {
         const { data: refreshed } = await supabase.auth.refreshSession();
-        if (!refreshed?.session) {
-          toast.error('Session expired. Please log in again.');
-          navigate('/auth', { replace: true });
-          return false;
-        }
+        if (!refreshed?.session) { toast.error('Session expired. Please log in again.'); navigate('/auth'); return false; }
       }
-      const currentSession = sessionData?.session;
-      if (currentSession?.expires_at) {
+      const session = sessionData?.session;
+      if (session?.expires_at) {
         const now = Math.floor(Date.now() / 1000);
-        if (currentSession.expires_at - now < 120) {
+        if (session.expires_at - now < 120) {
           await supabase.auth.refreshSession();
         }
       }
       return true;
-    } catch {
-      return false;
-    }
+    } catch { return false; }
   };
 
   const createConversation = async (): Promise<string | null> => {
     if (!(await ensureSession())) return null;
     try {
+      // JOINT: always create a new shared thread in this workspace (multi-thread enabled).
       if (scope.isJoint && scope.workspaceId) {
         const { data: created, error } = await supabase
           .from('shared_ai_conversations')
@@ -599,6 +589,7 @@ export default function AveriaAI() {
     }
   };
 
+
   const handleNewChat = () => {
     if (mirrorPeer) { toast.info('Read-only mirror — cannot create new threads'); return; }
     if (scope.isJoint) { toast.info('Joint Brain is locked to one shared thread'); return; }
@@ -628,6 +619,7 @@ export default function AveriaAI() {
   const deleteConversation = async (convId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (scope.isJoint) {
+      // Joint: delete the shared conv + its messages (workspace peers share ownership)
       await supabase.from('shared_ai_messages').delete().eq('conversation_id', convId);
       await supabase.from('shared_ai_conversations').delete().eq('id', convId);
     } else {
@@ -637,6 +629,7 @@ export default function AveriaAI() {
     if (activeConvId === convId) handleNewChat();
     window.dispatchEvent(new CustomEvent('averia:conv-changed'));
   };
+
 
   const handlePublish = async () => {
     setIsDeploying(true);
@@ -651,7 +644,7 @@ export default function AveriaAI() {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const authToken = sessionData?.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
+      
       const resp = await fetch(CHAT_URL, {
         method: 'POST',
         headers: {
@@ -676,6 +669,7 @@ export default function AveriaAI() {
           }
           return updated;
         });
+        // === Auto-pipeline: push generated image into Creation vault (agentic / photo) ===
         if (user && !scope.isJoint) {
           await supabase.from('vault_items').insert({
             user_id: user.id,
@@ -721,7 +715,7 @@ export default function AveriaAI() {
 
   const addFiles = async (files: FileList | File[]) => {
     const arr = Array.from(files);
-    const MAX = 20 * 1024 * 1024;
+    const MAX = 20 * 1024 * 1024; // 20MB
     const accepted: Attachment[] = [];
     for (const f of arr) {
       if (f.size > MAX) { toast.error(`${f.name} exceeds 20MB`); continue; }
@@ -758,6 +752,7 @@ export default function AveriaAI() {
       }
     }
     if (files.length) { e.preventDefault(); await addFiles(files); return; }
+    // URL paste detection
     const text = e.clipboardData.getData('text');
     if (text && /^https?:\/\/\S+$/i.test(text.trim())) {
       e.preventDefault();
@@ -789,6 +784,7 @@ export default function AveriaAI() {
     setIsLoading(true);
     if (isMobile) setMobileView('chat');
 
+    // Build textual description of attachments for DB log + history
     const attachmentSummary = currentAttachments.length
       ? `\n\n[Attachments: ${currentAttachments.map(a => `${a.name} (${a.kind})`).join(', ')}]`
       : '';
@@ -808,6 +804,8 @@ export default function AveriaAI() {
       setConversations(prev => prev.map(c => c.id === convId ? { ...c, title } : c));
     }
 
+
+    // Build payload messages: convert attachments into multimodal content parts for the latest msg
     const payloadMessages = newMessages.map((m, idx) => {
       if (idx === newMessages.length - 1 && m.attachments && m.attachments.length > 0) {
         const parts: any[] = [{ type: 'text', text: `${m.content}\n\nPerform DEEP FORENSIC analysis on each attachment. Detect AI generation, deepfakes, manipulation, splicing, voice cloning, or phishing. Provide a percentage confidence score and highlight specific anomalies.` }];
@@ -829,7 +827,7 @@ export default function AveriaAI() {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const authToken = sessionData?.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
+      
       const resp = await fetch(CHAT_URL, {
         method: 'POST',
         headers: {
@@ -913,27 +911,15 @@ export default function AveriaAI() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
 
-  const hasOAuthParams =
-    typeof window !== 'undefined' &&
-    (window.location.search.includes('code=') ||
-     window.location.hash.includes('access_token='));
-
-  if (authLoading || (hasOAuthParams && !user && !session?.user)) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-[#1A1A24] text-[#EDEDED]">
-        <div className="animate-pulse text-sm font-medium">Loading Averia AI...</div>
-      </div>
-    );
-  }
-  if (!user && !session?.user) return null;
+  if (!user) return null;
 
   const hasCanvas = canvasContent || canvasImageUrl;
-  const activeUserObj = user || session?.user;
-  const userName = activeUserObj?.user_metadata?.full_name || activeUserObj?.user_metadata?.name || activeUserObj?.email?.split('@')[0] || '';
+  const userName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || '';
   const fileTree = generateFileTree(canvasContent);
 
   const deviceWidths = { desktop: '100%', tablet: '768px', mobile: '375px' };
 
+  // Mobile: show either chat or preview
   const showChat = !isMobile || mobileView === 'chat';
   const showCanvas = !isMobile ? hasCanvas : (hasCanvas && mobileView === 'preview');
 
@@ -977,6 +963,8 @@ export default function AveriaAI() {
       )}
       <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden min-w-0">
 
+        
+        
         {/* Mobile View Toggle */}
         {isMobile && hasCanvas && (
           <div className="flex border-b border-border shrink-0 bg-card">
@@ -996,9 +984,15 @@ export default function AveriaAI() {
         )}
 
         <div className="flex-1 flex overflow-hidden">
+          {/* Inner sidebar removed — the global AppShell sidebar owns chat state. */}
+
+
+
+
           {/* Chat Area */}
           {showChat && (
             <div className={`flex-1 flex flex-col min-w-0 ${!isMobile && hasCanvas ? 'max-w-[50%]' : ''}`}>
+              {/* Inner page header removed — global chrome ([☰] + [DP]) owns the top bar. */}
               {mirrorPeer && (
                 <div className="h-12 flex items-center justify-end px-3 shrink-0">
                   <button
@@ -1011,6 +1005,7 @@ export default function AveriaAI() {
                   </button>
                 </div>
               )}
+
 
               {/* Messages */}
               <ScrollArea className="flex-1 px-4">
@@ -1025,6 +1020,7 @@ export default function AveriaAI() {
                         <p className="text-muted-foreground text-sm max-w-md">
                           Aapka intelligent agent — websites banao, images generate karo, news verify karo. Ask me anything!
                         </p>
+
                       </motion.div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg w-full">
                         {[
@@ -1115,6 +1111,7 @@ export default function AveriaAI() {
               {/* Input */}
               <div className="border-t border-white/5 backdrop-blur-sm shadow-none p-3 md:p-4 shrink-0">
                 <div className="max-w-3xl mx-auto">
+                  {/* Attachment chips */}
                   {attachments.length > 0 && (
                     <div className="flex flex-wrap gap-2 mb-2">
                       {attachments.map(a => (
@@ -1139,6 +1136,7 @@ export default function AveriaAI() {
                     </div>
                   )}
                   <div className="flex items-end gap-2 rounded-full bg-[#181824] border border-white/15 px-4 py-3 shadow-2xl backdrop-blur-xl">
+                    {/* Plus / attach menu */}
                     <div className="relative shrink-0">
                       <Button
                         onClick={() => setShowPlusMenu(v => !v)}
@@ -1246,6 +1244,7 @@ export default function AveriaAI() {
                   <p className="text-[10px] text-muted-foreground text-center mt-2 hidden md:block">
                     Averia AI — Verify • Build • Generate
                   </p>
+
                 </div>
               </div>
             </div>
@@ -1260,6 +1259,7 @@ export default function AveriaAI() {
                 exit={isMobile ? { opacity: 0 } : { width: 0, opacity: 0 }}
                 className={`border-l border-border bg-background flex flex-col overflow-hidden ${isMobile ? 'flex-1' : ''}`}
               >
+                {/* Canvas Header */}
                 <div className="h-12 border-b border-border flex items-center justify-between px-2 md:px-3 shrink-0 overflow-x-auto">
                   <div className="flex items-center gap-1">
                     {canvasContent && (
@@ -1282,6 +1282,7 @@ export default function AveriaAI() {
                     )}
                   </div>
                   <div className="flex items-center gap-1">
+                    {/* Device toggles (desktop only) */}
                     {canvasContent && canvasMode === 'preview' && !isMobile && (
                       <div className="flex items-center gap-0.5 mr-1">
                         <Button variant={previewDevice === 'desktop' ? 'secondary' : 'ghost'} size="icon" className="h-6 w-6" onClick={() => setPreviewDevice('desktop')}>
@@ -1313,6 +1314,7 @@ export default function AveriaAI() {
                   </div>
                 </div>
 
+                {/* Deploy URL bar */}
                 {deployUrl && (
                   <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="border-b border-border bg-green-500/10 px-3 py-2 flex items-center gap-2">
                     <Globe className="h-3.5 w-3.5 text-green-500 shrink-0" />
@@ -1323,6 +1325,7 @@ export default function AveriaAI() {
                   </motion.div>
                 )}
 
+                {/* Deploy animation */}
                 {isDeploying && (
                   <div className="border-b border-border bg-primary/5 px-3 py-2">
                     <div className="flex items-center gap-2 mb-1">
@@ -1337,6 +1340,7 @@ export default function AveriaAI() {
                   </div>
                 )}
 
+                {/* Canvas Content */}
                 <div className="flex-1 flex overflow-hidden">
                   {canvasContent && canvasMode === 'files' && (
                     <div className="w-full overflow-auto p-2">
