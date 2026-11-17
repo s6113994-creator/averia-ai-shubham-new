@@ -105,7 +105,7 @@ function detectDate(text: string): Date | null {
 }
 
 export default function Chat() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const scope = useScope();
   const isJoint = scope.isJoint && !!scope.workspaceId;
@@ -161,7 +161,10 @@ export default function Chat() {
   const chunks = useRef<BlobPart[]>([]);
   const typingCh = useRef<any>(null);
 
-  useEffect(() => { if (!user) navigate('/auth'); }, [user, navigate]);
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) navigate('/auth');
+  }, [user, authLoading, navigate]);
 
   /* ---------------- isolated load per environment ---------------- */
   const loadAll = useCallback(async () => {
@@ -625,7 +628,7 @@ export default function Chat() {
   const sharedVoice = thread.filter((m) => m.kind === 'voice');
   const sharedFiles = thread.filter((m) => m.kind === 'file');
 
-  if (!user) return null;
+  if (authLoading || !user) return null;
 
   const disappearLabel = (s?: number) => (!s ? 'Off' : s >= 604800 ? '7d' : s >= 86400 ? '24h' : `${s}s`);
 

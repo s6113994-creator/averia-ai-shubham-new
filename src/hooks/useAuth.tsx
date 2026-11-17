@@ -28,6 +28,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (event === 'SIGNED_OUT') {
           console.log('[Auth] User signed out');
         }
+        if (event === 'SIGNED_IN') {
+          console.log('[Auth] User signed in successfully');
+        }
         setSession(session);
         setUser(session?.user ?? null);
         setLoading(false);
@@ -60,7 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signUp = async (email: string, password: string, fullName?: string) => {
-    const redirectUrl = `${window.location.origin}/`;
+    const redirectUrl = `${window.location.origin}/averia-ai`;
     
     const { error } = await supabase.auth.signUp({
       email,

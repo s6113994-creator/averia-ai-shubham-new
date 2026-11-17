@@ -33,7 +33,7 @@ export default function Auth() {
 
   useEffect(() => {
     if (user) {
-      navigate('/news');
+      navigate('/averia-ai', { replace: true });
     }
   }, [user, navigate]);
 
@@ -66,7 +66,7 @@ export default function Auth() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/dashboard`,
+          redirectTo: `${window.location.origin}/averia-ai`,
         },
       });
       
@@ -100,7 +100,7 @@ export default function Auth() {
           }
         } else {
           toast.success('Welcome to Averia AI!');
-          navigate('/news');
+          navigate('/averia-ai', { replace: true });
         }
       } else {
         const { error } = await signIn(email, password);
@@ -112,7 +112,7 @@ export default function Auth() {
           }
         } else {
           toast.success('Welcome back!');
-          navigate('/news');
+          navigate('/averia-ai', { replace: true });
         }
       }
     } catch (error: any) {
