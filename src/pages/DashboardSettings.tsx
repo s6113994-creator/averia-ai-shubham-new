@@ -36,7 +36,7 @@ const SECTIONS: Section[] = [
 type SectionId = string;
 
 export default function DashboardSettings() {
-  const { user, loading, signOut } = useAuth();
+  const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const scope = useScope();
   const [params, setParams] = useSearchParams();
@@ -44,17 +44,14 @@ export default function DashboardSettings() {
   const [active, setActive] = useState<SectionId>(initial);
   const { isSupported, isSubscribed, isLoading: pushLoading, subscribe, unsubscribe } = usePushNotifications();
 
-  useEffect(() => {
-    if (loading) return;
-    if (!user) navigate('/auth');
-  }, [user, loading, navigate]);
+  useEffect(() => { if (!user) navigate('/auth'); }, [user, navigate]);
 
   const switchSection = (id: SectionId) => {
     setActive(id);
     setParams({ section: id }, { replace: true });
   };
 
-  if (loading || !user) return null;
+  if (!user) return null;
 
   return (
     <Layout>

@@ -119,23 +119,15 @@ function ListingModal({ open, onOpenChange, onCreated }: { open: boolean; onOpen
   const [otp, setOtp] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otpVerified, setOtpVerified] = useState(false);
-  const [otpUserId, setOtpUserId] = useState<string | null>(null);
-  const [verifiedUserId, setVerifiedUserId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [sendingOtp, setSendingOtp] = useState(false);
 
-  const reset = () => { setTitle(''); setDescription(''); setCategory('Website'); setDemoUrl(''); setTechStack(''); setPrice(''); setUpiId(''); setUpiName(''); setQrFile(null); setZipFile(null); setQrMessage(''); setOtp(''); setOtpSent(false); setOtpVerified(false); setOtpUserId(null); setVerifiedUserId(null); };
+  const reset = () => { setTitle(''); setDescription(''); setCategory('Website'); setDemoUrl(''); setTechStack(''); setPrice(''); setUpiId(''); setUpiName(''); setQrFile(null); setZipFile(null); setQrMessage(''); setOtp(''); setOtpSent(false); setOtpVerified(false); };
   const close = (value: boolean) => { if (!value) reset(); onOpenChange(value); };
 
   useEffect(() => {
     if (!open) return;
-    let active = true;
-    supabase.auth.getUser().then(({ data }) => {
-      if (!active) return;
-      setEmail(data.user?.email ?? user?.email ?? '');
-      setOtpUserId(data.user?.id ?? null);
-    });
-    return () => { active = false; };
+    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? user?.email ?? ''));
   }, [open, user?.email]);
 
   const onQrFile = async (file: File | null) => {
@@ -147,68 +139,26 @@ function ListingModal({ open, onOpenChange, onCreated }: { open: boolean; onOpen
   };
 
   const sendOtp = async () => {
+    if (!email) return;
     setSendingOtp(true);
-    try {
-      const { data, error: userError } = await supabase.auth.getUser();
-      const activeUser = data.user;
-      if (userError || !activeUser?.email || (user && activeUser.id !== user.id)) {
-        throw new Error('Please sign in again before verifying your listing email.');
-      }
-      const { error } = await supabase.auth.signInWithOtp({ email: activeUser.email, options: { shouldCreateUser: false } });
-      if (error) throw error;
-      setEmail(activeUser.email);
-      setOtpUserId(activeUser.id);
-      setOtp('');
-      setOtpSent(true);
-      setOtpVerified(false);
-      setVerifiedUserId(null);
-      toast.success('A verification code was sent to your signed-in email.');
-    } catch (error: any) {
-      toast.error(error?.message || 'Could not send the verification code. Please try again.');
-    } finally {
-      setSendingOtp(false);
-    }
+    const { error } = await supabase.auth.signInWithOtp({ email });
+    setSendingOtp(false);
+    if (error) { toast.error(error.message); return; }
+    setOtpSent(true); setOtpVerified(false); toast.success('OTP sent to your email');
   };
 
   const verifyOtp = async () => {
-    if (!email || otp.length !== 6 || !otpUserId) return;
+    if (!email || otp.length !== 6) return;
     setSendingOtp(true);
-    try {
-      const { data, error } = await supabase.auth.verifyOtp({ email, token: otp, type: 'email' });
-      if (error) {
-        const message = error.message.toLowerCase();
-        if (message.includes('expired') || message.includes('otp_expired')) {
-          setOtp('');
-          setOtpVerified(false);
-          setVerifiedUserId(null);
-          toast.error('That code has expired. Resend a fresh code to continue.');
-          return;
-        }
-        throw error;
-      }
-      if (data.user?.id !== otpUserId || data.user.email?.toLowerCase() !== email.toLowerCase()) {
-        setOtpVerified(false);
-        setVerifiedUserId(null);
-        throw new Error('The verified account does not match the signed-in listing account.');
-      }
-      setOtpVerified(true);
-      setVerifiedUserId(data.user.id);
-      toast.success('Email verified');
-    } catch (error: any) {
-      toast.error(error?.message || 'The code could not be verified. Resend a fresh code and try again.');
-    } finally {
-      setSendingOtp(false);
-    }
+    const { error } = await supabase.auth.verifyOtp({ email, token: otp, type: 'email' });
+    setSendingOtp(false);
+    if (error) { toast.error(error.message); return; }
+    setOtpVerified(true); toast.success('Email verified');
   };
 
   const submit = async () => {
     if (!user) { toast.error('Sign in to list a project'); return; }
-    const { data: activeSession } = await supabase.auth.getUser();
-    if (!otpVerified || verifiedUserId !== user.id || otpUserId !== user.id || activeSession.user?.id !== user.id) {
-      toast.error('Verify the signed-in email before submitting this listing.');
-      return;
-    }
-    if (!title.trim() || !description.trim() || !price || !upiId.trim() || !upiName.trim() || !zipFile || !qrFile) { toast.error('Complete every listing field'); return; }
+    if (!title.trim() || !description.trim() || !price || !upiId.trim() || !upiName.trim() || !zipFile || !qrFile || !otpVerified) { toast.error('Complete every listing and verification field'); return; }
     setSaving(true);
     try {
       const { data: profile } = await sb.from('profiles').select('full_name, averia_id').eq('user_id', user.id).maybeSingle();

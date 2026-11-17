@@ -231,7 +231,7 @@ function FileTree({ nodes, depth = 0 }: { nodes: FileNode[]; depth?: number }) {
 import { useScope } from '@/lib/scope';
 
 export default function AveriaAI() {
-  const { user, loading: authLoading } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const scope = useScope();
@@ -368,10 +368,9 @@ export default function AveriaAI() {
   }, [mirrorPeer, scope.workspaceId, scope.peerId]);
 
   useEffect(() => {
-    if (authLoading) return;
     if (!user) { navigate('/auth'); return; }
     loadConversations();
-  }, [user, authLoading, navigate]);
+  }, [user]);
 
   useEffect(() => {
     if (!initialQueryHandled.current && user) {
@@ -911,17 +910,6 @@ export default function AveriaAI() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
-
-  if (authLoading) {
-    return (
-      <div className="flex h-full w-full items-center justify-center bg-background text-foreground">
-        <div className="flex items-center gap-3">
-          <AveriaLogo size="md" animate />
-          <span className="font-heading text-lg font-semibold">Averia AI</span>
-        </div>
-      </div>
-    );
-  }
 
   if (!user) return null;
 

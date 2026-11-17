@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.1"
+    PostgrestVersion: "14.5"
   }
   public: {
     Tables: {
@@ -451,7 +451,6 @@ export type Database = {
           approved_by: string | null
           created_at: string
           id: string
-          payer_upi_username: string | null
           plan: string
           screenshot_url: string
           status: Database["public"]["Enums"]["payment_status"]
@@ -467,7 +466,6 @@ export type Database = {
           approved_by?: string | null
           created_at?: string
           id?: string
-          payer_upi_username?: string | null
           plan?: string
           screenshot_url?: string
           status?: Database["public"]["Enums"]["payment_status"]
@@ -483,7 +481,6 @@ export type Database = {
           approved_by?: string | null
           created_at?: string
           id?: string
-          payer_upi_username?: string | null
           plan?: string
           screenshot_url?: string
           status?: Database["public"]["Enums"]["payment_status"]
@@ -1426,7 +1423,6 @@ export type Database = {
         Args: { _transaction_id: string }
         Returns: boolean
       }
-      current_user_is_admin: { Args: never; Returns: boolean }
       current_workspace_peer: {
         Args: { _workspace_id: string }
         Returns: string

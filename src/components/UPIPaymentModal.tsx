@@ -8,26 +8,22 @@ import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { motion, AnimatePresence } from 'framer-motion';
-import paymentQr from '@/assets/ganesh-rajak-upi-qr.jpeg';
-import type { SubscriptionPlanId } from '@/lib/subscriptionPlans';
 
 interface UPIPaymentModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   planName: string;
   amount: number;
-  planId: SubscriptionPlanId;
 }
 
-const UPI_ID = 'ganeshrajak123451-1@oksbi';
+const UPI_ID = 'ganeshrajak123451@okhdfcbank';
 
-export function UPIPaymentModal({ open, onOpenChange, planName, amount, planId }: UPIPaymentModalProps) {
+export function UPIPaymentModal({ open, onOpenChange, planName, amount }: UPIPaymentModalProps) {
   const { user } = useAuth();
   const [step, setStep] = useState<'pay' | 'upload' | 'verifying' | 'submitted'>('pay');
   const [screenshot, setScreenshot] = useState<File | null>(null);
   const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
   const [utrNumber, setUtrNumber] = useState('');
-  const [payerUpiUsername, setPayerUpiUsername] = useState('');
   const [verifying, setVerifying] = useState(false);
   const [aiResult, setAiResult] = useState<{
     verified: boolean;
@@ -38,7 +34,7 @@ export function UPIPaymentModal({ open, onOpenChange, planName, amount, planId }
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const upiIntentUrl = `upi://pay?pa=${UPI_ID}&pn=Ganesh%20Rajak&am=${amount}&cu=INR&tn=Averia%20AI%20${encodeURIComponent(planName)}%20Subscription`;
+  const upiIntentUrl = `upi://pay?pa=${UPI_ID}&pn=Averia%20AI&am=${amount}&cu=INR&tn=Averia%20AI%20Pro%20Subscription`;
 
   const handlePayClick = () => {
     // Try to open UPI app
@@ -123,8 +119,8 @@ export function UPIPaymentModal({ open, onOpenChange, planName, amount, planId }
   };
 
   const handleSubmit = async () => {
-    if (!screenshot || !/^\d{12}$/.test(utrNumber) || !payerUpiUsername.trim() || !user) {
-      toast.error('Add your UPI username, payment screenshot, and 12-digit UTR.');
+    if (!screenshot || !utrNumber || !user) {
+      toast.error('Please provide screenshot and UTR number');
       return;
     }
 
@@ -145,10 +141,8 @@ export function UPIPaymentModal({ open, onOpenChange, planName, amount, planId }
         .from('payment_requests')
         .insert({
           user_id: user.id,
-          plan: planId,
           amount,
           utr_number: utrNumber,
-          payer_upi_username: payerUpiUsername.trim(),
           screenshot_url: base64Url,
           ai_verification_result: aiResult,
         });
@@ -177,7 +171,6 @@ export function UPIPaymentModal({ open, onOpenChange, planName, amount, planId }
     setScreenshot(null);
     setScreenshotPreview(null);
     setUtrNumber('');
-    setPayerUpiUsername('');
     setAiResult(null);
     onOpenChange(false);
   };
@@ -213,7 +206,6 @@ export function UPIPaymentModal({ open, onOpenChange, planName, amount, planId }
               </div>
 
               <div className="space-y-3">
-                <img src={paymentQr} alt="Ganesh Rajak UPI payment QR code" className="mx-auto max-h-64 w-full max-w-64 rounded-lg object-contain" />
                 <div className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
                   <div>
                     <p className="text-sm text-muted-foreground">UPI ID</p>
@@ -352,22 +344,11 @@ export function UPIPaymentModal({ open, onOpenChange, planName, amount, planId }
 
               {/* UTR Input */}
               <div className="space-y-2">
-                <Label htmlFor="payer-upi">Your UPI username</Label>
-                <Input
-                  id="payer-upi"
-                  value={payerUpiUsername}
-                  onChange={(e) => setPayerUpiUsername(e.target.value.trimStart())}
-                  placeholder="name@bank"
-                  autoComplete="off"
-                />
-              </div>
-
-              <div className="space-y-2">
                 <Label htmlFor="utr">UTR / Transaction ID</Label>
                 <Input
                   id="utr"
                   value={utrNumber}
-                  onChange={(e) => setUtrNumber(e.target.value.replace(/\D/g, '').slice(0, 12))}
+                  onChange={(e) => setUtrNumber(e.target.value)}
                   placeholder="12-digit UPI Transaction ID"
                   className="bg-secondary/30"
                 />
@@ -379,7 +360,7 @@ export function UPIPaymentModal({ open, onOpenChange, planName, amount, planId }
               <Button
                 onClick={handleSubmit}
                 className="w-full glow-primary"
-                disabled={!screenshot || !/^\d{12}$/.test(utrNumber) || !payerUpiUsername.trim() || verifying}
+                disabled={!screenshot || !utrNumber || verifying}
               >
                 {verifying ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />

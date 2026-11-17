@@ -6,6 +6,7 @@ import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { useNavigate } from 'react-router-dom';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
@@ -24,8 +25,6 @@ interface PaymentRequest {
   user_id: string;
   amount: number;
   utr_number: string;
-  plan: string;
-  payer_upi_username: string | null;
   screenshot_url: string;
   status: 'pending' | 'approved' | 'rejected';
   ai_verification_result: AIVerificationResult | null;
@@ -50,19 +49,11 @@ interface SupportMessage {
   admin_response: string | null;
 }
 
-interface AdminUser {
-  user_id: string;
-  email: string | null;
-  name: string | null;
-  tier: string;
-  expires_at: string | null;
-  ats: number;
-}
-
 const ADMIN_EMAIL = 's6113994@gmail.com';
 
 export default function AdminVault() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [requests, setRequests] = useState<PaymentRequest[]>([]);
@@ -75,30 +66,22 @@ export default function AdminVault() {
   const [showScreenshot, setShowScreenshot] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
-  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
-  const [tierChanges, setTierChanges] = useState<Record<string, string>>({});
-  const [tierSavingUser, setTierSavingUser] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) {
-      setIsAdmin(false);
-      setLoading(false);
+      navigate('/auth');
       return;
     }
 
-    // Allow the configured admin account to open the dashboard directly.
-    // Privileged reads and changes remain enforced by backend policies/RPCs.
-    if (user.email?.trim().toLowerCase() !== ADMIN_EMAIL) {
-      setIsAdmin(false);
-      setLoading(false);
+    // Check if user email matches admin email
+    if (user.email !== ADMIN_EMAIL) {
+      toast.error('Access Denied: Super Admin only');
+      navigate('/');
       return;
     }
 
-    setIsAdmin(true);
-    setLoading(true);
-    void Promise.all([fetchPaymentRequests(), fetchSupportMessages(), fetchAdminUsers()])
-      .finally(() => setLoading(false));
-  }, [user]);
+    checkAdminStatus();
+  }, [user, navigate]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -140,6 +123,35 @@ export default function AdminVault() {
       supabase.removeChannel(messagesChannel);
     };
   }, [isAdmin]);
+
+  const checkAdminStatus = async () => {
+    if (!user) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('user_roles')
+        .select('role')
+        .eq('user_id', user.id)
+        .eq('role', 'admin')
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!data) {
+        toast.error('Access Denied: Admin only');
+        navigate('/');
+        return;
+      }
+
+      setIsAdmin(true);
+      await Promise.all([fetchPaymentRequests(), fetchSupportMessages()]);
+    } catch (error) {
+      console.error('Admin check error:', error);
+      navigate('/');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const fetchPaymentRequests = async () => {
     try {
@@ -188,43 +200,29 @@ export default function AdminVault() {
     }
   };
 
-  const fetchAdminUsers = async () => {
-    try {
-      const { data, error } = await supabase.rpc('admin_list_users');
-      if (error) throw error;
-      setAdminUsers(Array.isArray(data) ? data as unknown as AdminUser[] : []);
-    } catch (error) {
-      console.error('Admin users fetch error:', error);
-      toast.error('Failed to load user tiers');
-    }
-  };
-
-  const handleTierChange = async (adminUser: AdminUser) => {
-    const tier = tierChanges[adminUser.user_id] ?? adminUser.tier;
-    setTierSavingUser(adminUser.user_id);
-    try {
-      const { error } = await supabase.rpc('admin_set_user_subscription', { _user_id: adminUser.user_id, _tier: tier });
-      if (error) throw error;
-      toast.success(`Subscription tier updated for ${adminUser.email || 'user'}`);
-      await fetchAdminUsers();
-    } catch (error: any) {
-      toast.error(error?.message || 'Could not update this subscription tier');
-    } finally {
-      setTierSavingUser(null);
-    }
-  };
-
   const handleApprove = async () => {
     if (!selectedRequest || !user) return;
 
     setProcessing(true);
     try {
-      const { error: reviewError } = await supabase.rpc('admin_review_payment', {
-        _payment_id: selectedRequest.id,
-        _decision: 'approved',
-        _admin_notes: adminNotes || '',
-      });
-      if (reviewError) throw reviewError;
+      const { error: updateError } = await supabase
+        .from('payment_requests')
+        .update({
+          status: 'approved',
+          admin_notes: adminNotes || null,
+          approved_at: new Date().toISOString(),
+          approved_by: user.id,
+        })
+        .eq('id', selectedRequest.id);
+
+      if (updateError) throw updateError;
+
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({ is_pro: true })
+        .eq('user_id', selectedRequest.user_id);
+
+      if (profileError) throw profileError;
 
       await supabase.functions.invoke('send-notification', {
         body: {
@@ -236,7 +234,7 @@ export default function AdminVault() {
         },
       });
 
-      toast.success(`Payment approved! ${selectedRequest.plan} is active for 30 days.`);
+      toast.success('Payment approved! User upgraded to Pro.');
       setSelectedRequest(null);
       setAdminNotes('');
       await fetchPaymentRequests();
@@ -253,11 +251,14 @@ export default function AdminVault() {
 
     setProcessing(true);
     try {
-      const { error } = await supabase.rpc('admin_review_payment', {
-        _payment_id: selectedRequest.id,
-        _decision: 'rejected',
-        _admin_notes: adminNotes || 'Payment verification failed',
-      });
+      const { error } = await supabase
+        .from('payment_requests')
+        .update({
+          status: 'rejected',
+          admin_notes: adminNotes || 'Payment verification failed',
+        })
+        .eq('id', selectedRequest.id);
+
       if (error) throw error;
 
       await supabase.functions.invoke('send-notification', {
@@ -273,7 +274,7 @@ export default function AdminVault() {
       toast.success('Payment rejected');
       setSelectedRequest(null);
       setAdminNotes('');
-      await Promise.all([fetchPaymentRequests(), fetchAdminUsers()]);
+      await fetchPaymentRequests();
     } catch (error) {
       console.error('Reject error:', error);
       toast.error('Failed to reject payment');
@@ -453,10 +454,6 @@ export default function AdminVault() {
                   </span>
                 )}
               </TabsTrigger>
-              <TabsTrigger value="users" className="gap-2">
-                <User className="h-4 w-4" />
-                User Tiers
-              </TabsTrigger>
             </TabsList>
 
             {/* Payments Tab */}
@@ -497,10 +494,6 @@ export default function AdminVault() {
                                 <span>₹{request.amount}</span>
                                 <span>•</span>
                                 <span>UTR: {request.utr_number}</span>
-                                <span>•</span>
-                                <span>Plan: {request.plan}</span>
-                                <span>•</span>
-                                <span>UPI: {request.payer_upi_username || 'Not provided'}</span>
                                 <span>•</span>
                                 <span>{new Date(request.created_at).toLocaleDateString()}</span>
                               </div>
@@ -586,37 +579,6 @@ export default function AdminVault() {
                 )}
               </div>
             </TabsContent>
-
-            <TabsContent value="users">
-              <div className="glass-card overflow-hidden rounded-xl">
-                <div className="flex items-center justify-between border-b border-border p-4">
-                  <div>
-                    <h2 className="font-heading font-semibold">User subscription tiers</h2>
-                    <p className="mt-1 text-sm text-muted-foreground">Changes are checked and applied by the secure admin service.</p>
-                  </div>
-                  <Button variant="outline" size="icon" onClick={fetchAdminUsers} aria-label="Refresh user tiers"><RefreshCw className="h-4 w-4" /></Button>
-                </div>
-                {adminUsers.length === 0 ? <div className="p-10 text-center text-muted-foreground">No user profiles found.</div> : <div className="divide-y divide-border">
-                  {adminUsers.map((adminUser) => {
-                    const selectedTier = tierChanges[adminUser.user_id] ?? adminUser.tier;
-                    return <div key={adminUser.user_id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="min-w-0">
-                        <p className="truncate font-medium">{adminUser.name || 'Averia member'}</p>
-                        <p className="truncate text-sm text-muted-foreground">{adminUser.email || 'Email unavailable'} · ATS {adminUser.ats}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <select aria-label={`Subscription tier for ${adminUser.email || adminUser.user_id}`} value={selectedTier} onChange={(event) => setTierChanges((current) => ({ ...current, [adminUser.user_id]: event.target.value }))} className="h-10 min-w-32 rounded-md border border-input bg-background px-3 text-sm">
-                          {['free', 'starter', 'pro', 'enterprise'].map((tier) => <option key={tier} value={tier}>{tier[0].toUpperCase() + tier.slice(1)}</option>)}
-                        </select>
-                        <Button onClick={() => handleTierChange(adminUser)} disabled={tierSavingUser === adminUser.user_id || selectedTier === adminUser.tier}>
-                          {tierSavingUser === adminUser.user_id ? <RefreshCw className="h-4 w-4 animate-spin" /> : 'Save tier'}
-                        </Button>
-                      </div>
-                    </div>;
-                  })}
-                </div>}
-              </div>
-            </TabsContent>
           </Tabs>
         </div>
       </div>
@@ -671,20 +633,10 @@ export default function AdminVault() {
                   <p className="font-mono text-sm">{selectedRequest.utr_number}</p>
                 </div>
                 <div className="glass-card p-3 rounded-lg">
-                  <p className="text-xs text-muted-foreground">Payer UPI username</p>
-                  <p className="font-mono text-sm break-all">{selectedRequest.payer_upi_username || 'Not provided'}</p>
-                </div>
-                <div className="glass-card p-3 rounded-lg">
-                  <p className="text-xs text-muted-foreground">Plan</p>
-                  <p className="font-medium text-sm">{selectedRequest.plan}</p>
-                </div>
-                <div className="glass-card p-3 rounded-lg">
                   <p className="text-xs text-muted-foreground">Date</p>
                   <p className="text-sm">{new Date(selectedRequest.created_at).toLocaleString()}</p>
                 </div>
               </div>
-
-              <p className="text-sm text-muted-foreground">Approving activates the selected plan immediately for 30 days.</p>
 
               <Button
                 variant="outline"

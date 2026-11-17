@@ -8,20 +8,6 @@
       "when": 1791618117945,
       "tag": "0000_subscription_tiers_secure_admin_controls_ats_monthly_cycle",
       "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1794721600324,
-      "tag": "0001_payment_upi_username_30_day_expiry",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1794837754958,
-      "tag": "0002_secure_payment_request_admin_access",
-      "breakpoints": true
     }
   ]
 }

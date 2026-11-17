@@ -2,16 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { SUBSCRIPTION_PLANS } from '@/lib/subscriptionPlans';
 
 describe('subscription catalog', () => {
-  it('keeps all displayed prices fixed and Enterprise Max unavailable', () => {
+  it('keeps the four monthly prices fixed', () => {
     expect(SUBSCRIPTION_PLANS.map(({ id, price }) => [id, price])).toEqual([
       ['free', 0],
       ['starter', 199],
       ['pro', 499],
       ['enterprise', 1999],
-      ['enterprise_max', 4999],
     ]);
-    expect(SUBSCRIPTION_PLANS[4].comingSoon).toBe(true);
-    expect(SUBSCRIPTION_PLANS[4].features).toEqual([]);
   });
 
   it('keeps Free limits and ATS reward exact', () => {

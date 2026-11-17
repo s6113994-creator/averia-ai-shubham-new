@@ -17,7 +17,6 @@ import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { ProBadge } from '@/components/ProBadge';
 import { NeuralIdentitySetup } from '@/components/NeuralIdentitySetup';
-import { AveriaLogo } from '@/components/AveriaLogo';
 import { useScope } from '@/lib/scope';
 
 interface ProfileData {
@@ -25,7 +24,7 @@ interface ProfileData {
 }
 
 export default function Dashboard() {
-  const { user, loading } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const scope = useScope();
 
@@ -33,12 +32,7 @@ export default function Dashboard() {
   const [peerProfile, setPeerProfile] = useState<ProfileData | null>(null);
   const [mirrorPeer, setMirrorPeer] = useState(false);
 
-  useEffect(() => {
-    if (loading) return;
-    if (!user) { navigate('/auth'); return; }
-    fetchProfile();
-    /* eslint-disable-next-line */
-  }, [user, loading]);
+  useEffect(() => { if (!user) { navigate('/auth'); return; } fetchProfile(); /* eslint-disable-next-line */ }, [user]);
 
   useEffect(() => {
     if (!scope.isJoint || !scope.peerId) { setPeerProfile(null); return; }
@@ -65,17 +59,6 @@ export default function Dashboard() {
   const scrollTo = useCallback((id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
-
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
-        <div className="flex items-center gap-3">
-          <AveriaLogo size="md" animate />
-          <span className="font-heading text-lg font-semibold">Averia AI</span>
-        </div>
-      </div>
-    );
-  }
 
   if (!user) return null;
 

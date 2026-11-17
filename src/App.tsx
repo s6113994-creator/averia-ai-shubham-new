@@ -58,7 +58,6 @@ const App = () => (
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/dashboard/settings" element={<DashboardSettings />} />
             <Route path="/payment-success" element={<PaymentSuccess />} />
-            <Route path="/admin" element={<AdminVault />} />
             <Route path="/admin-vault" element={<AdminVault />} />
             <Route path="/social" element={<Social />} />
             <Route path="/chat" element={<Chat />} />

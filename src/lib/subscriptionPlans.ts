@@ -1,4 +1,4 @@
-export type SubscriptionPlanId = 'free' | 'starter' | 'pro' | 'enterprise' | 'enterprise_max';
+export type SubscriptionPlanId = 'free' | 'starter' | 'pro' | 'enterprise';
 
 export interface SubscriptionPlan {
   id: SubscriptionPlanId;
@@ -7,7 +7,6 @@ export interface SubscriptionPlan {
   period: string;
   badge?: string;
   features: string[];
-  comingSoon?: boolean;
 }
 
 export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
@@ -63,15 +62,6 @@ export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
       'Unlimited Joint Brain Accounts',
       'Custom 3D Shaders & VIP Badge',
     ],
-  },
-  {
-    id: 'enterprise_max',
-    name: 'Enterprise Max',
-    price: 4999,
-    period: '/month',
-    badge: 'Coming soon',
-    features: [],
-    comingSoon: true,
   },
 ];
 

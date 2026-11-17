@@ -33,7 +33,7 @@ export default function Auth() {
 
   useEffect(() => {
     if (user) {
-      navigate('/averia-ai', { replace: true });
+      navigate('/news');
     }
   }, [user, navigate]);
 
@@ -63,13 +63,25 @@ export default function Auth() {
   const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/averia-ai`,
-        },
-      });
-      
+      const isLovable = window.location.hostname.includes('lovableproject.com') || window.location.hostname.includes('lovable.app');
+      let error = null;
+
+      if (isLovable) {
+        const { lovable } = await import('@/integrations/lovable');
+        const res = await lovable.auth.signInWithOAuth('google', {
+          redirect_uri: `${window.location.origin}/news`,
+        });
+        error = res.error;
+      } else {
+        const res = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: window.location.origin,
+          },
+        });
+        error = res.error;
+      }
+
       if (error) {
         console.error('Google OAuth error:', error);
         toast.error('Google sign in failed. Please try again.');
@@ -100,7 +112,7 @@ export default function Auth() {
           }
         } else {
           toast.success('Welcome to Averia AI!');
-          navigate('/averia-ai', { replace: true });
+          navigate('/news');
         }
       } else {
         const { error } = await signIn(email, password);
@@ -112,7 +124,7 @@ export default function Auth() {
           }
         } else {
           toast.success('Welcome back!');
-          navigate('/averia-ai', { replace: true });
+          navigate('/news');
         }
       }
     } catch (error: any) {
