@@ -45,20 +45,30 @@ export async function getGeminiKeys(supabase: any): Promise<KeyRecord[]> {
   const records: KeyRecord[] = [];
   const seen = new Set<string>();
 
-  // 1. From database table `gemini_api_keys`
+  // 1. From database table `gemini_api_keys` - fetch ALL keys ordered by error_count ASC
   try {
     const { data, error } = await supabase
       .from("gemini_api_keys")
-      .select("api_key, error_count")
-      .eq("is_active", true)
+      .select("api_key, error_count, is_active")
       .order("error_count", { ascending: true });
 
     if (!error && Array.isArray(data)) {
+      // First add active keys
       for (const row of data) {
         const k = row.api_key?.trim();
-        if (k && !seen.has(k)) {
+        if (k && row.is_active !== false && !seen.has(k)) {
           seen.add(k);
           records.push({ api_key: k, source: "database" });
+        }
+      }
+      // If fewer than 10 active keys were added, add remaining keys as fallback (never lock out keys permanently)
+      if (records.length < 10) {
+        for (const row of data) {
+          const k = row.api_key?.trim();
+          if (k && !seen.has(k)) {
+            seen.add(k);
+            records.push({ api_key: k, source: "database" });
+          }
         }
       }
     }
@@ -100,7 +110,7 @@ export async function getGeminiKeys(supabase: any): Promise<KeyRecord[]> {
 }
 
 /**
- * Call a single Gemini API key directly (non-streaming) — used by swarm agents.
+ * Call a single Gemini API key directly (non-streaming) with automatic model fallback.
  * Returns the full text content or empty string on failure.
  */
 export async function callSingleGeminiKey(
@@ -116,26 +126,76 @@ export async function callSingleGeminiKey(
     ? "https://ai.gateway.lovable.dev/v1/chat/completions"
     : "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
-  try {
-    const resp = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${actualKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: isLovable ? `google/${sanitizeAveriaModel(model)}` : sanitizeAveriaModel(model),
-        messages: [{ role: "system", content: systemPrompt }, ...messages],
-        stream: false,
-        max_tokens: 4096,
-      }),
-    });
-    if (!resp.ok) return "";
-    const data = await resp.json();
-    return data.choices?.[0]?.message?.content || "";
-  } catch {
-    return "";
+  // Try the requested model, with fallback to lighter models if rate limited
+  const modelChain = isLovable
+    ? [`google/${sanitizeAveriaModel(model)}`]
+    : [sanitizeAveriaModel(model), "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-1.5-flash"];
+
+  for (const targetModel of modelChain) {
+    try {
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${actualKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: targetModel,
+          messages: [{ role: "system", content: systemPrompt }, ...messages],
+          stream: false,
+          max_tokens: 4096,
+        }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const text = data.choices?.[0]?.message?.content || "";
+        if (text && text.trim().length > 0) return text.trim();
+      }
+    } catch {
+      // Continue to next model in chain
+    }
   }
+
+  return "";
+}
+
+/**
+ * Unstoppable robust Gemini call that rotates across ALL 10 keys + model fallback cascade.
+ * Never returns empty string if ANY key or fallback model is reachable.
+ */
+export async function callRobustGemini(
+  supabase: any,
+  messages: any[],
+  systemPrompt: string,
+  preferredModel = "gemini-2.5-flash"
+): Promise<string> {
+  const keys = await getGeminiKeys(supabase);
+  if (keys.length === 0) return "";
+
+  const models = [
+    preferredModel,
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-1.5-flash",
+  ].filter((m, i, arr) => arr.indexOf(m) === i);
+
+  // Randomize start offset for load balancing
+  const startIdx = Math.floor(Math.random() * keys.length);
+  const rotated = [...keys.slice(startIdx), ...keys.slice(0, startIdx)];
+
+  for (const model of models) {
+    for (let i = 0; i < rotated.length; i++) {
+      const keyRec = rotated[i];
+      const actualKey = keyRec.api_key.replace("lovable:", "");
+      const res = await callSingleGeminiKey(actualKey, messages, systemPrompt, model);
+      if (res && res.trim().length > 10) {
+        return res.trim();
+      }
+    }
+  }
+
+  return "";
 }
 
 /**
@@ -199,7 +259,7 @@ export function streamTextAsSSE(text: string): Response {
   });
 }
 
-/** Execute AI chat completion with automatic rotation across all Gemini keys */
+/** Execute AI chat completion with automatic rotation across all Gemini keys + model cascade */
 export async function executeWithGeminiRotation(
   supabase: any,
   options: {
@@ -226,6 +286,14 @@ export async function executeWithGeminiRotation(
   const selectedModel = options.forensicMode ? "gemini-2.5-pro" : (options.model || "gemini-2.5-flash");
   const cleanModel = sanitizeAveriaModel(selectedModel);
 
+  // Model fallback chain: primary -> 2.0-flash -> 2.5-flash-lite -> 1.5-flash
+  const modelsToTry = [
+    cleanModel,
+    "gemini-2.0-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-1.5-flash",
+  ].filter((m, i, arr) => arr.indexOf(m) === i);
+
   const finalMessages = [
     ...(options.systemPrompt ? [{ role: "system", content: options.systemPrompt }] : []),
     ...options.messages,
@@ -234,84 +302,64 @@ export async function executeWithGeminiRotation(
   let lastStatus = 500;
   let lastErrorText = "";
 
-  for (let i = 0; i < rotated.length; i++) {
-    const keyRec = rotated[i];
-    const isLovable = keyRec.api_key.startsWith("lovable:");
-    const actualKey = isLovable ? keyRec.api_key.replace("lovable:", "") : keyRec.api_key;
+  for (const currentModel of modelsToTry) {
+    for (let i = 0; i < rotated.length; i++) {
+      const keyRec = rotated[i];
+      const isLovable = keyRec.api_key.startsWith("lovable:");
+      const actualKey = isLovable ? keyRec.api_key.replace("lovable:", "") : keyRec.api_key;
 
-    const endpoint = isLovable
-      ? "https://ai.gateway.lovable.dev/v1/chat/completions"
-      : "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+      const endpoint = isLovable
+        ? "https://ai.gateway.lovable.dev/v1/chat/completions"
+        : "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
-    const requestBody: any = {
-      model: isLovable ? (options.forensicMode ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash") : cleanModel,
-      messages: finalMessages,
-      stream: options.stream ?? false,
-    };
+      const requestBody: any = {
+        model: isLovable ? `google/${currentModel}` : currentModel,
+        messages: finalMessages,
+        stream: options.stream ?? false,
+      };
 
-    if (options.jsonMode && !isLovable) {
-      requestBody.response_format = { type: "json_object" };
-    }
+      if (options.jsonMode && !isLovable) {
+        requestBody.response_format = { type: "json_object" };
+      }
 
-    try {
-      console.log(`[Averia AI] Dispatching with key #${i + 1}/${rotated.length} (source: ${keyRec.source})...`);
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${actualKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${actualKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
+        });
 
-      if (res.ok) {
-        // Record success in background
-        if (keyRec.source === "database") {
-          supabase
-            .from("gemini_api_keys")
-            .update({ last_used_at: new Date().toISOString() })
-            .eq("api_key", keyRec.api_key)
-            .then(() => {})
-            .catch(() => {});
-        }
+        if (res.ok) {
+          if (options.stream) {
+            return new Response(res.body, {
+              headers: {
+                ...corsHeaders,
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+              },
+            });
+          }
 
-        if (options.stream) {
-          return new Response(res.body, {
-            headers: {
-              ...corsHeaders,
-              "Content-Type": "text/event-stream",
-              "Cache-Control": "no-cache",
-              "Connection": "keep-alive",
-            },
+          const data = await res.json();
+          return new Response(JSON.stringify(data), {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
 
-        const data = await res.json();
-        return new Response(JSON.stringify(data), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
+        lastStatus = res.status;
+        lastErrorText = await res.text().catch(() => "");
+        console.warn(`[Averia AI] Key #${i + 1} (${currentModel}) returned ${res.status}. Rotating to next key...`);
 
-      lastStatus = res.status;
-      lastErrorText = await res.text().catch(() => "");
-      console.warn(`[Averia AI] Key #${i + 1} rejected with status ${res.status}: ${lastErrorText.slice(0, 150)}`);
-
-      // Increment error count on failure
-      if (keyRec.source === "database") {
-        supabase
-          .from("gemini_api_keys")
-          .update({ error_count: 1 })
-          .eq("api_key", keyRec.api_key)
-          .then(() => {})
-          .catch(() => {});
-      }
-
-      if ([429, 403, 500, 502, 503, 504].includes(res.status)) {
+        // If rate-limited (429), quota exceeded (403), or 5xx, try next key immediately
+        continue;
+      } catch (networkErr: any) {
+        console.warn(`[Averia AI] Key #${i + 1} network exception:`, networkErr?.message);
         continue;
       }
-    } catch (networkErr: any) {
-      console.warn(`[Averia AI] Key #${i + 1} network exception:`, networkErr?.message);
-      continue;
     }
   }
 
