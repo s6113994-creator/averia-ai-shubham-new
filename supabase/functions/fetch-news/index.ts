@@ -1,25 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-};
-
-const NEWS_API_KEYS = [
-  '2a2c607411b2488f9b5bab17af6a8ea5',
-  '59ae1b46bd4046a0ade43d48c5e4417e',
-  'a4e70f9af3a34627ab3f90d9aa36d811',
-  '30a4ac64313f4acd8926dd1857c2fedf',
-];
-
-let currentKeyIndex = 0;
-
-function getNextNewsKey(): string {
-  const key = NEWS_API_KEYS[currentKeyIndex];
-  currentKeyIndex = (currentKeyIndex + 1) % NEWS_API_KEYS.length;
-  return key;
-}
+import {
+  corsHeaders,
+  AVERIA_SYSTEM_PERSONA,
+  getAdminSupabase,
+  executeWithNewsRotation,
+  executeWithGeminiRotation,
+} from "../_shared/keyManager.ts";
 
 const indiaQueries: Record<string, string> = {
   general: "India news today OR breaking news India",
@@ -41,7 +27,6 @@ const globalQueries: Record<string, string> = {
   science: "science discovery OR NASA OR space exploration",
 };
 
-// Queries specifically for fetching potentially misleading/fake content for the Debunked section
 const debunkedQueries = [
   "fake news debunked fact check",
   "misinformation viral hoax debunked",
@@ -50,67 +35,41 @@ const debunkedQueries = [
   "conspiracy theory debunked latest",
 ];
 
-function getSupabase() {
-  return createClient(
-    Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
-  );
+async function fetchWithRotation(supabase: any, urlBuilder: (key: string) => string): Promise<Response> {
+  return await executeWithNewsRotation(supabase, async (apiKey: string) => {
+    const url = urlBuilder(apiKey);
+    return await fetch(url, { headers: { "X-Api-Key": apiKey } });
+  });
 }
 
-async function fetchWithRotation(url: string): Promise<Response> {
-  let attempts = 0;
-  while (attempts < NEWS_API_KEYS.length) {
-    const key = getNextNewsKey();
-    attempts++;
-
-    const res = await fetch(url, { headers: { "X-Api-Key": key } });
-    if (res.ok) return res;
-
-    if (res.status === 401 || res.status === 403 || res.status === 429 || res.status >= 500) {
-      console.warn(`[NewsAPI] Key ${attempts}/${NEWS_API_KEYS.length} failed (${res.status}), rotating...`);
-      continue;
-    }
-
-    return res;
-  }
-
-  throw new Error("All NewsAPI keys exhausted");
-}
-
-/** Batch pre-sort: send titles to AI, get back indices of fake/misleading articles */
-async function preSortWithAI(articles: any[]): Promise<{ realArticles: any[]; debunkedArticles: any[] }> {
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-  if (!LOVABLE_API_KEY || articles.length === 0) {
+/** Batch pre-sort: send titles to Averia AI, get back indices of fake/misleading articles */
+async function preSortWithAI(supabase: any, articles: any[]): Promise<{ realArticles: any[]; debunkedArticles: any[] }> {
+  if (articles.length === 0) {
     return { realArticles: articles, debunkedArticles: [] };
   }
 
   try {
-    const titleList = articles.slice(0, 50).map((a, i) => `${i}. ${a.title}`).join('\n');
+    const titleList = articles.slice(0, 50).map((a, i) => `${i}. ${a.title}`).join("\n");
+    const systemPrompt = `${AVERIA_SYSTEM_PERSONA}
+You are Averia News Intelligence, an expert pre-screening system.
+Given a numbered list of news headlines, identify which ones are likely FAKE or MISLEADING based on sensationalism, clickbait, known hoax patterns, or unverifiable claims.
+Return ONLY a valid JSON array containing the integer indices that are fake/misleading.
+If all seem legitimate, return []. Example: [2, 5, 11]`;
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash-lite",
-        messages: [
-          {
-            role: "system",
-            content: `You are Averia Intelligence, a news pre-screening AI. Given a numbered list of news headlines, identify which ones are likely FAKE or MISLEADING based on sensationalism, known misinformation patterns, clickbait, or unverifiable claims. Return ONLY a JSON array of the index numbers that are fake/misleading. If all seem legitimate, return an empty array []. Example: [2, 5, 11]`
-          },
-          { role: "user", content: titleList }
-        ],
-      }),
+    const aiRes = await executeWithGeminiRotation(supabase, {
+      messages: [{ role: "user", content: titleList }],
+      systemPrompt,
+      model: "gemini-2.5-flash",
+      jsonMode: true,
+      stream: false,
     });
 
-    if (!aiResponse.ok) {
-      console.warn("[PreSort] AI returned", aiResponse.status);
+    if (!aiRes.ok) {
+      console.warn("[PreSort] Averia AI classification skipped");
       return { realArticles: articles, debunkedArticles: [] };
     }
 
-    const data = await aiResponse.json();
+    const data = await aiRes.json();
     const content = data.choices?.[0]?.message?.content || "[]";
     const jsonMatch = content.match(/\[[\s\S]*?\]/);
     const flaggedIndices: number[] = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
@@ -122,22 +81,23 @@ async function preSortWithAI(articles: any[]): Promise<{ realArticles: any[]; de
     const debunkedArticles = articles.filter((_, i) => flaggedSet.has(i)).map(a => ({
       ...a,
       isDebunked: true,
-      verdict: 'misleading',
+      verdict: "misleading",
     }));
 
     return { realArticles, debunkedArticles };
   } catch (e) {
-    console.error("[PreSort] Error:", e);
+    console.warn("[PreSort] Pre-sorting skipped:", e);
     return { realArticles: articles, debunkedArticles: [] };
   }
 }
 
-/** Fetch specifically debunked/fact-check content to populate the Debunked section */
-async function fetchDebunkedContent(): Promise<any[]> {
+/** Fetch specifically debunked/fact-check content */
+async function fetchDebunkedContent(supabase: any): Promise<any[]> {
   try {
     const query = debunkedQueries[Math.floor(Math.random() * debunkedQueries.length)];
-    const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&pageSize=10&sortBy=publishedAt&language=en`;
-    const res = await fetchWithRotation(url);
+    const res = await fetchWithRotation(supabase, (key) =>
+      `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&pageSize=10&sortBy=publishedAt&language=en`
+    );
     if (!res.ok) return [];
     const data = await res.json();
     return (data.articles || [])
@@ -152,10 +112,10 @@ async function fetchDebunkedContent(): Promise<any[]> {
         publishedAt: article.publishedAt,
         author: article.author,
         content: article.content,
-        category: 'debunked',
-        tier: 'latest',
+        category: "debunked",
+        tier: "latest",
         isDebunked: true,
-        verdict: 'misleading',
+        verdict: "misleading",
       }));
   } catch (e) {
     console.warn("[Debunked] Fetch error:", e);
@@ -169,20 +129,18 @@ serve(async (req) => {
   }
 
   try {
-    const { category = "general", pageSize = 20, page = 1, query, fetchDebunked = false, bypassCache = false } = await req.json();
-    const supabase = getSupabase();
+    const { category = "general", pageSize = 20, page = 1, query, fetchDebunked = false, bypassCache = false } = await req.json().catch(() => ({}));
+    const supabase = getAdminSupabase();
 
-    // Special mode: fetch debunked content
+    // Mode: fetch debunked content
     if (fetchDebunked) {
-      const debunkedContent = await fetchDebunkedContent();
-      
-      // Also fetch from DB
+      const debunkedContent = await fetchDebunkedContent(supabase);
       const { data: dbDebunked } = await supabase
-        .from('debunked_news')
-        .select('*')
-        .order('debunked_at', { ascending: false })
+        .from("debunked_news")
+        .select("*")
+        .order("debunked_at", { ascending: false })
         .limit(30);
-      
+
       return new Response(JSON.stringify({
         success: true,
         articles: [],
@@ -196,15 +154,15 @@ serve(async (req) => {
       });
     }
 
-    // 1. Check cache first (skip if bypassCache is set for fresh init)
-    const cacheKey = `news:${category}:${page}:${pageSize}:${query || ''}`;
+    // 1. Check cache first
+    const cacheKey = `news:${category}:${page}:${pageSize}:${query || ""}`;
     if (!bypassCache) {
       try {
         const { data: cached } = await supabase
-          .from('api_cache')
-          .select('data')
-          .eq('cache_key', cacheKey)
-          .gt('expires_at', new Date().toISOString())
+          .from("api_cache")
+          .select("data")
+          .eq("cache_key", cacheKey)
+          .gt("expires_at", new Date().toISOString())
           .maybeSingle();
 
         if (cached?.data) {
@@ -216,11 +174,9 @@ serve(async (req) => {
       } catch (e) {
         console.warn("[Cache] Read error:", e);
       }
-    } else {
-      console.log(`[Cache BYPASS] Fresh fetch requested for ${cacheKey}`);
     }
 
-    // 2. Fetch from API with key rotation
+    // 2. Fetch from NewsAPI with multi-key rotation
     const indiaSize = Math.ceil(pageSize * 0.7);
     const globalSize = pageSize - indiaSize;
 
@@ -228,48 +184,48 @@ serve(async (req) => {
     const globalQuery = query ? `${query} world` : globalQueries[category] || globalQueries.general;
 
     const cacheBust = `&_t=${Date.now()}`;
-    const indiaUrl = `https://newsapi.org/v2/everything?q=${encodeURIComponent(indiaQuery)}&pageSize=${indiaSize}&page=${page}&sortBy=publishedAt&language=en${cacheBust}`;
-    const globalUrl = `https://newsapi.org/v2/everything?q=${encodeURIComponent(globalQuery)}&pageSize=${globalSize}&page=${page}&sortBy=publishedAt&language=en${cacheBust}`;
+    const indiaUrlFn = (key: string) => `https://newsapi.org/v2/everything?q=${encodeURIComponent(indiaQuery)}&pageSize=${indiaSize}&page=${page}&sortBy=publishedAt&language=en${cacheBust}`;
+    const globalUrlFn = (key: string) => `https://newsapi.org/v2/everything?q=${encodeURIComponent(globalQuery)}&pageSize=${globalSize}&page=${page}&sortBy=publishedAt&language=en${cacheBust}`;
 
     const [indiaRes, globalRes] = await Promise.allSettled([
-      fetchWithRotation(indiaUrl),
-      fetchWithRotation(globalUrl),
+      fetchWithRotation(supabase, indiaUrlFn),
+      fetchWithRotation(supabase, globalUrlFn),
     ]);
 
     let allRaw: any[] = [];
     let totalResults = 0;
 
     if (indiaRes.status === "fulfilled" && indiaRes.value.ok) {
-      const d = await indiaRes.value.json();
+      const d = await indiaRes.value.json().catch(() => ({}));
       if (d.articles) { allRaw = [...allRaw, ...d.articles]; totalResults += d.totalResults || 0; }
     }
 
     if (globalRes.status === "fulfilled" && globalRes.value.ok) {
-      const d = await globalRes.value.json();
+      const d = await globalRes.value.json().catch(() => ({}));
       if (d.articles) { allRaw = [...allRaw, ...d.articles]; totalResults += d.totalResults || 0; }
     }
 
     if (allRaw.length === 0) {
       try {
-        const fbUrl = `https://newsapi.org/v2/everything?q=${encodeURIComponent(indiaQuery)}&pageSize=${pageSize}&page=${page}&sortBy=publishedAt&language=en`;
-        const fbRes = await fetchWithRotation(fbUrl);
-        const fbData = await fbRes.json();
+        const fbRes = await fetchWithRotation(supabase, () =>
+          `https://newsapi.org/v2/everything?q=${encodeURIComponent(indiaQuery)}&pageSize=${pageSize}&page=${page}&sortBy=publishedAt&language=en`
+        );
+        const fbData = await fbRes.json().catch(() => ({}));
         if (fbRes.ok && fbData.articles) {
           allRaw = fbData.articles;
           totalResults = fbData.totalResults || 0;
         }
       } catch (e) {
-        console.warn("[NewsAPI] All fallback keys failed:", e);
+        console.warn("[NewsAPI] Fallback failed:", e);
         try {
           const { data: stale } = await supabase
-            .from('api_cache')
-            .select('data')
-            .like('cache_key', `news:${category}:%`)
-            .order('created_at', { ascending: false })
+            .from("api_cache")
+            .select("data")
+            .like("cache_key", `news:${category}:%`)
+            .order("created_at", { ascending: false })
             .limit(1)
             .maybeSingle();
           if (stale?.data) {
-            console.log(`[Cache STALE FALLBACK] ${category}`);
             return new Response(JSON.stringify(stale.data), {
               headers: { ...corsHeaders, "Content-Type": "application/json" },
             });
@@ -280,26 +236,25 @@ serve(async (req) => {
 
     const processed = processArticles(allRaw, category);
 
-    // 3. PRE-SORT with Averia Intelligence AI
-    const { realArticles, debunkedArticles } = await preSortWithAI(processed);
+    // 3. Pre-sort with Averia Intelligence AI
+    const { realArticles, debunkedArticles } = await preSortWithAI(supabase, processed);
 
-    // Store debunked articles in the database
+    // Store debunked articles in DB
     if (debunkedArticles.length > 0) {
       try {
         const inserts = debunkedArticles.map(a => ({
           title: a.title,
           claim: a.description || a.title,
           ai_reasoning: `Averia Intelligence pre-screening flagged this article as potentially misleading based on headline analysis.`,
-          verdict: 'Misleading',
-          original_source: a.source?.name || 'Unknown',
+          verdict: "Misleading",
+          original_source: a.source?.name || "Unknown",
           image_url: a.urlToImage,
           evidence_links: a.url ? [a.url] : [],
           category: a.category || category,
         }));
-        await supabase.from('debunked_news').upsert(inserts, { onConflict: 'title' }).select();
-        console.log(`[PreSort] Stored ${inserts.length} debunked articles`);
+        await supabase.from("debunked_news").upsert(inserts, { onConflict: "title" }).select();
       } catch (e) {
-        console.warn("[PreSort] DB store error:", e);
+        console.warn("[PreSort] DB store skipped:", e);
       }
     }
 
@@ -312,27 +267,23 @@ serve(async (req) => {
       pageSize,
     };
 
-    // 4. Store in cache
+    // 4. Store in cache for 6 hours
     try {
-      await supabase.from('api_cache').upsert({
+      await supabase.from("api_cache").upsert({
         cache_key: cacheKey,
         data: responseData,
-        source: 'newsapi',
+        source: "newsapi",
         expires_at: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
-      }, { onConflict: 'cache_key' });
-    } catch (e) {
-      console.warn("[Cache] Write error:", e);
-    }
-
-    console.log(`Fetched ${realArticles.length} real + ${debunkedArticles.length} debunked for: ${category}, page ${page}`);
+      }, { onConflict: "cache_key" });
+    } catch {}
 
     return new Response(JSON.stringify(responseData), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (error) {
-    console.error("Error fetching news:", error);
+  } catch (error: any) {
+    console.error("[fetch-news] Error:", error);
     return new Response(
-      JSON.stringify({ success: false, error: error instanceof Error ? error.message : "Unknown error" }),
+      JSON.stringify({ success: false, error: error?.message || "News retrieval failed" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

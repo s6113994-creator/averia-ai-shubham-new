@@ -80,7 +80,7 @@ const PUBLIC_LIMITS: Record<VaultKind, { min: number; max: number; field: 'conte
 };
 
 async function aiNewsGate(kind: VaultKind, text: string): Promise<{ ok: boolean; reason?: string }> {
-  // Lightweight gate: ask Lovable AI Gateway via the existing averia-ai edge function in classify mode.
+  // Lightweight gate: verify via the existing averia-ai edge function in classify mode.
   // We POST a compact prompt and read a single-token verdict. If the call fails, default to allow but flag.
   try {
     const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/averia-ai`, {

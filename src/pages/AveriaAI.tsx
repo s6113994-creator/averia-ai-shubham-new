@@ -13,7 +13,8 @@ import { AveriaLogo } from '@/components/AveriaLogo';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { MessageResponse } from '@/components/ai-elements/message';
 
-const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/averia-ai`;
+const SUPABASE_BASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://qhmxmwigvexyxvklukns.supabase.co';
+const CHAT_URL = `${SUPABASE_BASE_URL.replace(/\/+$/, '')}/functions/v1/averia-ai`;
 
 interface Attachment {
   id: string;
@@ -635,7 +636,7 @@ export default function AveriaAI() {
     setIsDeploying(true);
     await new Promise(r => setTimeout(r, 2500));
     const slug = `project-${Date.now().toString(36)}`;
-    setDeployUrl(`https://${slug}.lovable.app`);
+    setDeployUrl(`https://${slug}.averia.ai`);
     setIsDeploying(false);
     toast.success('Website published successfully! 🚀');
   };

@@ -1,41 +1,38 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
-};
-
-// Model configuration - single variable hot-swap
-const AI_MODEL = Deno.env.get("AVERIA_AI_MODEL") || "google/gemini-3-flash-preview";
-const IMAGE_MODEL = "google/gemini-3.1-flash-image-preview";
+import {
+  corsHeaders,
+  AVERIA_SYSTEM_PERSONA,
+  getAdminSupabase,
+  executeWithGeminiRotation,
+  getGeminiKeys,
+} from "../_shared/keyManager.ts";
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+  // CORS Preflight
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
 
   try {
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    const supabase = getAdminSupabase();
 
+    // 1. Authenticate user & load memory
     const authHeader = req.headers.get("Authorization");
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
-
     let userId: string | null = null;
     let memories: string[] = [];
     let userName = "";
-    
+
     if (authHeader) {
       try {
         const token = authHeader.replace("Bearer ", "");
-        // Try with anon key first, fall back gracefully
-        const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || supabaseKey;
+        const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+        const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
         const anonClient = createClient(supabaseUrl, anonKey);
         const { data: { user }, error: authError } = await anonClient.auth.getUser(token);
         if (!authError && user) {
           userId = user.id;
-          userName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || "";
+          userName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "";
 
           const { data: mems } = await supabase
             .from("ai_memory")
@@ -43,48 +40,17 @@ serve(async (req) => {
             .eq("user_id", userId)
             .limit(20);
           if (mems?.length) {
-            memories = mems.map(m => `${m.key}: ${m.value}`);
+            memories = mems.map((m: any) => `${m.key}: ${m.value}`);
           }
         }
       } catch (authErr) {
-        console.warn("Auth lookup failed, continuing without user context:", authErr);
+        console.warn("[Averia Auth] Context lookup skipped:", authErr);
       }
     }
 
+    // 2. Parse request payload
     const body = await req.json().catch(() => ({}));
     const { messages, conversationId, saveMemory, mode, forensicMode, classify, kind, text } = body as any;
-
-    // ====== LIGHTWEIGHT CLASSIFICATION GATE (Public Vault) ======
-    if (classify === true) {
-      const prompt = `You are a strict content-quality classifier for a public news vault.
-A user submitted a ${kind || 'text'} entry. Decide if it qualifies as:
-- legitimate news / trending announcement / useful global data / informative public content (=> allowed)
-- OR fake news / spam / personal-only chatter / non-informative ramble (=> rejected).
-
-Respond as STRICT JSON only: {"allowed": true|false, "reason": "short reason"}.
-
-Submission:
-"""${(text || '').slice(0, 1500)}"""`;
-      try {
-        const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash-lite",
-            messages: [{ role: "user", content: prompt }],
-          }),
-        });
-        if (!r.ok) return new Response(JSON.stringify({ allowed: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-        const j = await r.json();
-        const raw = j?.choices?.[0]?.message?.content || "";
-        const m = raw.match(/\{[\s\S]*\}/);
-        let verdict: { allowed: boolean; reason?: string } = { allowed: true };
-        if (m) { try { verdict = JSON.parse(m[0]); } catch {} }
-        return new Response(JSON.stringify(verdict), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      } catch {
-        return new Response(JSON.stringify({ allowed: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
-    }
 
     // Save memory if requested
     if (saveMemory && userId) {
@@ -96,125 +62,151 @@ Submission:
       }, { onConflict: "user_id,key" }).catch(() => {});
     }
 
-    // IMAGE GENERATION MODE
-    if (mode === "image") {
-      const imagePrompt = messages[messages.length - 1]?.content || "";
-      const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: IMAGE_MODEL,
-          messages: [{ role: "user", content: imagePrompt }],
-          modalities: ["image", "text"],
-        }),
-      });
+    // ====== LIGHTWEIGHT CLASSIFICATION GATE ======
+    if (classify === true) {
+      const prompt = `You are Averia Agentic AI's content-quality classifier for a public news vault.
+A user submitted a ${kind || "text"} entry. Decide if it qualifies as:
+- legitimate news / trending announcement / useful global data / informative public content (=> allowed: true)
+- OR fake news / spam / personal-only chatter / non-informative ramble (=> allowed: false).
 
-      if (!response.ok) {
-        const status = response.status;
-        if (status === 429) return new Response(JSON.stringify({ error: "Rate limit exceeded. Wait a moment." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-        if (status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted. Add funds in Settings." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-        return new Response(JSON.stringify({ error: "Image generation failed." }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+Respond as STRICT JSON only: {"allowed": true|false, "reason": "short explanation"}.
+
+Submission:
+"""${(text || "").slice(0, 1500)}"""`;
+
+      try {
+        const aiRes = await executeWithGeminiRotation(supabase, {
+          messages: [{ role: "user", content: prompt }],
+          systemPrompt: AVERIA_SYSTEM_PERSONA,
+          model: "gemini-2.5-flash",
+          jsonMode: true,
+        });
+
+        if (aiRes.ok) {
+          const j = await aiRes.json();
+          const raw = j?.choices?.[0]?.message?.content || "";
+          const m = raw.match(/\{[\s\S]*\}/);
+          let verdict: { allowed: boolean; reason?: string } = { allowed: true };
+          if (m) { try { verdict = JSON.parse(m[0]); } catch {} }
+          return new Response(JSON.stringify(verdict), {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      } catch {
+        // Fallback allow on classification error
       }
-
-      const data = await response.json();
-      return new Response(JSON.stringify(data), {
+      return new Response(JSON.stringify({ allowed: true }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // CHAT MODE (streaming)
-    const memoryContext = memories.length > 0 
-      ? `\n\nUser's Memory Vault:\n${memories.join("\n")}` 
-      : "";
+    // ====== IMAGE GENERATION MODE ======
+    if (mode === "image") {
+      const imagePrompt = messages?.[messages.length - 1]?.content || "";
+      const keys = await getGeminiKeys(supabase);
 
-    const personalGreeting = userName ? `The user's name is "${userName}". Greet them personally when appropriate.` : "";
+      for (const keyRec of keys) {
+        try {
+          if (keyRec.api_key.startsWith("lovable:")) {
+            const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${keyRec.api_key.replace("lovable:", "")}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: "google/gemini-3.1-flash-image-preview",
+                messages: [{ role: "user", content: imagePrompt }],
+                modalities: ["image", "text"],
+              }),
+            });
+            if (resp.ok) {
+              const data = await resp.json();
+              return new Response(JSON.stringify(data), {
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+              });
+            }
+          } else {
+            const imagenUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${keyRec.api_key}`;
+            const imgResp = await fetch(imagenUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                instances: [{ prompt: imagePrompt }],
+                parameters: { sampleCount: 1, aspectRatio: "1:1" },
+              }),
+            });
+            if (imgResp.ok) {
+              const imgData = await imgResp.json();
+              const base64Bytes = imgData.predictions?.[0]?.bytesBase64Encoded;
+              if (base64Bytes) {
+                const formatted = {
+                  choices: [{
+                    message: {
+                      images: [{
+                        image_url: { url: `data:image/png;base64,${base64Bytes}` },
+                      }],
+                    },
+                  }],
+                };
+                return new Response(JSON.stringify(formatted), {
+                  headers: { ...corsHeaders, "Content-Type": "application/json" },
+                });
+              }
+            }
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      return new Response(
+        JSON.stringify({ error: "Image synthesis is temporarily busy. Please retry shortly." }),
+        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ====== CHAT MODE (Streaming with automatic Gemini Key Rotation) ======
+    const memoryContext = memories.length > 0 ? `\n\nUser Memory Vault:\n${memories.join("\n")}` : "";
+    const personalGreeting = userName ? `The user's name is "${userName}". Greet them naturally when appropriate.` : "";
 
     const forensicAddon = forensicMode ? `
-
-🔬 **DEEP-CORE FORENSIC MODE ACTIVATED** — The user has attached media for verification. Perform exhaustive forensic analysis:
-
-**MANDATORY OUTPUT STRUCTURE:**
-1. **🎯 Verdict Badge**: ✅ AUTHENTIC / ❌ FAKE / ⚠️ MISLEADING / 🤖 AI-GENERATED / 🔧 MANIPULATED
-2. **📊 Confidence Score**: Exact percentage (e.g., "99.2% Deepfake Detected")
-3. **🔍 Forensic Markers**: Bullet list of specific anomalies found
-4. **👻 AI Ghost Detection**: Describe regions of suspected manipulation (location, type)
-5. **🎙️ Voice/Audio Analysis** (if audio): Phoneme anomalies, frequency irregularities, synthetic markers
-6. **📝 Deepfake Transcript** (if video/audio with speech): "Spoken Content" vs "Verified Facts"
-7. **🌐 Source Origin Tracker**: Likely earliest upload footprint / origin
-8. **🔗 URL Authenticity** (if URL): Root domain check, official/phishing classification
-9. **📇 Truth-Share Summary**: One-line shareable verdict card
-
-Analyze:
-- IMAGES: pixel consistency, anatomical accuracy, lighting/shadow physics, GAN artifacts, JPEG compression irregularities
-- VIDEOS: frame-to-frame motion consistency, unnatural human postures, lighting shifts, lip-sync, blink patterns
-- AUDIO: synthetic voice cloning markers, phoneme transitions, spectral anomalies, background noise consistency
-- TEXT: AI-writing patterns (perplexity, burstiness), factual cross-checks
-- URLs: domain age, TLD legitimacy, known phishing patterns
-
-Be precise, scientific, and confident. Use exact percentages backed by reasoning.
+🔬 **DEEP-CORE FORENSIC VERIFICATION ACTIVE** — The user submitted media attachments.
+Analyze all provided frames, spectrograms, text or URL data with maximum scientific rigor:
+1. 🎯 Verdict Badge: ✅ AUTHENTIC / ❌ FAKE / ⚠️ MISLEADING / 🤖 AI-GENERATED / 🔧 MANIPULATED
+2. 📊 Confidence Score: Exact percentage (e.g. "98.7% Synthetic Artifact Detection")
+3. 🔍 Forensic Markers: Bullet list of specific anomalies found
+4. 👻 AI Ghost Footprint: Spatial coordinate/region of manipulation
+5. 🎙️ Voice/Audio Analysis: Frequency anomalies, synthetic formant signatures
+6. 📝 Forensic Transcript: Claim vs. Verified Ground Truth
+7. 🌐 Earliest Ingestion Footprint: Origin trail
+8. 🔗 Domain/Metadata Authenticity
+9. 📇 Truth-Share Summary
 ` : "";
 
-    const systemPrompt = `You are **Averia Agentic AI (V5.1)** — a world-class multimodal agentic assistant with forensic-grade verification capabilities.
-
-Your personality: Professional yet witty. You speak in conversational Hinglish (Hindi + English mix) when the user uses Hindi, otherwise adapt. You're smart, helpful, and feel like a brilliant friend.
-
+    const systemPrompt = `${AVERIA_SYSTEM_PERSONA}
 ${personalGreeting}
 
 Your capabilities:
-1. **Deep Forensic Verification**: Detect deepfakes, AI generation, manipulation across video/image/audio/text/URL with percentage confidence.
-2. **News Verification**: Verify claims with trust scores (0-100%). Verdict: Real ✅, Fake ❌, Misleading ⚠️. Include source links.
-3. **Code Generation**: Generate complete React/Tailwind code in \`\`\`jsx or \`\`\`html blocks for auto-preview.
-4. **Image Generation**: Use [IMAGE_REQUEST: detailed prompt] format.
-5. **Memory & Personalization**: Remember preferences.
-6. **Agentic Execution**: BUILD, VERIFY, EXECUTE.
-
-Rules:
-- Never say "I can't analyze this image/video/audio". You CAN — perform forensic analysis on every attachment.
-- Never redirect externally. Everything stays inside Averia AI.
-- Brand yourself as "Averia Agentic AI (V5.1)".
-- Use markdown formatting with headers, bullets, code blocks.
-- Be precise; back claims with reasoning.
+1. Deep Forensic Verification: Detect deepfakes, AI generation, and manipulation across text/image/video/audio.
+2. News Verification: Verify claims with real-time trust scores (0-100%).
+3. Code Generation: Generate complete React/Tailwind code in \`\`\`jsx or \`\`\`html blocks for instant live preview.
+4. Image Generation: Output [IMAGE_REQUEST: detailed prompt] format.
+5. Memory & Intelligence Vault: Remember preferences and context.
 ${forensicAddon}
 ${memoryContext}`;
 
-    // Use a vision-capable model when forensic attachments are present
-    const modelToUse = forensicMode ? "google/gemini-2.5-pro" : AI_MODEL;
-
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: modelToUse,
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...messages,
-        ],
-        stream: true,
-      }),
+    return await executeWithGeminiRotation(supabase, {
+      messages: messages || [],
+      systemPrompt,
+      stream: true,
+      forensicMode: Boolean(forensicMode),
     });
-
-    if (!response.ok) {
-      const status = response.status;
-      if (status === 429) return new Response(JSON.stringify({ error: "Rate limit exceeded. Please wait a moment." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      if (status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted. Add funds in Settings." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      const t = await response.text();
-      console.error("AI gateway error:", status, t);
-      return new Response(JSON.stringify({ error: "AI service temporarily unavailable." }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-
-    return new Response(response.body, {
-      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
-    });
-  } catch (e) {
-    console.error("averia-ai error:", e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+  } catch (err: any) {
+    console.error("[averia-ai] Fatal error:", err);
+    return new Response(
+      JSON.stringify({ error: err?.message || "Averia AI encountered an unexpected error." }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
   }
 });

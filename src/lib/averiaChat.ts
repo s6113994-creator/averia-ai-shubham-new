@@ -1,9 +1,12 @@
 import { supabase } from '@/integrations/supabase/client';
 
+const SUPABASE_BASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://qhmxmwigvexyxvklukns.supabase.co';
+const CHAT_URL = `${SUPABASE_BASE_URL.replace(/\/+$/, '')}/functions/v1/averia-ai`;
+
 /** One-shot helper around the streaming averia-ai edge function. Returns full text. */
 export async function askAveria(messages: { role: string; content: string }[]): Promise<string> {
   const { data: { session } } = await supabase.auth.getSession();
-  const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/averia-ai`, {
+  const res = await fetch(CHAT_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -42,7 +45,7 @@ export async function streamAveria(
   onDelta: (chunk: string) => void,
 ): Promise<void> {
   const { data: { session } } = await supabase.auth.getSession();
-  const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/averia-ai`, {
+  const res = await fetch(CHAT_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

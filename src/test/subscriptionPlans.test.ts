@@ -32,7 +32,7 @@ describe('subscription catalog', () => {
 
   it('keeps Pro limits exact', () => {
     expect(SUBSCRIPTION_PLANS[2].features).toEqual([
-      'Unlimited Prompts & Gemini 3 Pro Speed',
+      'Unlimited Prompts & Averia Forensic Core Speed',
       'Unlimited News Verifications',
       'Unlimited Web/Image Generation',
       '15 Trade Listings',

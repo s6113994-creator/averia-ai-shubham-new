@@ -42,7 +42,7 @@ export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
     period: '/month',
     badge: 'Most Popular',
     features: [
-      'Unlimited Prompts & Gemini 3 Pro Speed',
+      'Unlimited Prompts & Averia Forensic Core Speed',
       'Unlimited News Verifications',
       'Unlimited Web/Image Generation',
       '15 Trade Listings',
