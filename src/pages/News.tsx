@@ -273,11 +273,14 @@ export default function News() {
       const longSeedQuery = searchText ? `${searchText} India latest news report` : undefined;
       const shortSeedQuery = searchText ? `${searchText} India shorts breaking` : undefined;
 
-      // Client-side YouTube fetch: dual-sync + standalone trending
-      const [dualSync, trendingLong, trendingShort] = await Promise.allSettled([
+      // Client-side YouTube fetch + Parallel Supabase Edge Function YouTube fetch (rotates 10 DB keys in public.youtube_api_keys)
+      // Existing frontend logic and keys remain 100% active and untouched
+      const [dualSync, trendingLong, trendingShort, edgeYtLong, edgeYtShort] = await Promise.allSettled([
         dualSyncHeadlinesToYouTube(headlines, 2),
         fetchTrendingVideos('long', 15, null, longSeedQuery),
         fetchTrendingVideos('short', 15, null, shortSeedQuery),
+        supabase.functions.invoke('fetch-youtube', { body: { type: 'long', maxResults: 15 } }),
+        supabase.functions.invoke('fetch-youtube', { body: { type: 'short', maxResults: 15 } }),
       ]);
 
       let longVideos: MediaNewsArticle[] = [];
@@ -300,6 +303,26 @@ export default function News() {
         const newOnes = trendingShort.value.articles.filter(a => !existingIds.has(a.videoId));
         shortVideos.push(...newOnes);
         setYtPageTokens(prev => ({ ...prev, short: trendingShort.value.nextPageToken }));
+      }
+
+      // Merge unique videos from parallel Supabase Edge Function pool (DB rotated keys)
+      let edgeVideosCount = 0;
+      if (edgeYtLong.status === 'fulfilled' && edgeYtLong.value?.data?.articles?.length > 0) {
+        const existingLongIds = new Set(longVideos.map(v => v.videoId));
+        const uniqueEdgeLong = (edgeYtLong.value.data.articles as MediaNewsArticle[]).filter(a => a.videoId && !existingLongIds.has(a.videoId));
+        longVideos.push(...uniqueEdgeLong);
+        edgeVideosCount += uniqueEdgeLong.length;
+      }
+
+      if (edgeYtShort.status === 'fulfilled' && edgeYtShort.value?.data?.articles?.length > 0) {
+        const existingShortIds = new Set(shortVideos.map(v => v.videoId));
+        const uniqueEdgeShort = (edgeYtShort.value.data.articles as MediaNewsArticle[]).filter(a => a.videoId && !existingShortIds.has(a.videoId));
+        shortVideos.push(...uniqueEdgeShort);
+        edgeVideosCount += uniqueEdgeShort.length;
+      }
+
+      if (edgeVideosCount > 0) {
+        console.log(`[Supabase YouTube Pool] Successfully fetched ${edgeVideosCount} videos via Edge Function`);
       }
 
       // Ensure every item has _source tag and _fetchedAt - MANDATORY
@@ -514,19 +537,32 @@ export default function News() {
       };
 
       const currentOffset = archiveOffset[type];
-      const [apiResult, archiveResult] = await Promise.all([
+      // PARALLEL: Fetch from client API, Supabase archive, and Supabase Edge Function YouTube pool simultaneously
+      const [apiResult, archiveResult, edgeResult] = await Promise.allSettled([
         runApiFetch(),
         getHistoricalFeed(type, currentOffset, 15),
+        supabase.functions.invoke('fetch-youtube', { body: { type, maxResults: 10 } }),
       ]);
 
-      if (archiveResult.articles.length > 0) {
+      const apiArticles = apiResult.status === 'fulfilled' ? apiResult.value.articles : [];
+      const archiveArticles = archiveResult.status === 'fulfilled' ? archiveResult.value.articles : [];
+      const edgeArticles: MediaNewsArticle[] = (edgeResult.status === 'fulfilled' && edgeResult.value?.data?.articles)
+        ? edgeResult.value.data.articles
+        : [];
+
+      if (edgeArticles.length > 0) {
+        console.log(`[Supabase YouTube Pool] Successfully fetched ${edgeArticles.length} videos via Edge Function`);
+      }
+
+      if (archiveResult.status === 'fulfilled' && archiveResult.value.articles.length > 0) {
         setArchiveOffset(prev => ({ ...prev, [type]: currentOffset + 50 }));
       }
 
       // Tag sources
-      apiResult.articles.forEach(a => { if (!a._source) a._source = 'live'; });
-      archiveResult.articles.forEach(a => { if (!a._source) a._source = 'archived'; });
-      const combined = [...apiResult.articles, ...archiveResult.articles];
+      apiArticles.forEach(a => { if (!a._source) a._source = 'live'; });
+      archiveArticles.forEach(a => { if (!a._source) a._source = 'archived'; });
+      edgeArticles.forEach(a => { if (!a._source) a._source = 'live'; });
+      const combined = [...apiArticles, ...archiveArticles, ...edgeArticles];
 
       if (combined.length > 0) {
         setRealNews(prev => {
@@ -536,7 +572,7 @@ export default function News() {
         });
       }
 
-      setYtPageTokens(prev => ({ ...prev, [type]: apiResult.nextPageToken || null }));
+      setYtPageTokens(prev => ({ ...prev, [type]: (apiResult.status === 'fulfilled' ? apiResult.value.nextPageToken : null) || null }));
       // NEVER stop - always keep fetching
       setHasMoreVideos(prev => ({
         ...prev,

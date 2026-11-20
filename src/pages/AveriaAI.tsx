@@ -657,9 +657,16 @@ export default function AveriaAI() {
         body: JSON.stringify({ messages: [{ role: 'user', content: prompt }], conversationId: convId, mode: 'image' }),
       });
 
-      if (!resp.ok) throw new Error('Image generation failed');
+      if (!resp.ok) {
+        // Edge function returned an error — parse it for a better message
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData?.error || 'Image generation failed');
+      }
       const data = await resp.json();
-      const imageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+      // Support both base64 data URLs and direct image URLs
+      const imageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url
+        || data.choices?.[0]?.message?.image_url?.url;
+
       if (imageUrl) {
         setCanvasImageUrl(imageUrl);
         setMessages(prev => {
@@ -684,10 +691,13 @@ export default function AveriaAI() {
           });
           window.dispatchEvent(new CustomEvent('averia:vault-changed'));
         }
+      } else {
+        // No image URL in response — surface a friendly message
+        throw new Error('No image returned from Averia Engine. Please try again.');
       }
     } catch (err) {
       console.error('Image gen error:', err);
-      toast.error('Image generation failed. Try again.');
+      toast.error((err as Error)?.message || 'Image generation failed. Try again.');
     }
   };
 

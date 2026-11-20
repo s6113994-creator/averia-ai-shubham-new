@@ -105,59 +105,115 @@ Submission:
       const imagePrompt = messages?.[messages.length - 1]?.content || "";
       const keys = await getGeminiKeys(supabase);
 
+      // --- PRIMARY: Try Gemini 2.0 Flash native multimodal image output (responseModalities: IMAGE) ---
       for (const keyRec of keys) {
+        if (keyRec.api_key.startsWith("lovable:")) continue; // Skip lovable keys for primary Gemini attempt
         try {
-          if (keyRec.api_key.startsWith("lovable:")) {
-            const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${keyRec.api_key.replace("lovable:", "")}`,
-                "Content-Type": "application/json",
+          const geminiImageUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${keyRec.api_key}`;
+          const geminiResp = await fetch(geminiImageUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: `Generate a high quality image: ${imagePrompt}` }] }],
+              generationConfig: {
+                responseModalities: ["TEXT", "IMAGE"],
               },
-              body: JSON.stringify({
-                model: "google/gemini-3.1-flash-image-preview",
-                messages: [{ role: "user", content: imagePrompt }],
-                modalities: ["image", "text"],
-              }),
-            });
-            if (resp.ok) {
-              const data = await resp.json();
-              return new Response(JSON.stringify(data), {
+            }),
+          });
+
+          if (geminiResp.status === 429 || geminiResp.status === 403) {
+            // Rate limit or quota — try next key
+            continue;
+          }
+
+          if (geminiResp.ok) {
+            const geminiData = await geminiResp.json();
+            // Find inline image part in response
+            const parts: any[] = geminiData?.candidates?.[0]?.content?.parts || [];
+            const imagePart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith("image/"));
+            if (imagePart?.inlineData?.data) {
+              const mime = imagePart.inlineData.mimeType || "image/png";
+              const formatted = {
+                choices: [{
+                  message: {
+                    images: [{
+                      image_url: { url: `data:${mime};base64,${imagePart.inlineData.data}` },
+                    }],
+                  },
+                }],
+              };
+              return new Response(JSON.stringify(formatted), {
                 headers: { ...corsHeaders, "Content-Type": "application/json" },
               });
             }
-          } else {
-            const imagenUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${keyRec.api_key}`;
-            const imgResp = await fetch(imagenUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                instances: [{ prompt: imagePrompt }],
-                parameters: { sampleCount: 1, aspectRatio: "1:1" },
-              }),
-            });
-            if (imgResp.ok) {
-              const imgData = await imgResp.json();
-              const base64Bytes = imgData.predictions?.[0]?.bytesBase64Encoded;
-              if (base64Bytes) {
-                const formatted = {
-                  choices: [{
-                    message: {
-                      images: [{
-                        image_url: { url: `data:image/png;base64,${base64Bytes}` },
-                      }],
-                    },
-                  }],
-                };
-                return new Response(JSON.stringify(formatted), {
-                  headers: { ...corsHeaders, "Content-Type": "application/json" },
-                });
-              }
-            }
+            // Gemini responded but no image part — model doesn't support IMAGE modality on this key/region, break loop
+            break;
           }
         } catch {
           continue;
         }
+      }
+
+      // --- SECONDARY: Try Gemini 2.5 Flash Preview image generation endpoint ---
+      for (const keyRec of keys) {
+        if (keyRec.api_key.startsWith("lovable:")) continue;
+        try {
+          const flash25Url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${keyRec.api_key}`;
+          const flash25Resp = await fetch(flash25Url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: `Generate a high quality image: ${imagePrompt}` }] }],
+              generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+            }),
+          });
+          if (flash25Resp.status === 429 || flash25Resp.status === 403) continue;
+          if (flash25Resp.ok) {
+            const d = await flash25Resp.json();
+            const parts: any[] = d?.candidates?.[0]?.content?.parts || [];
+            const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith("image/"));
+            if (imgPart?.inlineData?.data) {
+              const mime = imgPart.inlineData.mimeType || "image/png";
+              return new Response(JSON.stringify({
+                choices: [{ message: { images: [{ image_url: { url: `data:${mime};base64,${imgPart.inlineData.data}` } }] } }],
+              }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+            }
+            break;
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      // --- FALLBACK: Pollinations.ai — zero-cost, no API key required, always works ---
+      try {
+        const seed = Math.floor(Math.random() * 999999);
+        const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(imagePrompt)}?width=1024&height=1024&nologo=true&seed=${seed}&model=flux`;
+        // Pollinations returns the image directly as binary — we fetch and convert to base64
+        const pollResp = await fetch(pollinationsUrl);
+        if (pollResp.ok) {
+          const imgBuffer = await pollResp.arrayBuffer();
+          const uint8 = new Uint8Array(imgBuffer);
+          let binary = "";
+          for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
+          const base64 = btoa(binary);
+          const contentType = pollResp.headers.get("Content-Type") || "image/jpeg";
+          const formatted = {
+            choices: [{
+              message: {
+                images: [{
+                  image_url: { url: `data:${contentType};base64,${base64}` },
+                }],
+              },
+            }],
+          };
+          console.log("[averia-ai] Image served via Pollinations.ai fallback");
+          return new Response(JSON.stringify(formatted), {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      } catch (pollErr) {
+        console.error("[averia-ai] Pollinations fallback failed:", pollErr);
       }
 
       return new Response(
