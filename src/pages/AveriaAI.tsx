@@ -210,6 +210,78 @@ function MultimediaCard({ type, title }: { type: string; title: string }) {
   );
 }
 
+function SwarmAgentLiveBanner({ model, isRunning, content }: { model: string; isRunning: boolean; content?: string }) {
+  const agentDefs: Record<string, Array<{ name: string; icon: string }>> = {
+    synthesis: [
+      { name: 'Prompt Architect', icon: '🎨' },
+      { name: 'Visual Renderer', icon: '🖼️' },
+      { name: 'Detail Enhancer', icon: '✨' },
+    ],
+    intelligence: [
+      { name: 'Pixel & Sensor Forensics', icon: '🔬' },
+      { name: 'Social Cross-Search', icon: '🌐' },
+      { name: 'Real-World Fact Checker', icon: '📰' },
+      { name: 'QR/Metadata/OCR Inspector', icon: '🔍' },
+      { name: 'Consensus Judge', icon: '⚖️' },
+    ],
+    genesis: [
+      { name: 'System Architect', icon: '🏗️' },
+      { name: 'UI/UX Designer', icon: '🎨' },
+      { name: 'Frontend Engineer', icon: '💻' },
+      { name: 'State/API Logic', icon: '⚡' },
+      { name: 'Tailwind Stylist', icon: '🖌️' },
+      { name: 'Motion/Interaction', icon: '🎬' },
+      { name: 'Responsive Layout', icon: '📱' },
+      { name: 'Security/Validation', icon: '🛡️' },
+      { name: 'Build Auditor', icon: '🔍' },
+      { name: 'Preview Assembler', icon: '🚀' },
+    ],
+  };
+
+  const agents = agentDefs[model];
+  if (!agents) return null;
+
+  return (
+    <div className="my-3 rounded-2xl border border-border/80 bg-gradient-to-br from-card/90 via-card/50 to-primary/5 p-3.5 backdrop-blur-md shadow-lg">
+      <div className="flex items-center justify-between mb-2.5 pb-2 border-b border-border/60">
+        <div className="flex items-center gap-2">
+          <span className="relative flex h-2.5 w-2.5">
+            {isRunning && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />}
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-primary" />
+          </span>
+          <span className="text-xs font-semibold capitalize text-foreground">
+            {model} Multi-Agent Swarm ({agents.length} Parallel Nodes)
+          </span>
+        </div>
+        <span className="text-[10px] text-muted-foreground font-mono">
+          {isRunning ? 'Executing Parallel Consensus...' : 'All Agents Synchronized'}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-1.5">
+        {agents.map((agent, i) => {
+          const isDone = content ? content.includes(agent.name) : !isRunning;
+          return (
+            <div
+              key={i}
+              className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs transition-all ${
+                isDone
+                  ? 'bg-primary/10 border border-primary/30 text-foreground'
+                  : 'bg-secondary/40 border border-border/40 text-muted-foreground animate-pulse'
+              }`}
+            >
+              <span className="text-sm shrink-0">{agent.icon}</span>
+              <span className="truncate text-[11px] font-medium">{agent.name}</span>
+              <span className="ml-auto text-[10px] shrink-0">
+                {isDone ? '✅' : '⏳'}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function FileTree({ nodes, depth = 0 }: { nodes: FileNode[]; depth?: number }) {
   return (
     <div>
@@ -327,6 +399,12 @@ export default function AveriaAI() {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const [showModelMenu, setShowModelMenu] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<'ignite' | 'synthesis' | 'intelligence' | 'genesis'>('ignite');
+  const [localFolderHandle, setLocalFolderHandle] = useState<FileSystemDirectoryHandle | null>(null);
+  const [localFolderName, setLocalFolderName] = useState<string | null>(null);
+  const [writtenFiles, setWrittenFiles] = useState<string[]>([]);
+  const [isGeneratingApp, setIsGeneratingApp] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQueryHandled = useRef(false);
   const mirrorPeer = searchParams.get('mirror') === 'peer' && scope.isJoint && !!scope.peerId;
@@ -411,6 +489,50 @@ export default function AveriaAI() {
         setPreviewKey(k => k + 1); // force iframe remount for hot-reload
         setPreviewError(null);
         if (isMobile) setMobileView('preview');
+        // Write to local folder if one is open
+        if (localFolderHandle && code) {
+          (async () => {
+            try {
+              const isHTML = code.trim().startsWith('<') && !code.includes('function ') && !code.includes('const ');
+              const primaryFile = isHTML ? 'index.html' : 'App.jsx';
+              const fileHandle = await localFolderHandle.getFileHandle(primaryFile, { create: true });
+              const writable = await (fileHandle as any).createWritable();
+              await writable.write(code);
+              await writable.close();
+
+              const savedList = [primaryFile];
+
+              // If React code, also generate runnable index.html wrapper & package.json
+              if (!isHTML) {
+                const htmlWrapper = buildPreviewHTML(code);
+                const htmlHandle = await localFolderHandle.getFileHandle('index.html', { create: true });
+                const htmlWritable = await (htmlHandle as any).createWritable();
+                await htmlWritable.write(htmlWrapper);
+                await htmlWritable.close();
+                savedList.push('index.html');
+
+                const pkgJson = JSON.stringify({
+                  name: (activeConvId || 'averia-app').slice(0, 24).toLowerCase().replace(/[^a-z0-9]/g, '-'),
+                  version: '1.0.0',
+                  private: true,
+                  description: 'Generated by Averia Genesis Engine',
+                  scripts: { start: 'npx serve .' },
+                  dependencies: { react: '^18.2.0', 'react-dom': '^18.2.0' }
+                }, null, 2);
+                const pkgHandle = await localFolderHandle.getFileHandle('package.json', { create: true });
+                const pkgWritable = await (pkgHandle as any).createWritable();
+                await pkgWritable.write(pkgJson);
+                await pkgWritable.close();
+                savedList.push('package.json');
+              }
+
+              setWrittenFiles(savedList);
+              toast.success(`📁 Saved ${savedList.join(', ')} to ${localFolderName}`);
+            } catch (e) {
+              console.warn('[LocalFolder] Write failed:', e);
+            }
+          })();
+        }
         // === Auto-pipeline: push generated app/code into Creation vault (agentic / project) ===
         const sig = `${activeConvId}::${code.slice(0, 80)}`;
         if (user && !scope.isJoint && activeConvId && !savedProjectRef.current.has(sig)) {
@@ -777,6 +899,23 @@ export default function AveriaAI() {
 
   const removeAttachment = (id: string) => setAttachments(prev => prev.filter(a => a.id !== id));
 
+  const handleOpenFolder = async () => {
+    try {
+      if (!('showDirectoryPicker' in window)) {
+        toast.error('File System Access API not supported in this browser. Use Chrome or Edge.');
+        return;
+      }
+      const dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+      setLocalFolderHandle(dirHandle);
+      setLocalFolderName(dirHandle.name);
+      toast.success(`📁 Folder opened: ${dirHandle.name}`);
+    } catch (err: any) {
+      if (err?.name !== 'AbortError') {
+        toast.error('Could not open folder.');
+      }
+    }
+  };
+
   const sendMessage = useCallback(async () => {
     if ((!input.trim() && attachments.length === 0) || isLoading) return;
 
@@ -834,6 +973,19 @@ export default function AveriaAI() {
       return { role: m.role, content: m.content };
     });
 
+    // Auto-switch to genesis for build/create prompts and open workspace
+    const isBuildPrompt = /\b(build|create|make|design|generate|code|develop|write)\b.*\b(website|app|page|portfolio|dashboard|landing|component|site)\b/i.test(userMsg.content);
+    const effectiveModel = isBuildPrompt ? 'genesis' : selectedModel;
+    if (isBuildPrompt && selectedModel !== 'genesis') {
+      setSelectedModel('genesis');
+    }
+
+    if (effectiveModel === 'genesis') {
+      setIsGeneratingApp(true);
+      setCanvasMode('preview');
+      if (isMobile) setMobileView('preview');
+    }
+
     let assistantContent = '';
     try {
       const { data: sessionData } = await supabase.auth.getSession();
@@ -847,7 +999,7 @@ export default function AveriaAI() {
           apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
           'x-client-info': 'averia-ai-client',
         },
-        body: JSON.stringify({ messages: payloadMessages, conversationId: convId, forensicMode: currentAttachments.length > 0 }),
+        body: JSON.stringify({ messages: payloadMessages, conversationId: convId, forensicMode: currentAttachments.length > 0, model: effectiveModel }),
       });
 
       if (!resp.ok) {
@@ -915,8 +1067,9 @@ export default function AveriaAI() {
       setMessages(prev => prev.filter(m => m.role !== 'assistant' || m.content));
     } finally {
       setIsLoading(false);
+      setIsGeneratingApp(false);
     }
-  }, [input, isLoading, activeConvId, messages, attachments, isMobile, voiceMode]);
+  }, [input, isLoading, activeConvId, messages, attachments, isMobile, voiceMode, selectedModel]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -924,7 +1077,7 @@ export default function AveriaAI() {
 
   if (!user) return null;
 
-  const hasCanvas = canvasContent || canvasImageUrl;
+  const hasCanvas = Boolean(canvasContent || canvasImageUrl || isGeneratingApp);
   const userName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || '';
   const fileTree = generateFileTree(canvasContent);
 
@@ -1069,6 +1222,17 @@ export default function AveriaAI() {
                       }`}>
                         {msg.role === 'assistant' ? (
                           <div className="prose dark:prose-invert max-w-none text-[15px] sm:text-[16px] leading-relaxed font-normal [&_pre]:bg-background/50 [&_pre]:rounded-lg [&_pre]:p-3 [&_code]:text-xs [&_pre]:overflow-x-auto">
+                            {(msg.content.includes('Swarm Active') || msg.content.includes('✦ **')) && (
+                              <SwarmAgentLiveBanner
+                                model={
+                                  msg.content.includes('Genesis') ? 'genesis' :
+                                  msg.content.includes('Intelligence') ? 'intelligence' :
+                                  'synthesis'
+                                }
+                                isRunning={false}
+                                content={msg.content}
+                              />
+                            )}
                             <MessageResponse>{msg.content}</MessageResponse>
                             {msg.imageUrl && (
                               <img src={msg.imageUrl} alt="Generated" className="mt-3 rounded-lg max-w-full border border-border" />
@@ -1101,16 +1265,31 @@ export default function AveriaAI() {
                     </motion.div>
                   ))}
 
-                  {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (
+                  {isLoading && (
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-3">
                       <div className="w-7 h-7 md:w-8 md:h-8 shrink-0 flex items-center justify-center">
                         <AveriaLogo size="sm" animate />
                       </div>
-                      <div className="bg-transparent rounded-2xl rounded-bl-sm px-4 py-3">
-                        <div className="flex gap-1">
-                          <span className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                          <span className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                          <span className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      <div className="bg-transparent rounded-2xl rounded-bl-sm px-4 py-3 flex-1 max-w-[85%]">
+                        {selectedModel !== 'ignite' && (
+                          <SwarmAgentLiveBanner
+                            model={selectedModel}
+                            isRunning={true}
+                            content={messages[messages.length - 1]?.role === 'assistant' ? messages[messages.length - 1]?.content : ''}
+                          />
+                        )}
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground mt-2">
+                          <div className="flex gap-1">
+                            <span className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                            <span className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                            <span className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                          </div>
+                          <span>
+                            {selectedModel === 'genesis' ? 'Genesis 10-Agent Swarm assembling full-stack application...' :
+                             selectedModel === 'intelligence' ? 'Intelligence 5-Agent Swarm analyzing forensic consensus...' :
+                             selectedModel === 'synthesis' ? 'Synthesis 3-Agent Swarm generating creative output...' :
+                             'Averia AI thinking...'}
+                          </span>
                         </div>
                       </div>
                     </motion.div>
@@ -1219,6 +1398,74 @@ export default function AveriaAI() {
                       onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value=''; }}
                     />
 
+                    {/* Model Swarm Switcher */}
+                    <div className="relative shrink-0">
+                      <Button
+                        onClick={() => setShowModelMenu(v => !v)}
+                        variant="ghost"
+                        size="sm"
+                        className="rounded-xl h-9 px-2 gap-1.5 text-xs font-semibold"
+                      >
+                        <span className={`w-2 h-2 rounded-full ${
+                          selectedModel === 'ignite' ? 'bg-yellow-400' :
+                          selectedModel === 'synthesis' ? 'bg-purple-400' :
+                          selectedModel === 'intelligence' ? 'bg-cyan-400' :
+                          'bg-green-400'
+                        }`} />
+                        {selectedModel.charAt(0).toUpperCase() + selectedModel.slice(1)}
+                      </Button>
+                      <AnimatePresence>
+                        {showModelMenu && (
+                          <>
+                            <div className="fixed inset-0 z-40" onClick={() => setShowModelMenu(false)} />
+                            <motion.div
+                              initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 8, scale: 0.95 }}
+                              transition={{ duration: 0.15 }}
+                              className="absolute bottom-12 left-0 z-50 w-64 rounded-2xl border border-border bg-card shadow-2xl p-1.5"
+                            >
+                              {[
+                                { id: 'ignite', label: 'Ignite', emoji: '⚡', desc: 'Fast daily chat', color: 'bg-yellow-400', keys: '1 key' },
+                                { id: 'synthesis', label: 'Synthesis', emoji: '🎨', desc: 'Creative generation', color: 'bg-purple-400', keys: '3 keys' },
+                                { id: 'intelligence', label: 'Intelligence', emoji: '🔬', desc: 'Deep forensics', color: 'bg-cyan-400', keys: '5 keys' },
+                                { id: 'genesis', label: 'Genesis', emoji: '🏗️', desc: 'Full-stack builder', color: 'bg-green-400', keys: '10 keys' },
+                              ].map(m => (
+                                <button
+                                  key={m.id}
+                                  onClick={() => { setSelectedModel(m.id as any); setShowModelMenu(false); }}
+                                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-primary/10 text-left text-sm transition-colors ${selectedModel === m.id ? 'bg-primary/15 border border-primary/30' : ''}`}
+                                >
+                                  <div className={`h-8 w-8 rounded-lg ${m.color}/20 flex items-center justify-center text-base`}>{m.emoji}</div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="font-semibold flex items-center gap-2">{m.label} <span className="text-[10px] text-muted-foreground font-normal">{m.keys}</span></div>
+                                    <div className="text-[10px] text-muted-foreground">{m.desc}</div>
+                                  </div>
+                                  {selectedModel === m.id && <span className={`w-2 h-2 rounded-full ${m.color}`} />}
+                                </button>
+                              ))}
+                            </motion.div>
+                          </>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
+                    {/* Open Local Folder Button */}
+                    <Button
+                      onClick={handleOpenFolder}
+                      variant="ghost"
+                      size="icon"
+                      className={`h-9 w-9 rounded-xl shrink-0 ${localFolderHandle ? 'text-green-400' : 'text-muted-foreground'}`}
+                      title={localFolderHandle ? `Folder: ${localFolderName}` : 'Open local folder for file writing'}
+                    >
+                      <FolderOpen className="h-4 w-4" />
+                    </Button>
+                    {localFolderName && (
+                      <span className="text-[10px] text-green-400 font-mono truncate max-w-[80px] hidden sm:inline">
+                        {localFolderName}
+                      </span>
+                    )}
+
                     <textarea
                       ref={inputRef}
                       value={input}
@@ -1289,6 +1536,11 @@ export default function AveriaAI() {
                     {canvasImageUrl && !canvasContent && (
                       <span className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
                         <ImageIcon className="h-3.5 w-3.5" /> Generated Image
+                      </span>
+                    )}
+                    {!canvasContent && !canvasImageUrl && isGeneratingApp && (
+                      <span className="text-xs text-green-400 font-medium flex items-center gap-1.5 animate-pulse">
+                        <Rocket className="h-3.5 w-3.5" /> Genesis Workspace Live
                       </span>
                     )}
                   </div>
@@ -1463,6 +1715,23 @@ export default function AveriaAI() {
                         <pre className="p-4 text-xs font-mono text-foreground overflow-auto h-full w-full bg-card">
                           <code>{canvasContent}</code>
                         </pre>
+                      )}
+                      {!canvasContent && !canvasImageUrl && isGeneratingApp && (
+                        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4 my-auto">
+                          <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-green-500/20 to-emerald-500/10 border border-green-500/30 flex items-center justify-center animate-pulse shadow-lg shadow-green-500/10">
+                            <Rocket className="h-8 w-8 text-green-400" />
+                          </div>
+                          <div>
+                            <h3 className="text-base font-semibold text-foreground">Genesis Full-Stack Engine Active</h3>
+                            <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+                              Assembling React + Tailwind components, routing, responsive layouts, and interactive state...
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-green-400 font-mono bg-green-500/10 border border-green-500/20 px-3.5 py-1.5 rounded-full">
+                            <span className="w-2 h-2 rounded-full bg-green-400 animate-ping" />
+                            10 Parallel Swarm Agents Synthesizing Project
+                          </div>
+                        </div>
                       )}
                     </div>
                   )}

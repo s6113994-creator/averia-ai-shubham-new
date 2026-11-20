@@ -99,6 +99,106 @@ export async function getGeminiKeys(supabase: any): Promise<KeyRecord[]> {
   return records;
 }
 
+/**
+ * Call a single Gemini API key directly (non-streaming) — used by swarm agents.
+ * Returns the full text content or empty string on failure.
+ */
+export async function callSingleGeminiKey(
+  apiKey: string,
+  messages: any[],
+  systemPrompt: string,
+  model = "gemini-2.5-flash"
+): Promise<string> {
+  if (!apiKey) return "";
+  const isLovable = apiKey.startsWith("lovable:");
+  const actualKey = isLovable ? apiKey.replace("lovable:", "") : apiKey;
+  const endpoint = isLovable
+    ? "https://ai.gateway.lovable.dev/v1/chat/completions"
+    : "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+
+  try {
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${actualKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: isLovable ? `google/${sanitizeAveriaModel(model)}` : sanitizeAveriaModel(model),
+        messages: [{ role: "system", content: systemPrompt }, ...messages],
+        stream: false,
+        max_tokens: 4096,
+      }),
+    });
+    if (!resp.ok) return "";
+    const data = await resp.json();
+    return data.choices?.[0]?.message?.content || "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Execute a swarm of N parallel Gemini agent calls and return all results.
+ * agents: array of { role: string, systemPrompt: string }
+ * Uses first N keys from pool; falls back to key[0] if fewer keys available.
+ */
+export async function executeSwarm(
+  supabase: any,
+  agents: Array<{ role: string; systemPrompt: string }>,
+  userMessages: any[],
+  model = "gemini-2.5-flash"
+): Promise<Array<{ role: string; content: string; success: boolean }>> {
+  const keys = await getGeminiKeys(supabase);
+  if (keys.length === 0) return agents.map(a => ({ role: a.role, content: "", success: false }));
+
+  const results = await Promise.allSettled(
+    agents.map((agent, idx) => {
+      const keyRec = keys[idx % keys.length];
+      const actualKey = keyRec.api_key.startsWith("lovable:")
+        ? keyRec.api_key.replace("lovable:", "")
+        : keyRec.api_key;
+      return callSingleGeminiKey(actualKey, userMessages, agent.systemPrompt, model);
+    })
+  );
+
+  return results.map((r, idx) => ({
+    role: agents[idx].role,
+    content: r.status === "fulfilled" ? (r.value || "") : "",
+    success: r.status === "fulfilled" && !!r.value,
+  }));
+}
+
+/**
+ * Stream a pre-assembled text string as Server-Sent Events (SSE).
+ * Used by swarm modes after parallel fan-out is complete.
+ */
+export function streamTextAsSSE(text: string): Response {
+  const encoder = new TextEncoder();
+  const chunkSize = 24;
+
+  const stream = new ReadableStream({
+    start(controller) {
+      for (let i = 0; i < text.length; i += chunkSize) {
+        const chunk = text.slice(i, i + chunkSize);
+        const payload = JSON.stringify({ choices: [{ delta: { content: chunk } }] });
+        controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
+      }
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
+}
+
 /** Execute AI chat completion with automatic rotation across all Gemini keys */
 export async function executeWithGeminiRotation(
   supabase: any,

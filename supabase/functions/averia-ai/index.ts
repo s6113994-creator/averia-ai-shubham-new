@@ -6,7 +6,234 @@ import {
   getAdminSupabase,
   executeWithGeminiRotation,
   getGeminiKeys,
+  callSingleGeminiKey,
+  executeSwarm,
+  streamTextAsSSE,
 } from "../_shared/keyManager.ts";
+
+// ── Model swarm configurations ──────────────────────────────────────────────
+const SYNTHESIS_AGENTS = [
+  {
+    role: "Prompt Architect",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Prompt Architect — master of precise, vivid language. Enhance and structure the user's request for maximum creative output. Deliver rich, detailed, well-structured content.`,
+  },
+  {
+    role: "Visual Renderer",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Visual Renderer — specializing in imagery, aesthetics, and sensory-rich descriptions. When generating images use [IMAGE_REQUEST: detailed prompt]. For text, paint scenes with vivid detail.`,
+  },
+  {
+    role: "Detail Enhancer",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Detail Enhancer — expert at adding depth, nuance, and richness to any creative output. Expand, refine, and polish the response with technical and creative precision.`,
+  },
+];
+
+const INTELLIGENCE_AGENTS = [
+  {
+    role: "Pixel & Sensor Forensics",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Pixel & Sensor Forensics Agent. Analyze visual content for compression artifacts, GAN signatures, copy-paste traces, lighting inconsistencies, sensor noise patterns, and EXIF anomalies. IMPORTANT: Genuine camera photographs with natural bokeh, skin texture, motion blur, and optical depth-of-field are REAL — do NOT flag them as fake without clear technical evidence.`,
+  },
+  {
+    role: "Social Cross-Search",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Social Cross-Search Agent. Identify if this content matches known viral misinformation campaigns, out-of-context image reuse, manipulated screenshots, or coordinated inauthentic behavior patterns on social media.`,
+  },
+  {
+    role: "Real-World Fact Checker",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Real-World Fact Checker. Verify factual claims against established world knowledge: dates, figures, scientific consensus, geopolitical facts, and identifiable entities. Flag inconsistencies precisely.`,
+  },
+  {
+    role: "QR/Metadata/OCR Inspector",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the QR/Metadata/OCR Inspector. Analyze any visible text, embedded URLs, QR codes, watermarks, platform UI elements, timestamp formats, and metadata for authenticity and origin signals.`,
+  },
+  {
+    role: "Consensus Judge",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Consensus Judge. Synthesize findings from all forensic agents into a final authoritative verdict. Provide: Trust Score (0-100), Verdict (AUTHENTIC/FAKE/MISLEADING/AI-GENERATED), and a concise forensic summary. IMPORTANT: Real photographic content with natural optical properties MUST receive scores 85%+.`,
+  },
+];
+
+const GENESIS_AGENTS = [
+  {
+    role: "System Architect",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the System Architect. Design the technical architecture, component hierarchy, data flow, and file structure for the requested application. Output detailed technical specifications.`,
+  },
+  {
+    role: "UI/UX Designer",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the UI/UX Designer. Design beautiful, modern interfaces using Tailwind CSS. Focus on layout, typography, color systems, spacing, and visual hierarchy. Output complete JSX/HTML UI structure.`,
+  },
+  {
+    role: "Frontend Engineer",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Frontend Engineer. Implement React components with hooks, state management, and event handling. Write clean, production-ready TypeScript/JSX code.`,
+  },
+  {
+    role: "State/API Logic",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the State & API Logic Engineer. Implement data fetching, state management, API integration, and business logic. Write robust, error-handled async code.`,
+  },
+  {
+    role: "Tailwind Stylist",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Tailwind Stylist. Apply advanced Tailwind CSS patterns: gradients, animations, responsive breakpoints, dark mode, glassmorphism, and custom design tokens.`,
+  },
+  {
+    role: "Motion/Interaction",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Motion & Interaction Specialist. Add micro-interactions, hover effects, transitions, loading states, and smooth animations using CSS and Framer Motion patterns.`,
+  },
+  {
+    role: "Responsive Layout",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Responsive Layout Engineer. Ensure perfect rendering across all screen sizes: mobile-first design, flexible grids, adaptive typography, and touch-optimized interactions.`,
+  },
+  {
+    role: "Security/Validation",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Security & Validation Engineer. Add input validation, sanitization, error boundaries, loading/error states, and security best practices to the application.`,
+  },
+  {
+    role: "Build Auditor",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Build Auditor. Review all code for bugs, missing imports, broken logic, and runtime errors. Fix issues and ensure the code runs correctly in a browser.`,
+  },
+  {
+    role: "Preview Assembler",
+    systemPrompt: `${AVERIA_SYSTEM_PERSONA}\nYou are the Genesis Preview Assembler — the final integration engine. Take all agent outputs and assemble ONE complete, production-ready, single-file React+Tailwind application inside a single \`\`\`jsx code block. The code MUST be complete, runnable, and visually impressive. Never ask questions — always generate the full app immediately.`,
+  },
+];
+
+// ── Genesis-specific system prompt override ──────────────────────────────────
+const GENESIS_SYSTEM_PROMPT = `${AVERIA_SYSTEM_PERSONA}
+
+You are Averia Genesis Engine — the most powerful full-stack app builder.
+
+GENESIS PRIME DIRECTIVE:
+- When the user asks to build ANY website, app, dashboard, page, component, or tool — IMMEDIATELY generate complete, production-ready code.
+- NEVER ask clarifying questions. NEVER say "here's a basic version". ALWAYS generate a complete, visually impressive, fully functional implementation.
+- Output code in a single \`\`\`jsx code block (React + Tailwind CSS).
+- Include: realistic sample data, all UI states (loading/empty/error), smooth animations, hover effects, responsive design, and professional aesthetics.
+- The app must work in a browser with React + Tailwind CDN with zero configuration.
+- After the code block, add a brief description of key features.
+
+ALWAYS GENERATE. NEVER HESITATE.`;
+
+// ── Swarm merger utility ─────────────────────────────────────────────────────
+function mergeBestSwarmResult(
+  results: Array<{ role: string; content: string; success: boolean }>,
+  mode: "longest" | "judge"
+): string {
+  const successful = results.filter((r) => r.success && r.content.length > 50);
+  if (successful.length === 0) return results.map((r) => r.content).join("\n\n").trim();
+
+  if (mode === "judge") {
+    // For intelligence/genesis: prefer the last agent (judge/assembler)
+    const judge = successful[successful.length - 1];
+    if (judge && judge.content.length > 100) return judge.content;
+  }
+
+  // For synthesis: pick the longest richest response
+  return successful.sort((a, b) => b.content.length - a.content.length)[0].content;
+}
+
+function buildAgentStatusHeader(
+  agents: Array<{ role: string }>,
+  mode: string
+): string {
+  const lines = agents.map((a) => `✦ **${a.role}** — Active`).join("\n");
+  return `\n\n---\n**🧠 Averia ${mode} Swarm Active** — ${agents.length} parallel intelligence agents deployed:\n${lines}\n\n---\n\n`;
+}
+
+// ── Studio Prompt Enhancer ──────────────────────────────────────────────────
+async function enhanceStudioPrompt(supabase: any, rawPrompt: string): Promise<string> {
+  try {
+    const keys = await getGeminiKeys(supabase);
+    const key = keys[0]?.api_key?.replace("lovable:", "");
+    if (!key) return rawPrompt;
+    const res = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gemini-2.5-flash",
+        messages: [
+          {
+            role: "system",
+            content: "You are Averia Visual Studio. Transform the user's prompt into an ultra-detailed, photorealistic 16:9 cinematic studio prompt with professional lighting, atmosphere, optical lens specification (85mm f/1.4), 8K UHD clarity, and natural textures. Output ONLY the enhanced prompt string without commentary.",
+          },
+          { role: "user", content: rawPrompt },
+        ],
+        max_tokens: 300,
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const enhanced = data.choices?.[0]?.message?.content?.trim();
+      if (enhanced && enhanced.length > 10) return enhanced;
+    }
+  } catch {}
+  return rawPrompt;
+}
+
+// ── 7-Model Cascade Helper ──────────────────────────────────────────────────
+async function tryGoogleImageCascade(apiKey: string, prompt: string): Promise<{ dataUrl: string } | null> {
+  if (apiKey.startsWith("lovable:")) return null;
+
+  // 1. gemini-2.5-flash-image
+  // 2. gemini-2.0-flash-preview-image-generation
+  // 3. gemini-2.0-flash-exp-image-generation
+  // 4. gemini-2.0-flash-exp
+  const multimodalModels = [
+    "gemini-2.5-flash-image",
+    "gemini-2.0-flash-preview-image-generation",
+    "gemini-2.0-flash-exp-image-generation",
+    "gemini-2.0-flash-exp",
+  ];
+
+  for (const m of multimodalModels) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: `Generate a high quality visual illustration: ${prompt}` }] }],
+          generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+        }),
+      });
+      if (res.ok) {
+        const d = await res.json();
+        const parts: any[] = d?.candidates?.[0]?.content?.parts || [];
+        const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith("image/"));
+        if (imgPart?.inlineData?.data) {
+          const mime = imgPart.inlineData.mimeType || "image/png";
+          return { dataUrl: `data:${mime};base64,${imgPart.inlineData.data}` };
+        }
+      }
+    } catch {}
+  }
+
+  // 5. imagen-3.0-generate-002
+  // 6. imagen-3.0-generate-001
+  // 7. imagen-3.0-fast-generate-001
+  const imagenModels = [
+    "imagen-3.0-generate-002",
+    "imagen-3.0-generate-001",
+    "imagen-3.0-fast-generate-001",
+  ];
+
+  for (const m of imagenModels) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:predict?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instances: [{ prompt }],
+          parameters: { sampleCount: 1, aspectRatio: "16:9" },
+        }),
+      });
+      if (res.ok) {
+        const d = await res.json();
+        const b64 = d.predictions?.[0]?.bytesBase64Encoded;
+        if (b64) {
+          return { dataUrl: `data:image/png;base64,${b64}` };
+        }
+      }
+    } catch {}
+  }
+
+  return null;
+}
 
 serve(async (req) => {
   // CORS Preflight
@@ -50,7 +277,17 @@ serve(async (req) => {
 
     // 2. Parse request payload
     const body = await req.json().catch(() => ({}));
-    const { messages, conversationId, saveMemory, mode, forensicMode, classify, kind, text } = body as any;
+    const {
+      messages,
+      conversationId,
+      saveMemory,
+      mode,
+      forensicMode,
+      classify,
+      kind,
+      text,
+      model: selectedModel = "ignite",
+    } = body as any;
 
     // Save memory if requested
     if (saveMemory && userId) {
@@ -100,96 +337,44 @@ Submission:
       });
     }
 
-    // ====== IMAGE GENERATION MODE ======
+    // ====== IMAGE GENERATION MODE (7-Model Google Cascade + Fallback) ======
     if (mode === "image") {
-      const imagePrompt = messages?.[messages.length - 1]?.content || "";
+      const rawPrompt = messages?.[messages.length - 1]?.content || "";
       const keys = await getGeminiKeys(supabase);
 
-      // --- PRIMARY: Try Gemini 2.0 Flash native multimodal image output (responseModalities: IMAGE) ---
-      for (const keyRec of keys) {
-        if (keyRec.api_key.startsWith("lovable:")) continue; // Skip lovable keys for primary Gemini attempt
+      // Step 1: Studio Prompt Enhancement across keys
+      const studioPrompt = await enhanceStudioPrompt(supabase, rawPrompt);
+      console.log(`[averia-ai] Generating image with enhanced studio prompt: "${studioPrompt.slice(0, 100)}..."`);
+
+      // Step 2: Full 7-Model Google Cascade across all rotated keys
+      for (let k = 0; k < keys.length; k++) {
+        const keyRec = keys[k];
+        const apiKey = keyRec.api_key.replace("lovable:", "");
+        if (!apiKey) continue;
+
         try {
-          const geminiImageUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${keyRec.api_key}`;
-          const geminiResp = await fetch(geminiImageUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ role: "user", parts: [{ text: `Generate a high quality image: ${imagePrompt}` }] }],
-              generationConfig: {
-                responseModalities: ["TEXT", "IMAGE"],
-              },
-            }),
-          });
-
-          if (geminiResp.status === 429 || geminiResp.status === 403) {
-            // Rate limit or quota — try next key
-            continue;
+          const cascadeResult = await tryGoogleImageCascade(apiKey, studioPrompt);
+          if (cascadeResult?.dataUrl) {
+            console.log(`[averia-ai] Google Cascade succeeded on key #${k + 1}`);
+            return new Response(JSON.stringify({
+              choices: [{
+                message: {
+                  images: [{ image_url: { url: cascadeResult.dataUrl } }],
+                },
+              }],
+              imageUrl: cascadeResult.dataUrl,
+              url: cascadeResult.dataUrl,
+            }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
           }
-
-          if (geminiResp.ok) {
-            const geminiData = await geminiResp.json();
-            // Find inline image part in response
-            const parts: any[] = geminiData?.candidates?.[0]?.content?.parts || [];
-            const imagePart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith("image/"));
-            if (imagePart?.inlineData?.data) {
-              const mime = imagePart.inlineData.mimeType || "image/png";
-              const formatted = {
-                choices: [{
-                  message: {
-                    images: [{
-                      image_url: { url: `data:${mime};base64,${imagePart.inlineData.data}` },
-                    }],
-                  },
-                }],
-              };
-              return new Response(JSON.stringify(formatted), {
-                headers: { ...corsHeaders, "Content-Type": "application/json" },
-              });
-            }
-            // Gemini responded but no image part — model doesn't support IMAGE modality on this key/region, break loop
-            break;
-          }
-        } catch {
-          continue;
+        } catch (cascadeErr) {
+          console.warn(`[averia-ai] Cascade error on key #${k + 1}:`, cascadeErr);
         }
       }
 
-      // --- SECONDARY: Try Gemini 2.5 Flash Preview image generation endpoint ---
-      for (const keyRec of keys) {
-        if (keyRec.api_key.startsWith("lovable:")) continue;
-        try {
-          const flash25Url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${keyRec.api_key}`;
-          const flash25Resp = await fetch(flash25Url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ role: "user", parts: [{ text: `Generate a high quality image: ${imagePrompt}` }] }],
-              generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
-            }),
-          });
-          if (flash25Resp.status === 429 || flash25Resp.status === 403) continue;
-          if (flash25Resp.ok) {
-            const d = await flash25Resp.json();
-            const parts: any[] = d?.candidates?.[0]?.content?.parts || [];
-            const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith("image/"));
-            if (imgPart?.inlineData?.data) {
-              const mime = imgPart.inlineData.mimeType || "image/png";
-              return new Response(JSON.stringify({
-                choices: [{ message: { images: [{ image_url: { url: `data:${mime};base64,${imgPart.inlineData.data}` } }] } }],
-              }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-            }
-            break;
-          }
-        } catch {
-          continue;
-        }
-      }
-
-      // --- FALLBACK: Pollinations.ai — zero-cost, no API key required, always works ---
+      // Step 3: Emergency Fallback to Pollinations.ai (FLUX, 16:9 1280x720)
       try {
         const seed = Math.floor(Math.random() * 999999);
-        const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(imagePrompt)}?width=1024&height=1024&nologo=true&seed=${seed}&model=flux`;
-        // Pollinations returns the image directly as binary — we fetch and convert to base64
+        const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(studioPrompt)}?width=1280&height=720&nologo=true&seed=${seed}&model=flux`;
         const pollResp = await fetch(pollinationsUrl);
         if (pollResp.ok) {
           const imgBuffer = await pollResp.arrayBuffer();
@@ -198,22 +383,20 @@ Submission:
           for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
           const base64 = btoa(binary);
           const contentType = pollResp.headers.get("Content-Type") || "image/jpeg";
-          const formatted = {
+          const dataUrl = `data:${contentType};base64,${base64}`;
+          console.log("[averia-ai] Image served via Pollinations.ai emergency fallback");
+          return new Response(JSON.stringify({
             choices: [{
               message: {
-                images: [{
-                  image_url: { url: `data:${contentType};base64,${base64}` },
-                }],
+                images: [{ image_url: { url: dataUrl } }],
               },
             }],
-          };
-          console.log("[averia-ai] Image served via Pollinations.ai fallback");
-          return new Response(JSON.stringify(formatted), {
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
+            imageUrl: dataUrl,
+            url: dataUrl,
+          }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
         }
       } catch (pollErr) {
-        console.error("[averia-ai] Pollinations fallback failed:", pollErr);
+        console.error("[averia-ai] Pollinations emergency fallback failed:", pollErr);
       }
 
       return new Response(
@@ -222,7 +405,7 @@ Submission:
       );
     }
 
-    // ====== CHAT MODE (Streaming with automatic Gemini Key Rotation) ======
+    // ====== CHAT MODE — Model Swarm Routing ======
     const memoryContext = memories.length > 0 ? `\n\nUser Memory Vault:\n${memories.join("\n")}` : "";
     const personalGreeting = userName ? `The user's name is "${userName}". Greet them naturally when appropriate.` : "";
 
@@ -240,7 +423,7 @@ Analyze all provided frames, spectrograms, text or URL data with maximum scienti
 9. 📇 Truth-Share Summary
 ` : "";
 
-    const systemPrompt = `${AVERIA_SYSTEM_PERSONA}
+    const baseSystemPrompt = `${AVERIA_SYSTEM_PERSONA}
 ${personalGreeting}
 
 Your capabilities:
@@ -252,12 +435,125 @@ Your capabilities:
 ${forensicAddon}
 ${memoryContext}`;
 
+    const userMessages = messages || [];
+
+    // ── IGNITE: Single fast key (default) ──────────────────────────────────
+    if (selectedModel === "ignite" || (!selectedModel)) {
+      console.log("[averia-ai] Mode: IGNITE (1 key, fast)");
+      return await executeWithGeminiRotation(supabase, {
+        messages: userMessages,
+        systemPrompt: baseSystemPrompt,
+        stream: true,
+        forensicMode: Boolean(forensicMode),
+      });
+    }
+
+    // ── SYNTHESIS: 3 parallel creative agents ──────────────────────────────
+    if (selectedModel === "synthesis") {
+      console.log("[averia-ai] Mode: SYNTHESIS (3 parallel creative agents)");
+      const statusHeader = buildAgentStatusHeader(SYNTHESIS_AGENTS, "Synthesis");
+      const swarmResults = await executeSwarm(supabase, SYNTHESIS_AGENTS, userMessages);
+      const merged = mergeBestSwarmResult(swarmResults, "longest");
+      const finalText = statusHeader + merged;
+      return streamTextAsSSE(finalText);
+    }
+
+    // ── INTELLIGENCE: 5 parallel forensic agents ───────────────────────────
+    if (selectedModel === "intelligence") {
+      console.log("[averia-ai] Mode: INTELLIGENCE (5 parallel forensic agents)");
+      const statusHeader = buildAgentStatusHeader(INTELLIGENCE_AGENTS, "Intelligence");
+
+      // Run first 4 agents in parallel, then feed results to Consensus Judge
+      const primaryAgents = INTELLIGENCE_AGENTS.slice(0, 4);
+      const judgeAgent = INTELLIGENCE_AGENTS[4];
+
+      const primaryResults = await executeSwarm(supabase, primaryAgents, userMessages);
+
+      // Build consensus judge input
+      const judgeInput = primaryResults
+        .filter((r) => r.success)
+        .map((r) => `**${r.role}**: ${r.content.slice(0, 800)}`)
+        .join("\n\n");
+
+      const judgeMessages = [
+        ...userMessages,
+        {
+          role: "user",
+          content: `Based on these 4 forensic agent analyses, provide your final consensus verdict:\n\n${judgeInput}`,
+        },
+      ];
+
+      const keys = await getGeminiKeys(supabase);
+      const judgeKey = keys[4] || keys[0];
+      const judgeContent = judgeKey
+        ? await callSingleGeminiKey(
+            judgeKey.api_key.replace("lovable:", ""),
+            judgeMessages,
+            judgeAgent.systemPrompt
+          )
+        : mergeBestSwarmResult(primaryResults, "longest");
+
+      const agentSummary = primaryResults
+        .filter((r) => r.success)
+        .map((r) => `\n> **${r.role}**: ${r.content.slice(0, 150).replace(/\n/g, " ")}...`)
+        .join("\n");
+
+      const finalText = statusHeader + agentSummary + "\n\n---\n\n**🧠 Consensus Verdict:**\n\n" + judgeContent;
+      return streamTextAsSSE(finalText);
+    }
+
+    // ── GENESIS: 10 parallel full-stack builder agents ─────────────────────
+    if (selectedModel === "genesis") {
+      console.log("[averia-ai] Mode: GENESIS (10 parallel full-stack agents)");
+      const statusHeader = buildAgentStatusHeader(GENESIS_AGENTS, "Genesis");
+
+      // Run all agents except Preview Assembler in parallel first
+      const buildAgents = GENESIS_AGENTS.slice(0, 9);
+      const assemblerAgent = GENESIS_AGENTS[9];
+
+      const buildResults = await executeSwarm(supabase, buildAgents, userMessages, "gemini-2.5-flash");
+
+      // Feed all build agent results to Preview Assembler
+      const assemblerContext = buildResults
+        .filter((r) => r.success && r.content.length > 20)
+        .map((r) => `### ${r.role}\n${r.content.slice(0, 600)}`)
+        .join("\n\n");
+
+      const assemblerMessages = [
+        {
+          role: "user",
+          content: `Original request: ${userMessages[userMessages.length - 1]?.content || ""}\n\nAgent insights:\n${assemblerContext}\n\nNow assemble the complete, production-ready application code in a single \`\`\`jsx block.`,
+        },
+      ];
+
+      const keys = await getGeminiKeys(supabase);
+      const assemblerKey = keys[9] || keys[0];
+      const assembledCode = assemblerKey
+        ? await callSingleGeminiKey(
+            assemblerKey.api_key.replace("lovable:", ""),
+            assemblerMessages,
+            assemblerAgent.systemPrompt + "\n\n" + GENESIS_SYSTEM_PROMPT
+          )
+        : "";
+
+      // Build agent activity cards for the streaming response
+      const agentCards = buildResults
+        .filter((r) => r.success)
+        .map((r) => `> ✦ **${r.role}** ✅`)
+        .join("\n");
+
+      const finalText = statusHeader + agentCards + "\n\n---\n\n" + assembledCode;
+      return streamTextAsSSE(finalText);
+    }
+
+    // ── Fallback: treat unknown model as ignite ─────────────────────────────
     return await executeWithGeminiRotation(supabase, {
-      messages: messages || [],
-      systemPrompt,
+      messages: userMessages,
+      systemPrompt: baseSystemPrompt,
       stream: true,
       forensicMode: Boolean(forensicMode),
     });
+
   } catch (err: any) {
     console.error("[averia-ai] Fatal error:", err);
     return new Response(
