@@ -6,6 +6,7 @@ import {
   executeSwarm,
   getGeminiKeys,
   callSingleGeminiKey,
+  callRobustGemini,
 } from "../_shared/keyManager.ts";
 
 const FORENSIC_5_AGENTS = [
@@ -117,16 +118,12 @@ serve(async (req) => {
 
     const judgePrompt = `Content under forensic examination:\n${basePrompt}\n\n=== 4 SPECIALIST FORENSIC INVESTIGATIONS ===\n${reportsText || "Investigations inconclusive."}\n\nSynthesize these findings and provide the final JSON verdict matching the required schema.`;
 
-    const keys = await getGeminiKeys(supabase);
-    const judgeKey = keys[4] || keys[0];
-    const judgeRaw = judgeKey
-      ? await callSingleGeminiKey(
-          judgeKey.api_key.replace("lovable:", ""),
-          [{ role: "user", content: judgePrompt }],
-          judgeAgent.systemPrompt,
-          "gemini-2.5-pro"
-        )
-      : "";
+    const judgeRaw = await callRobustGemini(
+      supabase,
+      [{ role: "user", content: judgePrompt }],
+      judgeAgent.systemPrompt,
+      "gemini-2.5-pro"
+    );
 
     let result;
     try {

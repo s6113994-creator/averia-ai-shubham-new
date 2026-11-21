@@ -49,8 +49,9 @@ export async function getGeminiKeys(supabase: any): Promise<KeyRecord[]> {
   try {
     const { data, error } = await supabase
       .from("gemini_api_keys")
-      .select("api_key, error_count, is_active")
-      .order("error_count", { ascending: true });
+      .select("api_key, error_count, is_active, last_used_at")
+      .order("error_count", { ascending: true })
+      .order("last_used_at", { ascending: true, nullsFirst: true });
 
     if (!error && Array.isArray(data)) {
       // First add active keys
@@ -333,6 +334,16 @@ export async function executeWithGeminiRotation(
         });
 
         if (res.ok) {
+          // Reset error_count on successful call so healthy keys don't stay penalized
+          if (keyRec.source === "database") {
+            supabase
+              .from("gemini_api_keys")
+              .update({ error_count: 0, last_used_at: new Date().toISOString() })
+              .eq("api_key", keyRec.api_key)
+              .then(() => {})
+              .catch(() => {});
+          }
+
           if (options.stream) {
             return new Response(res.body, {
               headers: {
@@ -353,6 +364,21 @@ export async function executeWithGeminiRotation(
         lastStatus = res.status;
         lastErrorText = await res.text().catch(() => "");
         console.warn(`[Averia AI] Key #${i + 1} (${currentModel}) returned ${res.status}. Rotating to next key...`);
+
+        // Increment error_count on rate-limit or quota errors
+        if (keyRec.source === "database" && [429, 403, 503].includes(res.status)) {
+          supabase
+            .from("gemini_api_keys")
+            .rpc("increment_error_count", { key_val: keyRec.api_key })
+            .then(() => {})
+            .catch(() => {
+              // fallback: raw update if RPC doesn't exist
+              supabase.from("gemini_api_keys")
+                .update({ error_count: (keyRec as any).error_count + 1 })
+                .eq("api_key", keyRec.api_key)
+                .then(() => {}).catch(() => {});
+            });
+        }
 
         // If rate-limited (429), quota exceeded (403), or 5xx, try next key immediately
         continue;

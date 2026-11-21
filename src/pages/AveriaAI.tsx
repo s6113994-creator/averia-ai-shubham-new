@@ -49,8 +49,56 @@ interface FileNode {
   active?: boolean;
 }
 
+interface ParsedProjectFile {
+  path: string;
+  content: string;
+}
+
+function extractProjectFiles(content: string): ParsedProjectFile[] {
+  if (!content) return [];
+  const files: ParsedProjectFile[] = [];
+  const seenPaths = new Set<string>();
+
+  // 1. Look for ```file:filepath ... ``` blocks
+  const fileBlockRegex = /```file:([^\n\r]+)\s*\n([\s\S]*?)```/g;
+  let match: RegExpExecArray | null;
+  while ((match = fileBlockRegex.exec(content)) !== null) {
+    const rawPath = match[1].trim().replace(/^[\/\\]+/, '');
+    const fileContent = match[2];
+    if (rawPath && !seenPaths.has(rawPath)) {
+      seenPaths.add(rawPath);
+      files.push({ path: rawPath, content: fileContent });
+    }
+  }
+
+  return files;
+}
+
+async function writeFileToHandle(rootHandle: FileSystemDirectoryHandle, filePath: string, content: string) {
+  const parts = filePath.replace(/^[\\\/]+/, '').split(/[\\\/]+/);
+  let currentDir = rootHandle;
+  for (let i = 0; i < parts.length - 1; i++) {
+    currentDir = await currentDir.getDirectoryHandle(parts[i], { create: true });
+  }
+  const fileName = parts[parts.length - 1];
+  const fileHandle = await currentDir.getFileHandle(fileName, { create: true });
+  const writable = await (fileHandle as any).createWritable();
+  await writable.write(content);
+  await writable.close();
+}
+
 function extractCodeForPreview(content: string): string | null {
   if (!content) return null;
+
+  // 0. Primary check: ```file:index.html or ```file:src/App.jsx
+  const fileHtmlMatch = content.match(/```file:(?:index\.html|public\/index\.html|src\/index\.html)\s*\n([\s\S]*?)```/i);
+  if (fileHtmlMatch) return fileHtmlMatch[1];
+
+  const fileAppMatch = content.match(/```file:(?:src\/App\.(?:jsx|tsx)|App\.(?:jsx|tsx))\s*\n([\s\S]*?)```/i);
+  if (fileAppMatch) return fileAppMatch[1];
+
+  const anyHtmlFile = content.match(/```file:[^\n\r]+\.html\s*\n([\s\S]*?)```/i);
+  if (anyHtmlFile) return anyHtmlFile[1];
 
   // 1. Closed code blocks (```jsx, ```tsx, ```html, ```react)
   const codeBlockRegex = /```(?:jsx|tsx|html|react)\s*\n([\s\S]*?)```/g;
@@ -62,7 +110,7 @@ function extractCodeForPreview(content: string): string | null {
   if (matches.length > 0) return matches[matches.length - 1];
 
   // 2. Unclosed code block (during streaming or partial responses)
-  const unclosed = content.match(/```(?:jsx|tsx|html|react)\s*\n([\s\S]*)$/);
+  const unclosed = content.match(/```(?:file:(?:index\.html|src\/App\.(?:jsx|tsx)|[^\n]+\.html)\s*\n|jsx|tsx|html|react\s*\n)([\s\S]*)$/i);
   if (unclosed && unclosed[1].trim().length > 30) {
     return unclosed[1];
   }
@@ -169,7 +217,39 @@ if (_Component) {
 </body></html>`;
 }
 
-function generateFileTree(code: string | null): FileNode[] {
+function generateFileTree(code: string | null, rawMessageContent?: string, activePath?: string): FileNode[] {
+  if (rawMessageContent) {
+    const parsedFiles = extractProjectFiles(rawMessageContent);
+    if (parsedFiles.length > 0) {
+      const rootNodes: FileNode[] = [];
+      for (const f of parsedFiles) {
+        const segments = f.path.split(/[\\\/]+/);
+        let currentLevel = rootNodes;
+        for (let i = 0; i < segments.length; i++) {
+          const seg = segments[i];
+          const isLast = i === segments.length - 1;
+          if (isLast) {
+            currentLevel.push({
+              name: seg,
+              type: 'file',
+              content: f.content,
+              active: activePath ? f.path === activePath || seg === activePath : (seg === 'index.html' || seg === 'App.jsx'),
+            });
+          } else {
+            let folder = currentLevel.find(n => n.name === seg && n.type === 'folder');
+            if (!folder) {
+              folder = { name: seg, type: 'folder', children: [] };
+              currentLevel.push(folder);
+            }
+            if (!folder.children) folder.children = [];
+            currentLevel = folder.children;
+          }
+        }
+      }
+      return rootNodes;
+    }
+  }
+
   if (!code) return [];
   const isHTML = code.trim().startsWith('<') && !code.includes('function ') && !code.includes('const ');
   if (isHTML) {
@@ -299,19 +379,20 @@ function SwarmAgentLiveBanner({ model, isRunning, content }: { model: string; is
   );
 }
 
-function FileTree({ nodes, depth = 0 }: { nodes: FileNode[]; depth?: number }) {
+function FileTree({ nodes, depth = 0, onSelectFile }: { nodes: FileNode[]; depth?: number; onSelectFile?: (node: FileNode) => void }) {
   return (
     <div>
       {nodes.map((node, i) => (
         <div key={i}>
           <div
-            className={`flex items-center gap-1.5 px-2 py-1 text-xs cursor-pointer hover:bg-secondary/50 rounded ${node.active ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
+            onClick={() => { if (node.type === 'file' && onSelectFile) onSelectFile(node); }}
+            className={`flex items-center gap-1.5 px-2 py-1 text-xs cursor-pointer hover:bg-secondary/50 rounded transition-colors ${node.active ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground'}`}
             style={{ paddingLeft: `${depth * 12 + 8}px` }}
           >
             {node.type === 'folder' ? <FolderOpen className="h-3.5 w-3.5 text-amber-500" /> : <File className="h-3.5 w-3.5" />}
             <span className="truncate">{node.name}</span>
           </div>
-          {node.children && <FileTree nodes={node.children} depth={depth + 1} />}
+          {node.children && <FileTree nodes={node.children} depth={depth + 1} onSelectFile={onSelectFile} />}
         </div>
       ))}
     </div>
@@ -349,6 +430,8 @@ export default function AveriaAI() {
   const [previewDevice, setPreviewDevice] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewKey, setPreviewKey] = useState(0);
+  const [selectedFileCode, setSelectedFileCode] = useState<string | null>(null);
+  const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const toggleVoiceInput = () => {
@@ -507,55 +590,56 @@ export default function AveriaAI() {
         setPreviewError(null);
         if (isMobile) setMobileView('preview');
         // Write to local folder if one is open
-        if (localFolderHandle && code) {
+        if (localFolderHandle && (code || lastAssistant.content)) {
           (async () => {
             try {
-              const isHTML = code.trim().startsWith('<') && !code.includes('function ') && !code.includes('const ');
-              const primaryFile = isHTML ? 'index.html' : 'App.jsx';
-              const fileHandle = await localFolderHandle.getFileHandle(primaryFile, { create: true });
-              const writable = await (fileHandle as any).createWritable();
-              await writable.write(code);
-              await writable.close();
+              const parsedFiles = extractProjectFiles(lastAssistant.content);
+              const savedList: string[] = [];
 
-              const savedList = [primaryFile];
+              if (parsedFiles.length > 0) {
+                // Write all generated project files into local folder (creating subdirectories)
+                for (const file of parsedFiles) {
+                  await writeFileToHandle(localFolderHandle, file.path, file.content);
+                  savedList.push(file.path);
+                }
+              } else if (code) {
+                // Fallback for single-file outputs
+                const isHTML = code.trim().startsWith('<') && !code.includes('function ') && !code.includes('const ');
+                const primaryFile = isHTML ? 'index.html' : 'src/App.jsx';
+                await writeFileToHandle(localFolderHandle, primaryFile, code);
+                savedList.push(primaryFile);
 
-              // If React code, also generate runnable index.html wrapper & package.json
-              if (!isHTML) {
-                const htmlWrapper = buildPreviewHTML(code);
-                const htmlHandle = await localFolderHandle.getFileHandle('index.html', { create: true });
-                const htmlWritable = await (htmlHandle as any).createWritable();
-                await htmlWritable.write(htmlWrapper);
-                await htmlWritable.close();
-                savedList.push('index.html');
+                // If React code, also generate runnable index.html wrapper & package.json
+                if (!isHTML) {
+                  const htmlWrapper = buildPreviewHTML(code);
+                  await writeFileToHandle(localFolderHandle, 'index.html', htmlWrapper);
+                  savedList.push('index.html');
 
-                const pkgJson = JSON.stringify({
-                  name: (activeConvId || 'averia-app').slice(0, 24).toLowerCase().replace(/[^a-z0-9]/g, '-'),
-                  version: '1.0.0',
-                  private: true,
-                  description: 'Generated by Averia Genesis Engine',
-                  scripts: { start: 'npx serve .' },
-                  dependencies: { react: '^18.2.0', 'react-dom': '^18.2.0' }
-                }, null, 2);
-                const pkgHandle = await localFolderHandle.getFileHandle('package.json', { create: true });
-                const pkgWritable = await (pkgHandle as any).createWritable();
-                await pkgWritable.write(pkgJson);
-                await pkgWritable.close();
-                savedList.push('package.json');
+                  const pkgJson = JSON.stringify({
+                    name: (activeConvId || 'averia-app').slice(0, 24).toLowerCase().replace(/[^a-z0-9]/g, '-'),
+                    version: '1.0.0',
+                    private: true,
+                    description: 'Generated by Averia Genesis Engine',
+                    scripts: { start: 'npx serve .' },
+                    dependencies: { react: '^18.2.0', 'react-dom': '^18.2.0' }
+                  }, null, 2);
+                  await writeFileToHandle(localFolderHandle, 'package.json', pkgJson);
+                  savedList.push('package.json');
+                }
+
+                // Always write a README.md for the project
+                try {
+                  const title = (lastAssistant.content.match(/^#\s+(.+)$/m)?.[1] || detectComponentName(code) || 'Averia Project').slice(0, 80);
+                  const readme = `# ${title}\n\nGenerated by Averia Genesis Engine (10-Agent Swarm).\n\n## Quick Start\nOpen \`index.html\` in any web browser to view and interact with the application.`;
+                  await writeFileToHandle(localFolderHandle, 'README.md', readme);
+                  savedList.push('README.md');
+                } catch {}
               }
 
-              // Always write a README.md for the project
-              try {
-                const title = (lastAssistant.content.match(/^#\s+(.+)$/m)?.[1] || detectComponentName(code) || 'Averia Project').slice(0, 80);
-                const readme = `# ${title}\n\nGenerated by Averia Genesis Engine (10-Agent Swarm).\n\n## Quick Start\nOpen \`index.html\` in any web browser to view and interact with the application.`;
-                const rmHandle = await localFolderHandle.getFileHandle('README.md', { create: true });
-                const rmWritable = await (rmHandle as any).createWritable();
-                await rmWritable.write(readme);
-                await rmWritable.close();
-                savedList.push('README.md');
-              } catch {}
-
-              setWrittenFiles(savedList);
-              toast.success(`📁 Saved ${savedList.join(', ')} to ${localFolderName}`);
+              if (savedList.length > 0) {
+                setWrittenFiles(savedList);
+                toast.success(`📁 Saved ${savedList.length} files (${savedList.slice(0, 3).join(', ')}${savedList.length > 3 ? '...' : ''}) to ${localFolderName}`);
+              }
             } catch (e) {
               console.warn('[LocalFolder] Write failed:', e);
             }
@@ -754,11 +838,18 @@ export default function AveriaAI() {
     setInput('');
     setPreviewError(null);
     setMobileView('chat');
+    // Clear local folder on new chat so old folder never persists across sessions
+    setLocalFolderHandle(null);
+    setLocalFolderName(null);
+    setWrittenFiles([]);
+    setSelectedFileCode(null);
+    setSelectedFileName(null);
   };
 
   const selectConversation = async (convId: string) => {
     setActiveConvId(convId);
     setCanvasContent(null); setCanvasImageUrl(null); setDeployUrl(null);
+    setSelectedFileCode(null); setSelectedFileName(null);
     if (mirrorPeer && scope.workspaceId && scope.peerId) {
       const { data, error } = await supabase.rpc('get_peer_ai_messages', {
         _workspace_id: scope.workspaceId, _target_user: scope.peerId, _conversation_id: convId,
@@ -1111,7 +1202,8 @@ export default function AveriaAI() {
 
   const hasCanvas = Boolean(canvasContent || canvasImageUrl || isGeneratingApp);
   const userName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || '';
-  const fileTree = generateFileTree(canvasContent);
+  const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
+  const fileTree = generateFileTree(canvasContent, lastAssistant?.content, selectedFileName || undefined);
 
   const deviceWidths = { desktop: '100%', tablet: '768px', mobile: '375px' };
 
@@ -1333,6 +1425,23 @@ export default function AveriaAI() {
               {/* Input */}
               <div className="border-t border-white/5 backdrop-blur-sm shadow-none p-3 md:p-4 shrink-0">
                 <div className="max-w-3xl mx-auto">
+                  {/* Folder pill — Antigravity style, above input box */}
+                  {localFolderName && (
+                    <div className="flex items-center gap-2 mb-2 px-1">
+                      <div className="flex items-center gap-1.5 bg-green-500/10 border border-green-500/25 rounded-full px-3 py-1 text-xs text-green-400 font-mono flex-1 min-w-0">
+                        <FolderOpen className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{localFolderName}</span>
+                      </div>
+                      <button
+                        onClick={() => { setLocalFolderHandle(null); setLocalFolderName(null); setWrittenFiles([]); }}
+                        className="h-6 w-6 rounded-full bg-secondary/60 hover:bg-destructive/20 hover:text-destructive flex items-center justify-center transition-colors shrink-0"
+                        title="Eject folder"
+                        aria-label="Eject folder"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  )}
                   {/* Attachment chips */}
                   {attachments.length > 0 && (
                     <div className="flex flex-wrap gap-2 mb-2">
@@ -1436,7 +1545,7 @@ export default function AveriaAI() {
                         onClick={() => setShowModelMenu(v => !v)}
                         variant="ghost"
                         size="sm"
-                        className="rounded-xl h-9 px-2 gap-1.5 text-xs font-semibold"
+                        className="rounded-xl h-9 px-2.5 gap-1.5 text-xs font-semibold"
                       >
                         <span className={`w-2 h-2 rounded-full ${
                           selectedModel === 'ignite' ? 'bg-yellow-400' :
@@ -1455,25 +1564,34 @@ export default function AveriaAI() {
                               animate={{ opacity: 1, y: 0, scale: 1 }}
                               exit={{ opacity: 0, y: 8, scale: 0.95 }}
                               transition={{ duration: 0.15 }}
-                              className="absolute bottom-12 left-0 z-50 w-64 rounded-2xl border border-border bg-card shadow-2xl p-1.5"
+                              className="absolute bottom-12 left-0 z-50 w-72 rounded-2xl border border-border/80 bg-card/95 backdrop-blur-xl shadow-2xl shadow-black/30 p-2 overflow-hidden"
                             >
+                              <div className="px-3 py-2 mb-1 border-b border-border/60">
+                                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Select Model</p>
+                              </div>
                               {[
-                                { id: 'ignite', label: 'Ignite', emoji: '⚡', desc: 'Fast daily chat', color: 'bg-yellow-400', keys: '1 key' },
-                                { id: 'synthesis', label: 'Synthesis', emoji: '🎨', desc: 'Creative generation', color: 'bg-purple-400', keys: '3 keys' },
-                                { id: 'intelligence', label: 'Intelligence', emoji: '🔬', desc: 'Deep forensics', color: 'bg-cyan-400', keys: '5 keys' },
-                                { id: 'genesis', label: 'Genesis', emoji: '🏗️', desc: 'Full-stack builder', color: 'bg-green-400', keys: '10 keys' },
+                                { id: 'ignite', label: 'Ignite', emoji: '⚡', desc: 'Fast daily chat & instant help', dotColor: 'bg-yellow-400' },
+                                { id: 'synthesis', label: 'Synthesis', emoji: '🎨', desc: 'Creative image & media generation', dotColor: 'bg-purple-400' },
+                                { id: 'intelligence', label: 'Intelligence', emoji: '🔬', desc: 'Deep pixel-to-pixel & fact forensics', dotColor: 'bg-cyan-400' },
+                                { id: 'genesis', label: 'Genesis', emoji: '🏗️', desc: 'Full-stack multi-file app & game builder', dotColor: 'bg-green-400' },
                               ].map(m => (
                                 <button
                                   key={m.id}
                                   onClick={() => { setSelectedModel(m.id as any); setShowModelMenu(false); }}
-                                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-primary/10 text-left text-sm transition-colors ${selectedModel === m.id ? 'bg-primary/15 border border-primary/30' : ''}`}
+                                  className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left transition-colors ${selectedModel === m.id ? 'bg-primary/12 border border-primary/25' : 'hover:bg-secondary/60'}`}
                                 >
-                                  <div className={`h-8 w-8 rounded-lg ${m.color}/20 flex items-center justify-center text-base`}>{m.emoji}</div>
-                                  <div className="flex-1 min-w-0">
-                                    <div className="font-semibold flex items-center gap-2">{m.label} <span className="text-[10px] text-muted-foreground font-normal">{m.keys}</span></div>
-                                    <div className="text-[10px] text-muted-foreground">{m.desc}</div>
+                                  <div className="h-9 w-9 rounded-xl bg-secondary/60 flex items-center justify-center text-xl shrink-0">
+                                    {m.emoji}
                                   </div>
-                                  {selectedModel === m.id && <span className={`w-2 h-2 rounded-full ${m.color}`} />}
+                                  <div className="flex-1 min-w-0">
+                                    <div className="font-semibold text-[13px] text-foreground">{m.label}</div>
+                                    <div className="text-[11px] text-muted-foreground leading-snug mt-0.5">{m.desc}</div>
+                                  </div>
+                                  {selectedModel === m.id && (
+                                    <svg className="h-4 w-4 text-primary shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                                    </svg>
+                                  )}
                                 </button>
                               ))}
                             </motion.div>
@@ -1482,20 +1600,17 @@ export default function AveriaAI() {
                       </AnimatePresence>
                     </div>
 
-                    {/* Open Local Folder Button */}
-                    <Button
-                      onClick={handleOpenFolder}
-                      variant="ghost"
-                      size="icon"
-                      className={`h-9 w-9 rounded-xl shrink-0 ${localFolderHandle ? 'text-green-400' : 'text-muted-foreground'}`}
-                      title={localFolderHandle ? `Folder: ${localFolderName}` : 'Open local folder for file writing'}
-                    >
-                      <FolderOpen className="h-4 w-4" />
-                    </Button>
-                    {localFolderName && (
-                      <span className="text-[10px] text-green-400 font-mono truncate max-w-[80px] hidden sm:inline">
-                        {localFolderName}
-                      </span>
+                    {/* Open Local Folder Button (only shown when no folder active) */}
+                    {!localFolderHandle && (
+                      <Button
+                        onClick={handleOpenFolder}
+                        variant="ghost"
+                        size="icon"
+                        className="h-9 w-9 rounded-xl shrink-0 text-muted-foreground"
+                        title="Open local folder for file writing"
+                      >
+                        <FolderOpen className="h-4 w-4" />
+                      </Button>
                     )}
 
                     <textarea
@@ -1639,8 +1754,20 @@ export default function AveriaAI() {
                 <div className="flex-1 flex overflow-hidden">
                   {canvasContent && canvasMode === 'files' && (
                     <div className="w-full overflow-auto p-2">
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold px-2 py-1.5 mb-1">Explorer</div>
-                      <FileTree nodes={fileTree} />
+                      <div className="flex items-center justify-between px-2 py-1.5 mb-1">
+                        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Explorer</span>
+                        <span className="text-[10px] text-muted-foreground font-mono">Click file to inspect code</span>
+                      </div>
+                      <FileTree
+                        nodes={fileTree}
+                        onSelectFile={(node) => {
+                          if (node.content) {
+                            setSelectedFileCode(node.content);
+                            setSelectedFileName(node.name);
+                            setCanvasMode('code');
+                          }
+                        }}
+                      />
                     </div>
                   )}
 
@@ -1744,9 +1871,26 @@ export default function AveriaAI() {
                         </div>
                       )}
                       {canvasContent && canvasMode === 'code' && (
-                        <pre className="p-4 text-xs font-mono text-foreground overflow-auto h-full w-full bg-card">
-                          <code>{canvasContent}</code>
-                        </pre>
+                        <div className="flex flex-col h-full w-full bg-card overflow-hidden">
+                          {selectedFileName && (
+                            <div className="px-4 py-2 border-b border-border bg-secondary/30 flex items-center justify-between text-xs font-mono shrink-0">
+                              <span className="text-primary font-semibold flex items-center gap-1.5">
+                                <File className="h-3.5 w-3.5" /> {selectedFileName}
+                              </span>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 text-[10px] text-muted-foreground hover:text-foreground"
+                                onClick={() => { setSelectedFileCode(null); setSelectedFileName(null); }}
+                              >
+                                View Main Preview File
+                              </Button>
+                            </div>
+                          )}
+                          <pre className="p-4 text-xs font-mono text-foreground overflow-auto flex-1 w-full">
+                            <code>{selectedFileCode || canvasContent}</code>
+                          </pre>
+                        </div>
                       )}
                       {!canvasContent && !canvasImageUrl && isGeneratingApp && (
                         <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4 my-auto">
