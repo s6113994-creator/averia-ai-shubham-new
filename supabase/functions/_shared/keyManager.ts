@@ -45,31 +45,21 @@ export async function getGeminiKeys(supabase: any): Promise<KeyRecord[]> {
   const records: KeyRecord[] = [];
   const seen = new Set<string>();
 
-  // 1. From database table `gemini_api_keys` - fetch ALL keys ordered by error_count ASC
+  // 1. From database table `gemini_api_keys` - fetch STRICTLY ACTIVE keys ordered by error_count ASC, last_used_at ASC
   try {
     const { data, error } = await supabase
       .from("gemini_api_keys")
       .select("api_key, error_count, is_active, last_used_at")
+      .eq("is_active", true)
       .order("error_count", { ascending: true })
       .order("last_used_at", { ascending: true, nullsFirst: true });
 
     if (!error && Array.isArray(data)) {
-      // First add active keys
       for (const row of data) {
         const k = row.api_key?.trim();
-        if (k && row.is_active !== false && !seen.has(k)) {
+        if (k && row.is_active === true && !seen.has(k)) {
           seen.add(k);
           records.push({ api_key: k, source: "database" });
-        }
-      }
-      // If fewer than 10 active keys were added, add remaining keys as fallback (never lock out keys permanently)
-      if (records.length < 10) {
-        for (const row of data) {
-          const k = row.api_key?.trim();
-          if (k && !seen.has(k)) {
-            seen.add(k);
-            records.push({ api_key: k, source: "database" });
-          }
         }
       }
     }
@@ -118,7 +108,8 @@ export async function callSingleGeminiKey(
   apiKey: string,
   messages: any[],
   systemPrompt: string,
-  model = "gemini-2.5-flash"
+  model = "gemini-2.5-flash",
+  supabase?: any
 ): Promise<string> {
   if (!apiKey) return "";
   const isLovable = apiKey.startsWith("lovable:");
@@ -147,10 +138,34 @@ export async function callSingleGeminiKey(
           max_tokens: 4096,
         }),
       });
+
       if (resp.ok) {
         const data = await resp.json();
         const text = data.choices?.[0]?.message?.content || "";
         if (text && text.trim().length > 0) return text.trim();
+      } else {
+        const errText = await resp.text().catch(() => "");
+        if (resp.status === 400 || resp.status === 403) {
+          console.error(
+            `[Averia AI] callSingleGeminiKey: Key (${actualKey.slice(0, 10)}...) rejected with HTTP ${resp.status}: "${errText.slice(0, 200)}". Deactivating key in database.`
+          );
+          if (supabase) {
+            supabase
+              .from("gemini_api_keys")
+              .update({ is_active: false, error_count: 999 })
+              .eq("api_key", actualKey)
+              .then(() => {})
+              .catch(() => {});
+          }
+          return ""; // Stop immediately on dead key
+        }
+
+        if (resp.status === 429) {
+          console.warn(
+            `[Averia AI] callSingleGeminiKey: Model ${targetModel} returned 429 (Rate Limit). Waiting 1500ms backoff...`
+          );
+          await new Promise((r) => setTimeout(r, 1500));
+        }
       }
     } catch {
       // Continue to next model in chain
@@ -181,16 +196,23 @@ export async function callRobustGemini(
     "gemini-1.5-flash",
   ].filter((m, i, arr) => arr.indexOf(m) === i);
 
-  // Randomize start offset for load balancing
-  const startIdx = Math.floor(Math.random() * keys.length);
-  const rotated = [...keys.slice(startIdx), ...keys.slice(0, startIdx)];
+  // Preserve error_count ASC, last_used_at ASC order for natural rotation
+  const rotated = [...keys];
 
   for (const model of models) {
     for (let i = 0; i < rotated.length; i++) {
       const keyRec = rotated[i];
       const actualKey = keyRec.api_key.replace("lovable:", "");
-      const res = await callSingleGeminiKey(actualKey, messages, systemPrompt, model);
+      const res = await callSingleGeminiKey(actualKey, messages, systemPrompt, model, supabase);
       if (res && res.trim().length > 10) {
+        if (keyRec.source === "database") {
+          supabase
+            .from("gemini_api_keys")
+            .update({ error_count: 0, last_used_at: new Date().toISOString() })
+            .eq("api_key", keyRec.api_key)
+            .then(() => {})
+            .catch(() => {});
+        }
         return res.trim();
       }
     }
@@ -280,9 +302,9 @@ export async function executeWithGeminiRotation(
     );
   }
 
-  // Randomize initial key offset for round-robin load distribution
-  const startIdx = Math.floor(Math.random() * keys.length);
-  const rotated = [...keys.slice(startIdx), ...keys.slice(0, startIdx)];
+  // Keys are pre-ordered by error_count ASC, last_used_at ASC (least recently used first).
+  // Maintaining this order guarantees strictly distinct active keys rotate seamlessly for every request.
+  const rotated = [...keys];
 
   const selectedModel = options.forensicMode ? "gemini-2.5-pro" : (options.model || "gemini-2.5-flash");
   const cleanModel = sanitizeAveriaModel(selectedModel);
@@ -302,12 +324,18 @@ export async function executeWithGeminiRotation(
 
   let lastStatus = 500;
   let lastErrorText = "";
+  const deadKeys = new Set<string>();
 
   for (const currentModel of modelsToTry) {
     for (let i = 0; i < rotated.length; i++) {
       const keyRec = rotated[i];
       const isLovable = keyRec.api_key.startsWith("lovable:");
       const actualKey = isLovable ? keyRec.api_key.replace("lovable:", "") : keyRec.api_key;
+
+      // Auto-skip any key known to be dead (400/403)
+      if (deadKeys.has(actualKey)) {
+        continue;
+      }
 
       const endpoint = isLovable
         ? "https://ai.gateway.lovable.dev/v1/chat/completions"
@@ -334,7 +362,7 @@ export async function executeWithGeminiRotation(
         });
 
         if (res.ok) {
-          // Reset error_count on successful call so healthy keys don't stay penalized
+          // Reset error_count on successful call and update last_used_at for round-robin rotation
           if (keyRec.source === "database") {
             supabase
               .from("gemini_api_keys")
@@ -363,25 +391,57 @@ export async function executeWithGeminiRotation(
 
         lastStatus = res.status;
         lastErrorText = await res.text().catch(() => "");
-        console.warn(`[Averia AI] Key #${i + 1} (${currentModel}) returned ${res.status}. Rotating to next key...`);
 
-        // Increment error_count on rate-limit or quota errors
-        if (keyRec.source === "database" && [429, 403, 503].includes(res.status)) {
-          supabase
-            .from("gemini_api_keys")
-            .rpc("increment_error_count", { key_val: keyRec.api_key })
-            .then(() => {})
-            .catch(() => {
-              // fallback: raw update if RPC doesn't exist
-              supabase.from("gemini_api_keys")
-                .update({ error_count: (keyRec as any).error_count + 1 })
-                .eq("api_key", keyRec.api_key)
-                .then(() => {}).catch(() => {});
-            });
+        // ── 1. DEAD-KEY BYPASS (HTTP 400 Bad Request / 403 Forbidden / Revoked) ──
+        if (res.status === 400 || res.status === 403) {
+          deadKeys.add(actualKey);
+          console.error(
+            `[Averia AI] Key #${i + 1} (${actualKey.slice(0, 10)}...) rejected with HTTP ${res.status}: "${lastErrorText.slice(0, 250)}". Auto-deactivating (is_active = false) in public.gemini_api_keys.`
+          );
+
+          if (keyRec.source === "database") {
+            supabase
+              .from("gemini_api_keys")
+              .update({ is_active: false, error_count: 999 })
+              .eq("api_key", keyRec.api_key)
+              .then(() => {
+                console.log(`[Averia AI] Successfully marked key ${keyRec.api_key.slice(0, 8)}... as is_active = false in database`);
+              })
+              .catch((err: any) => {
+                console.warn(`[Averia AI] Failed to update is_active in DB:`, err);
+              });
+          }
+          // Immediately bypass to next key
+          continue;
         }
 
-        // If rate-limited (429), quota exceeded (403), or 5xx, try next key immediately
+        // ── 2. AUTO-RETRY WITH EXPONENTIAL BACKOFF ON HTTP 429 (Rate Limit / RPM Spike) ──
+        if (res.status === 429) {
+          console.warn(
+            `[Averia AI] Key #${i + 1} (${currentModel}) returned HTTP 429: "${lastErrorText.slice(0, 150)}". Incrementing error count, waiting 1500ms backoff, and rotating to next active key...`
+          );
+
+          if (keyRec.source === "database") {
+            supabase
+              .from("gemini_api_keys")
+              .update({ error_count: ((keyRec as any).error_count || 0) + 1 })
+              .eq("api_key", keyRec.api_key)
+              .then(() => {})
+              .catch(() => {});
+          }
+
+          // Wait 1500ms backoff before rotating to next key so RPM spikes self-heal
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          continue;
+        }
+
+        // ── 3. SERVER ERROR (5xx) ──
+        console.warn(
+          `[Averia AI] Key #${i + 1} (${currentModel}) returned HTTP ${res.status}: "${lastErrorText.slice(0, 150)}". Rotating to next key...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, 500));
         continue;
+
       } catch (networkErr: any) {
         console.warn(`[Averia AI] Key #${i + 1} network exception:`, networkErr?.message);
         continue;

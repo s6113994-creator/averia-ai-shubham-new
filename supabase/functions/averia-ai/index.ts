@@ -329,7 +329,12 @@ async function enhanceStudioPrompt(supabase: any, rawPrompt: string): Promise<st
 }
 
 // ── 7-Model Cascade Helper ──────────────────────────────────────────────────
-async function tryGoogleImageCascade(apiKey: string, prompt: string, keyIndex = 0): Promise<{ dataUrl: string } | null> {
+async function tryGoogleImageCascade(
+  apiKey: string,
+  prompt: string,
+  keyIndex = 0,
+  supabase?: any
+): Promise<{ dataUrl: string } | null> {
   if (!apiKey || apiKey.startsWith("lovable:")) return null;
 
   const multimodalModels = [
@@ -366,7 +371,31 @@ async function tryGoogleImageCascade(apiKey: string, prompt: string, keyIndex = 
         }
       } else {
         const errText = await res.text().catch(() => "");
-        console.warn(`[averia-ai] ${m} key#${keyIndex + 1} returned ${res.status}: ${errText.slice(0, 200)}`);
+        // Dead key detection (400 Bad Request / 403 Forbidden)
+        if (res.status === 400 || res.status === 403) {
+          console.error(
+            `[averia-ai] Image cascade: Key #${keyIndex + 1} (${apiKey.slice(0, 10)}...) rejected with HTTP ${res.status}: "${errText.slice(0, 200)}". Deactivating key in database.`
+          );
+          if (supabase) {
+            supabase
+              .from("gemini_api_keys")
+              .update({ is_active: false, error_count: 999 })
+              .eq("api_key", apiKey)
+              .then(() => {})
+              .catch(() => {});
+          }
+          return null; // Stop trying other models on this dead key
+        }
+
+        // Rate limit backoff (429)
+        if (res.status === 429) {
+          console.warn(
+            `[averia-ai] Image cascade: ${m} key#${keyIndex + 1} returned 429 (Rate Limit). Backing off 1500ms...`
+          );
+          await new Promise((r) => setTimeout(r, 1500));
+        } else {
+          console.warn(`[averia-ai] ${m} key#${keyIndex + 1} returned ${res.status}: ${errText.slice(0, 200)}`);
+        }
       }
     } catch (e: any) {
       console.warn(`[averia-ai] ${m} key#${keyIndex + 1} exception: ${e?.message}`);
@@ -400,7 +429,23 @@ async function tryGoogleImageCascade(apiKey: string, prompt: string, keyIndex = 
         }
       } else {
         const errText = await res.text().catch(() => "");
-        console.warn(`[averia-ai] ${m} key#${keyIndex + 1} returned ${res.status}: ${errText.slice(0, 150)}`);
+        if (res.status === 400 || res.status === 403) {
+          console.error(
+            `[averia-ai] Image predict: Key #${keyIndex + 1} rejected with HTTP ${res.status}. Deactivating in database.`
+          );
+          if (supabase) {
+            supabase
+              .from("gemini_api_keys")
+              .update({ is_active: false, error_count: 999 })
+              .eq("api_key", apiKey)
+              .then(() => {})
+              .catch(() => {});
+          }
+          return null;
+        }
+        if (res.status === 429) {
+          await new Promise((r) => setTimeout(r, 1500));
+        }
       }
     } catch (e: any) {
       console.warn(`[averia-ai] ${m} key#${keyIndex + 1} exception: ${e?.message}`);
@@ -424,8 +469,16 @@ async function generateAveriaImage(
     const apiKey = keyRec.api_key.replace("lovable:", "").trim();
     if (!apiKey || keyRec.api_key.startsWith("lovable:")) continue;
     try {
-      const cascadeResult = await tryGoogleImageCascade(apiKey, studioPrompt, k);
+      const cascadeResult = await tryGoogleImageCascade(apiKey, studioPrompt, k, supabase);
       if (cascadeResult?.dataUrl) {
+        if (keyRec.source === "database") {
+          supabase
+            .from("gemini_api_keys")
+            .update({ error_count: 0, last_used_at: new Date().toISOString() })
+            .eq("api_key", keyRec.api_key)
+            .then(() => {})
+            .catch(() => {});
+        }
         return { dataUrl: cascadeResult.dataUrl, prompt: studioPrompt };
       }
       console.warn(`[averia-ai] Key #${k + 1} exhausted all image models, trying next key...`);
