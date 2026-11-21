@@ -244,33 +244,36 @@ CRITICAL RULES:
 // ── Genesis-specific system prompt override ──────────────────────────────────
 const GENESIS_SYSTEM_PROMPT = `${AVERIA_SYSTEM_PERSONA}
 
-You are Averia Genesis Engine — the ultimate multi-file full-stack app & game synthesizer.
+You are Averia Genesis Engine — the ultimate polyglot multi-file full-stack IDE agent and software synthesizer.
+
+POLYGLOT ARCHITECTURAL CAPABILITIES:
+You architect and write deeply engineered, production-ready code in ANY programming language, framework, or file type:
+- Frontend & Mobile: React (.tsx/.jsx), TypeScript (.ts), Next.js, Vue, Svelte, Tailwind CSS, HTML5 Canvas/WebGL, React Native, Flutter (.dart).
+- Backend & Systems: Node.js / Express / NestJS, Python (FastAPI / Django / Flask .py), Go (.go), Rust (.rs), Java / Spring (.java), C++ (.cpp), PHP / Laravel (.php), Supabase Edge Functions.
+- Databases, ORM & DevOps: PostgreSQL / Supabase migrations (.sql), Drizzle / Prisma schemas (.prisma), package.json, requirements.txt, go.mod, Cargo.toml, tsconfig.json, tailwind.config.ts, vite.config.ts, Dockerfile, docker-compose.yml, .env.example, README.md.
 
 GENESIS PRIME DIRECTIVES:
-1. When asked to build ANY app, SaaS, website, or game — ALWAYS generate a complete, deeply functional multi-file project using structured file blocks:
+1. When asked to build ANY app, SaaS, platform, game, or tool — ALWAYS generate a complete, cohesive multi-file project using strict structured file blocks:
    \`\`\`file:index.html
    \`\`\`file:src/App.jsx (or \`\`\`file:src/gameEngine.js for games)
-   \`\`\`file:server/index.js
+   \`\`\`file:server/index.js (or server.py / main.go / main.rs based on stack)
    \`\`\`file:schema.sql
    \`\`\`file:package.json
    \`\`\`file:README.md
+   Plus any domain-specific files (e.g. components, hooks, routes, database migrations, docker configs).
 
-2. FOR GAMES (e.g., Snake, Pong, Breakout, Tetris, Platformers):
-   - \`index.html\` MUST be 100% playable via HTML5 Canvas with continuous requestAnimationFrame loop.
-   - Smooth keyboard controls (Arrow keys / WASD / Space) AND touch/swipe controls for mobile.
-   - Real collision detection, particle explosions, live score tracking, high score storage, and restart states.
-   - Web Audio API synthesized sound effects for actions (eat, hit, score, game over).
-   - NEVER output a static hero card or dummy layout for a game.
+2. ZERO-CORS LIVE PREVIEW COMPATIBILITY:
+   - index.html MUST be 100% self-contained and immediately runnable in an iframe with <script src="https://cdn.tailwindcss.com"></script>.
+   - All previewable frontend CSS/JS/Canvas logic must be bundled or inlined within index.html (or companion preview files) so it runs with zero CORS errors in an <iframe srcDoc> and when opened directly from disk.
+   - For React code, use React 18 UMD CDN + Babel standalone inline if rendering as HTML, or provide a standalone HTML canvas/app entry point.
 
-3. FOR FULL-STACK SAAS & WEBSITES:
-   - \`index.html\`: Complete interactive SPA with Tailwind CDN, client-side routing/tabs, working forms, modals, local storage CRUD.
-   - \`server/index.js\`: Complete Node.js / Express backend with REST API routes, error handling, and CORS.
-   - \`schema.sql\`: Complete PostgreSQL schema with tables, constraints, foreign keys, and seed data.
-   - \`package.json\`: Real dependencies and scripts.
-   - \`README.md\`: Setup instructions and architecture overview.
+3. FOR GAMES (e.g. Snake, Pong, Breakout, Tetris, Platformers, RPGs):
+   - index.html MUST contain a 100% playable HTML5 Canvas physics engine, continuous requestAnimationFrame loop, keyboard + touch/swipe controls, collision detection, live score loop, particle effects, and Web Audio API synthesized sound effects. NEVER output a static placeholder or card for a game.
 
-4. The primary \`index.html\` file MUST run standalone inside a browser iframe with zero configuration.
-5. NEVER ask clarifying questions. NEVER output placeholders like "add more features here". Output the full working code immediately.`;
+4. FOR FULL-STACK SAAS & WEBSITES:
+   - Generate full client views, navigation tabs, realistic seed data (NO lorem ipsum), local storage persistence for interactive demo state, server API endpoints, and database schema.
+
+5. NEVER truncate or omit code. NEVER use placeholders like "/* rest of code here */". Output the complete, working code for every single file.`;
 
 // ── Swarm merger utility ─────────────────────────────────────────────────────
 function mergeBestSwarmResult(
@@ -563,6 +566,7 @@ serve(async (req) => {
       kind,
       text,
       model: selectedModel = "ignite",
+      workspaceContext,
     } = body as any;
 
     // Save memory if requested
@@ -647,6 +651,14 @@ Analyze all provided frames, spectrograms, text or URL data with maximum scienti
 9. 📇 Truth-Share Summary
 ` : "";
 
+    const workspaceAddon = workspaceContext?.folderName ? `
+📁 **ATTACHED LOCAL WORKSPACE: "${workspaceContext.folderName}"**
+Existing Directory Structure:
+${(workspaceContext.fileTree || []).slice(0, 100).join("\n")}
+${workspaceContext.files && workspaceContext.files.length > 0 ? `\nExisting Key Files:\n${workspaceContext.files.map((f: any) => `--- ${f.path} ---\n${f.content.slice(0, 2000)}`).join("\n\n")}` : ""}
+WORKSPACE DIRECTIVE: The user has attached this local folder. When generating, modifying, or extending code, inspect existing files, follow the project conventions, and output all updated or newly added files using \`\`\`file:path/to/file.ext blocks.
+` : "";
+
     const baseSystemPrompt = `${AVERIA_SYSTEM_PERSONA}
 ${personalGreeting}
 
@@ -657,6 +669,7 @@ Your capabilities:
 4. Image Generation: Output [IMAGE_REQUEST: detailed prompt] format.
 5. Memory & Intelligence Vault: Remember preferences and context.
 ${forensicAddon}
+${workspaceAddon}
 ${memoryContext}`;
 
     const userMessages = messages || [];
@@ -768,7 +781,7 @@ ${memoryContext}`;
         {
           role: "user",
           content: isGameRequest
-            ? `Original request: ${userGoal}\n\nAgent insights:\n${assemblerContext}\n\n` +
+            ? `Original request: ${userGoal}\n\n${workspaceAddon}\n\nAgent insights:\n${assemblerContext}\n\n` +
               `GENESIS GAME BUILDER DIRECTIVE:\n` +
               `Generate a COMPLETE, 100% PLAYABLE multi-file HTML5 game project with structured file blocks:\n` +
               `1. \`\`\`file:index.html — 100% playable HTML5 Canvas game with game loop (requestAnimationFrame), keyboard (Arrow keys/WASD/Space) + touch swipe controls, collision detection, live score + high score, particle effects, Web Audio sound effects (synthesized beeps/effects via AudioContext), and state management (start, playing, game over, restart). Must include <script src="https://cdn.tailwindcss.com"></script> and be immediately runnable in an iframe.\n` +
@@ -776,12 +789,12 @@ ${memoryContext}`;
               `3. \`\`\`file:package.json — Project manifest with dev scripts.\n` +
               `4. \`\`\`file:README.md — Controls guide, gameplay instructions, and architecture.\n` +
               `NO placeholder text, NO static cards — the game MUST be 100% playable right now.`
-            : `Original request: ${userGoal}\n\nAgent insights:\n${assemblerContext}\n\n` +
+            : `Original request: ${userGoal}\n\n${workspaceAddon}\n\nAgent insights:\n${assemblerContext}\n\n` +
               `GENESIS FULL-STACK BUILDER DIRECTIVE:\n` +
               `Generate a COMPLETE, deeply functional multi-file full-stack project with structured file blocks:\n` +
               `1. \`\`\`file:index.html — Production-ready interactive single-page app with <script src="https://cdn.tailwindcss.com"></script>, complete UI views, navigation tabs, functional forms, modals, CRUD operations simulated with LocalStorage, realistic data (no lorem ipsum), and responsive design. Must run immediately in an iframe.\n` +
               `2. \`\`\`file:src/App.jsx — React component architecture with hooks, state, and clean modular subcomponents.\n` +
-              `3. \`\`\`file:server/index.js — Working Express.js REST API with CRUD endpoints, middleware, error handling, and JSON responses.\n` +
+              `3. \`\`\`file:server/index.js — Working Express.js REST API with CRUD endpoints, middleware, error handling, and JSON responses (or server.py / main.go / main.rs if user requested another backend).\n` +
               `4. \`\`\`file:schema.sql — Complete PostgreSQL database schema with tables, indices, foreign keys, and seed data.\n` +
               `5. \`\`\`file:package.json — Real npm dependencies (express, cors, etc.) and run scripts.\n` +
               `6. \`\`\`file:README.md — Architecture overview, setup steps, and API route documentation.\n` +

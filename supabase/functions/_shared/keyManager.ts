@@ -224,7 +224,8 @@ export async function callRobustGemini(
 /**
  * Execute a swarm of N parallel Gemini agent calls and return all results.
  * agents: array of { role: string, systemPrompt: string }
- * Uses first N keys from pool; falls back to key[0] if fewer keys available.
+ * Staggers execution in 2 waves of up to 5 agents with 300ms spacing to prevent
+ * simultaneous concurrency spikes across keys.
  */
 export async function executeSwarm(
   supabase: any,
@@ -235,21 +236,37 @@ export async function executeSwarm(
   const keys = await getGeminiKeys(supabase);
   if (keys.length === 0) return agents.map(a => ({ role: a.role, content: "", success: false }));
 
-  const results = await Promise.allSettled(
-    agents.map((agent, idx) => {
-      const keyRec = keys[idx % keys.length];
-      const actualKey = keyRec.api_key.startsWith("lovable:")
-        ? keyRec.api_key.replace("lovable:", "")
-        : keyRec.api_key;
-      return callSingleGeminiKey(actualKey, userMessages, agent.systemPrompt, model);
-    })
-  );
+  const BATCH_SIZE = 5;
+  const allResults: Array<{ role: string; content: string; success: boolean }> = [];
 
-  return results.map((r, idx) => ({
-    role: agents[idx].role,
-    content: r.status === "fulfilled" ? (r.value || "") : "",
-    success: r.status === "fulfilled" && !!r.value,
-  }));
+  for (let i = 0; i < agents.length; i += BATCH_SIZE) {
+    const wave = agents.slice(i, i + BATCH_SIZE);
+    if (i > 0) {
+      // 300ms spacing between waves to protect RPM & prevent concurrency locks
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    const waveResults = await Promise.allSettled(
+      wave.map((agent, waveIdx) => {
+        const globalIdx = i + waveIdx;
+        const keyRec = keys[globalIdx % keys.length];
+        const actualKey = keyRec.api_key.startsWith("lovable:")
+          ? keyRec.api_key.replace("lovable:", "")
+          : keyRec.api_key;
+        return callSingleGeminiKey(actualKey, userMessages, agent.systemPrompt, model, supabase);
+      })
+    );
+
+    for (let j = 0; j < wave.length; j++) {
+      const r = waveResults[j];
+      allResults.push({
+        role: wave[j].role,
+        content: r.status === "fulfilled" ? (r.value || "") : "",
+        success: r.status === "fulfilled" && !!r.value,
+      });
+    }
+  }
+
+  return allResults;
 }
 
 /**
@@ -449,9 +466,17 @@ export async function executeWithGeminiRotation(
     }
   }
 
+  // Surface the exact real HTTP status and descriptive error reason instead of masking all errors under "rate-limited"
+  let errorMsg = `Averia AI engine error (HTTP ${lastStatus}): ${lastErrorText.slice(0, 250) || "Unable to complete request"}`;
+  if (lastStatus === 429) {
+    errorMsg = "Averia AI service is temporarily experiencing high traffic volume. Please retry in a few moments.";
+  } else if (lastStatus === 400 || lastStatus === 403) {
+    errorMsg = `Averia AI key permission error (HTTP ${lastStatus}): Please verify active API keys in settings.`;
+  }
+
   return new Response(
-    JSON.stringify({ error: "Averia AI core is temporarily rate-limited. Please retry shortly.", details: lastErrorText }),
-    { status: lastStatus === 429 ? 429 : 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    JSON.stringify({ error: errorMsg, status: lastStatus, details: lastErrorText }),
+    { status: lastStatus === 429 ? 429 : (lastStatus >= 400 && lastStatus < 600 ? lastStatus : 503), headers: { ...corsHeaders, "Content-Type": "application/json" } }
   );
 }
 

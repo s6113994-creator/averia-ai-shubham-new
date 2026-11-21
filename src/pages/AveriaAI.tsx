@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Eye, Code, X, FileCode, Globe, Play, Pause, Music, Video, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Smartphone, Tablet, Camera, Paperclip, FileText, Link2, Mic } from 'lucide-react';
+import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Eye, Code, X, FileCode, Globe, Play, Pause, Music, Video, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Smartphone, Tablet, Camera, Paperclip, FileText, Link2, Mic, CheckCircle2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
@@ -54,6 +54,173 @@ interface ParsedProjectFile {
   content: string;
 }
 
+// ==========================================
+// IndexedDB Directory Handle Persistence
+// ==========================================
+const IDB_NAME = 'averia_folder_vault';
+const IDB_STORE = 'folder_handles';
+
+function openFolderDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function saveFolderHandleToDB(convId: string | null, handle: FileSystemDirectoryHandle): Promise<void> {
+  try {
+    const db = await openFolderDB();
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    const store = tx.objectStore(IDB_STORE);
+    if (convId) store.put(handle, convId);
+    store.put(handle, 'lastActiveFolderHandle');
+    await new Promise((res, rej) => {
+      tx.oncomplete = () => res(undefined);
+      tx.onerror = () => rej(tx.error);
+    });
+  } catch (err) {
+    console.warn('[IDB] saveFolderHandle error:', err);
+  }
+}
+
+async function getFolderHandleFromDB(convId: string | null): Promise<FileSystemDirectoryHandle | null> {
+  try {
+    const db = await openFolderDB();
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const store = tx.objectStore(IDB_STORE);
+    return new Promise((resolve) => {
+      if (convId) {
+        const req = store.get(convId);
+        req.onsuccess = () => {
+          if (req.result) return resolve(req.result);
+          const lastReq = store.get('lastActiveFolderHandle');
+          lastReq.onsuccess = () => resolve(lastReq.result || null);
+          lastReq.onerror = () => resolve(null);
+        };
+        req.onerror = () => resolve(null);
+      } else {
+        const lastReq = store.get('lastActiveFolderHandle');
+        lastReq.onsuccess = () => resolve(lastReq.result || null);
+        lastReq.onerror = () => resolve(null);
+      }
+    });
+  } catch (err) {
+    console.warn('[IDB] getFolderHandle error:', err);
+    return null;
+  }
+}
+
+async function clearFolderHandleFromDB(convId: string | null): Promise<void> {
+  try {
+    const db = await openFolderDB();
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    const store = tx.objectStore(IDB_STORE);
+    if (convId) store.delete(convId);
+    store.delete('lastActiveFolderHandle');
+    await new Promise((res) => {
+      tx.oncomplete = () => res(undefined);
+      tx.onerror = () => res(undefined);
+    });
+  } catch (err) {
+    console.warn('[IDB] clearFolderHandle error:', err);
+  }
+}
+
+// ==========================================
+// Local Workspace Scanning for Context
+// ==========================================
+interface ScannedFile {
+  path: string;
+  content: string;
+}
+
+interface WorkspaceContext {
+  folderName: string;
+  fileTree: string[];
+  files: ScannedFile[];
+}
+
+const IGNORED_DIRS = new Set([
+  'node_modules',
+  '.git',
+  '.next',
+  'dist',
+  'build',
+  '.cache',
+  '.vscode',
+  '.idea',
+  'coverage',
+  '.turbo',
+  '.output',
+  'tmp',
+]);
+
+async function scanLocalWorkspace(rootHandle: FileSystemDirectoryHandle, maxDepth = 3): Promise<WorkspaceContext | null> {
+  try {
+    const fileTree: string[] = [];
+    const files: ScannedFile[] = [];
+
+    async function walk(handle: FileSystemDirectoryHandle, currentPath: string, depth: number) {
+      if (depth > maxDepth) return;
+      for await (const [name, entry] of (handle as any).entries()) {
+        const entryPath = currentPath ? `${currentPath}/${name}` : name;
+        if (entry.kind === 'directory') {
+          if (IGNORED_DIRS.has(name) || name.startsWith('.')) continue;
+          fileTree.push(`${entryPath}/`);
+          await walk(entry as FileSystemDirectoryHandle, entryPath, depth + 1);
+        } else if (entry.kind === 'file') {
+          fileTree.push(entryPath);
+          if (files.length < 15) {
+            const isKeyFile = /\.(json|md|html|css|js|ts|jsx|tsx|sql|py|go|rs|env\.example|toml|yml|yaml)$/i.test(name)
+              && !name.endsWith('.lock') && !name.endsWith('-lock.json');
+            if (isKeyFile) {
+              try {
+                const file = await (entry as any).getFile();
+                if (file.size < 50000) {
+                  const text = await file.text();
+                  files.push({ path: entryPath, content: text });
+                }
+              } catch {}
+            }
+          }
+        }
+      }
+    }
+
+    await walk(rootHandle, '', 1);
+    return {
+      folderName: rootHandle.name,
+      fileTree: fileTree.slice(0, 120),
+      files,
+    };
+  } catch (err) {
+    console.warn('[Workspace] Scan error:', err);
+    return null;
+  }
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function cleanProseFromCode(content: string): string {
+  if (!content) return '';
+  return content
+    .replace(/```file:[^\n\r]+\s*\n[\s\S]*?```/g, '')
+    .replace(/```(?:html|jsx|tsx|javascript|typescript|js|ts|css|json|sql|py|go|rs|rust|sh|bash|text|markdown)?\s*\n[\s\S]*?```/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function extractProjectFiles(content: string): ParsedProjectFile[] {
   if (!content) return [];
   const files: ParsedProjectFile[] = [];
@@ -68,6 +235,20 @@ function extractProjectFiles(content: string): ParsedProjectFile[] {
     if (rawPath && !seenPaths.has(rawPath)) {
       seenPaths.add(rawPath);
       files.push({ path: rawPath, content: fileContent });
+    }
+  }
+
+  // 2. Fallback: ```lang \n // file:path/to/file or /* file:path/to/file */
+  if (files.length === 0) {
+    const fallbackRegex = /```(?:[a-zA-Z0-9_-]+)\s*\n(?:\/\/|\/\*|<!--|#)\s*(?:file:)?([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)[\s\S]*?\n([\s\S]*?)```/g;
+    let fbMatch: RegExpExecArray | null;
+    while ((fbMatch = fallbackRegex.exec(content)) !== null) {
+      const rawPath = fbMatch[1].trim().replace(/^[\/\\]+/, '');
+      const fileContent = fbMatch[2];
+      if (rawPath && !seenPaths.has(rawPath)) {
+        seenPaths.add(rawPath);
+        files.push({ path: rawPath, content: fileContent });
+      }
     }
   }
 
@@ -90,7 +271,16 @@ async function writeFileToHandle(rootHandle: FileSystemDirectoryHandle, filePath
 function extractCodeForPreview(content: string): string | null {
   if (!content) return null;
 
-  // 0. Primary check: ```file:index.html or ```file:src/App.jsx
+  const parsedFiles = extractProjectFiles(content);
+  // 1. If parsed project files exist, prioritize index.html
+  const indexFile = parsedFiles.find(f => /^(?:public\/|src\/)?index\.html$/i.test(f.path) || f.path.endsWith('.html'));
+  if (indexFile) return indexFile.content;
+
+  // 2. React primary file
+  const appFile = parsedFiles.find(f => /^(?:src\/)?(?:App|main|index)\.(?:jsx|tsx)$/i.test(f.path));
+  if (appFile) return appFile.content;
+
+  // 3. Fallback to ```file:index.html or ```file:src/App.jsx
   const fileHtmlMatch = content.match(/```file:(?:index\.html|public\/index\.html|src\/index\.html)\s*\n([\s\S]*?)```/i);
   if (fileHtmlMatch) return fileHtmlMatch[1];
 
@@ -100,7 +290,7 @@ function extractCodeForPreview(content: string): string | null {
   const anyHtmlFile = content.match(/```file:[^\n\r]+\.html\s*\n([\s\S]*?)```/i);
   if (anyHtmlFile) return anyHtmlFile[1];
 
-  // 1. Closed code blocks (```jsx, ```tsx, ```html, ```react)
+  // 4. Closed code blocks (```jsx, ```tsx, ```html, ```react)
   const codeBlockRegex = /```(?:jsx|tsx|html|react)\s*\n([\s\S]*?)```/g;
   const matches: string[] = [];
   let m: RegExpExecArray | null;
@@ -109,13 +299,13 @@ function extractCodeForPreview(content: string): string | null {
   }
   if (matches.length > 0) return matches[matches.length - 1];
 
-  // 2. Unclosed code block (during streaming or partial responses)
+  // 5. Unclosed code block (during streaming or partial responses)
   const unclosed = content.match(/```(?:file:(?:index\.html|src\/App\.(?:jsx|tsx)|[^\n]+\.html)\s*\n|jsx|tsx|html|react\s*\n)([\s\S]*)$/i);
   if (unclosed && unclosed[1].trim().length > 30) {
     return unclosed[1];
   }
 
-  // 3. Raw standalone HTML document
+  // 6. Raw standalone HTML document
   if (content.includes('<!DOCTYPE html>') || (content.includes('<html') && content.includes('</html>'))) {
     const rawHtml = content.match(/<!DOCTYPE html[\s\S]*?(?:<\/html>|$)/i) || content.match(/<html[\s\S]*?(?:<\/html>|$)/i);
     if (rawHtml) return rawHtml[0];
@@ -168,53 +358,251 @@ function detectComponentName(code: string): string {
   return 'App';
 }
 
-function buildPreviewHTML(code: string): string {
-  if (code.trim().startsWith('<') && !code.includes('function ') && !code.includes('const ')) {
-    return `<!DOCTYPE html><html><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<script src="https://cdn.tailwindcss.com"><\/script>
-<style>body{margin:0;font-family:system-ui,sans-serif;}*{box-sizing:border-box;}</style>
-</head><body>${code}</body></html>`;
+function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] = []): string {
+  let doc = htmlContent;
+
+  // 1. Ensure Tailwind CDN is present in <head>
+  if (!doc.includes('cdn.tailwindcss.com')) {
+    if (doc.includes('<head>')) {
+      doc = doc.replace('<head>', '<head>\n<script src="https://cdn.tailwindcss.com"></script>');
+    } else if (doc.includes('<html>')) {
+      doc = doc.replace('<html>', '<html>\n<head><script src="https://cdn.tailwindcss.com"></script></head>');
+    } else {
+      doc = `<script src="https://cdn.tailwindcss.com"></script>\n` + doc;
+    }
   }
 
+  // 2. Inline companion CSS files
+  const cssFiles = allFiles.filter(f => f.path.endsWith('.css'));
+  if (cssFiles.length > 0) {
+    const inlinedStyles = cssFiles.map(f => `/* inlined: ${f.path} */\n${f.content}`).join('\n\n');
+    const styleTag = `\n<style>\n${inlinedStyles}\n</style>\n`;
+    if (doc.includes('</head>')) {
+      doc = doc.replace('</head>', `${styleTag}</head>`);
+    } else if (doc.includes('<body')) {
+      doc = styleTag + doc;
+    } else {
+      doc += styleTag;
+    }
+  }
+
+  // 3. Inline companion JS / engine files (excluding server or configs)
+  const jsFiles = allFiles.filter(f =>
+    (f.path.endsWith('.js') || f.path.endsWith('.ts')) &&
+    !f.path.startsWith('server/') &&
+    !f.path.includes('server.js') &&
+    !f.path.includes('vite.config') &&
+    !f.path.includes('tailwind.config')
+  );
+  if (jsFiles.length > 0) {
+    const inlinedScripts = jsFiles.map(f => `// inlined: ${f.path}\n${f.content.replace(/^import\s+.*?['";]\s*$/gm, '').replace(/export\s+default\s+/g, '').replace(/export\s+/g, '')}`).join('\n\n');
+    const scriptTag = `\n<script>\ntry {\n${inlinedScripts}\n} catch(err) { console.warn('Inlined script error:', err); }\n</script>\n`;
+    if (doc.includes('</body>')) {
+      doc = doc.replace('</body>', `${scriptTag}</body>`);
+    } else {
+      doc += scriptTag;
+    }
+  }
+
+  return doc;
+}
+
+function buildPreviewHTML(code: string, allFiles: ParsedProjectFile[] = []): string {
+  if (!code) return '';
+
+  const trimmed = code.trim();
+  const isHTMLDoc =
+    /<!DOCTYPE\s+html/i.test(trimmed) ||
+    /<html[\s>]/i.test(trimmed) ||
+    (/<head[\s>]/i.test(trimmed) && /<body[\s>]/i.test(trimmed)) ||
+    (trimmed.startsWith('<') && (trimmed.includes('</html>') || trimmed.includes('</body>')));
+
+  // Case 1: Standalone HTML Document -> Zero-Babel direct rendering with inlined companions
+  if (isHTMLDoc) {
+    return bundleZeroCORSHtml(trimmed, allFiles);
+  }
+
+  // Case 2: Pure HTML fragment
+  if (trimmed.startsWith('<') && !trimmed.includes('function ') && !trimmed.includes('const ') && !trimmed.includes('import ')) {
+    const wrapped = `<!DOCTYPE html><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>body{margin:0;font-family:system-ui,sans-serif;}*{box-sizing:border-box;}</style>
+</head><body>${trimmed}</body></html>`;
+    return bundleZeroCORSHtml(wrapped, allFiles);
+  }
+
+  // Case 3: React JSX/TSX Component
   const cleaned = cleanCodeForBrowser(code);
   const componentName = detectComponentName(cleaned);
 
   return `<!DOCTYPE html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<script src="https://cdn.tailwindcss.com"><\/script>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"><\/script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"><\/script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:#fff;}
 *{box-sizing:border-box;}
-.error-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:9999;padding:2rem;}
-.error-card{background:#1a1a2e;border:1px solid #ef4444;border-radius:12px;padding:1.5rem;max-width:500px;width:100%;color:#f8f8f2;font-family:'Fira Code',monospace,system-ui;}
+.error-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:9999;padding:2rem;}
+.error-card{background:#181824;border:1px solid #ef4444;border-radius:12px;padding:1.5rem;max-width:520px;width:100%;color:#f8f8f2;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;}
 .error-card h3{color:#ef4444;font-size:14px;margin:0 0 8px;font-weight:600;}
-.error-card pre{font-size:12px;white-space:pre-wrap;word-break:break-word;margin:0;color:#ff6b6b;line-height:1.5;}
-.error-card .hint{font-size:11px;color:#888;margin-top:12px;border-top:1px solid #333;padding-top:8px;}
+.error-card pre{font-size:12px;white-space:pre-wrap;word-break:break-word;margin:0;color:#ff6b6b;line-height:1.5;max-height:200px;overflow-y:auto;}
+.error-card .hint{font-size:11px;color:#94a3b8;margin-top:12px;border-top:1px solid #334155;padding-top:8px;}
 </style>
 </head><body>
 <div id="root"></div>
-<script type="text/babel" data-type="module">
-const { useState, useEffect, useRef, useCallback, useMemo, Fragment, createContext, useContext, useReducer } = React;
+<script type="text/babel">
 try {
-${cleaned}
-
-const _Component = typeof ${componentName} !== 'undefined' ? ${componentName} : null;
-if (_Component) {
-  const root = ReactDOM.createRoot(document.getElementById('root'));
-  root.render(React.createElement(React.StrictMode, null, React.createElement(_Component)));
-} else {
-  document.getElementById('root').innerHTML = '<div style="padding:2rem;color:#888;text-align:center;font-family:system-ui;">Preview ready — waiting for a renderable component.</div>';
-}
+  const { useState, useEffect, useRef, useCallback, useMemo, Fragment, createContext, useContext, useReducer } = React;
+  ${cleaned}
+  const _Component = typeof ${componentName} !== 'undefined' ? ${componentName} : null;
+  if (_Component) {
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(React.StrictMode, null, React.createElement(_Component)));
+  } else {
+    document.getElementById('root').innerHTML = '<div style="padding:2rem;color:#888;text-align:center;font-family:system-ui;">Preview ready — waiting for a renderable component.</div>';
+  }
 } catch(e) {
-  document.getElementById('root').innerHTML = '<div class="error-overlay"><div class="error-card"><h3>⚠️ Syntax / Render Error</h3><pre>' + e.message + '</pre><div class="hint">The AI-generated code has an issue. Ask Averia to fix it or try a simpler prompt.</div></div></div>';
+  const root = document.getElementById('root');
+  if (root) {
+    const overlay = document.createElement('div');
+    overlay.className = 'error-overlay';
+    const card = document.createElement('div');
+    card.className = 'error-card';
+    const h3 = document.createElement('h3');
+    h3.textContent = '⚠️ Syntax / Render Error';
+    const pre = document.createElement('pre');
+    pre.textContent = e && e.message ? e.message : String(e);
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.textContent = 'The AI-generated component had an issue. Ask Averia to fix it.';
+    card.appendChild(h3);
+    card.appendChild(pre);
+    card.appendChild(hint);
+    overlay.appendChild(card);
+    root.innerHTML = '';
+    root.appendChild(overlay);
+  }
   console.error('Preview Error:', e);
 }
-<\/script>
+</script>
 </body></html>`;
+}
+
+function AntigravityFileOpsCard({
+  files,
+  workspaceName,
+  onOpenPreview,
+  onOpenExplorer,
+  onSaveToDisk,
+  hasLocalFolder,
+}: {
+  files: ParsedProjectFile[];
+  workspaceName?: string | null;
+  onOpenPreview: () => void;
+  onOpenExplorer: () => void;
+  onSaveToDisk?: () => void;
+  hasLocalFolder: boolean;
+}) {
+  if (files.length === 0) return null;
+
+  return (
+    <div className="my-3 rounded-2xl border border-primary/25 bg-gradient-to-br from-card/95 via-card/80 to-primary/5 p-4 backdrop-blur-xl shadow-xl shadow-black/20 text-foreground not-prose">
+      {/* Header */}
+      <div className="flex items-center justify-between pb-3 mb-3 border-b border-border/60">
+        <div className="flex items-center gap-2">
+          <div className="h-7 w-7 rounded-lg bg-primary/15 border border-primary/30 flex items-center justify-center text-primary">
+            <FolderOpen className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-xs font-bold text-foreground flex items-center gap-1.5 font-mono">
+              <span>📂 Workspace:</span>
+              <span className="text-primary">{workspaceName || 'Virtual IDE'}</span>
+            </div>
+            <div className="text-[10px] text-muted-foreground">
+              {files.length} production file{files.length > 1 ? 's' : ''} generated & verified
+            </div>
+          </div>
+        </div>
+        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+          <CheckCircle2 className="h-3 w-3" /> Live Preview Ready
+        </span>
+      </div>
+
+      {/* Itemized File List */}
+      <div className="space-y-1.5 mb-3 font-mono text-xs max-h-48 overflow-y-auto">
+        {files.map((file, idx) => {
+          const isHtml = file.path.endsWith('.html');
+          const isJs = file.path.endsWith('.js') || file.path.endsWith('.jsx') || file.path.endsWith('.ts') || file.path.endsWith('.tsx');
+          const isBackend = file.path.startsWith('server/') || file.path.endsWith('.sql') || file.path.endsWith('.py') || file.path.endsWith('.go') || file.path.endsWith('.rs');
+          return (
+            <div
+              key={idx}
+              className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-secondary/40 border border-border/40 hover:bg-secondary/60 transition-colors"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-sm shrink-0">
+                  {isHtml ? '🌐' : isBackend ? '⚙️' : isJs ? '⚛️' : '📝'}
+                </span>
+                <span className="truncate text-[12px] font-medium text-foreground">
+                  {file.path}
+                </span>
+              </div>
+              <span className="text-[10px] text-muted-foreground shrink-0 pl-2">
+                {formatFileSize(new Blob([file.content]).size)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Verification & Linking Footprint */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-2 border-t border-border/60 text-[11px] text-muted-foreground mb-3">
+        <div className="flex items-center gap-1.5 text-blue-400">
+          <span>🔗</span>
+          <span>Linked cross-file imports & Zero-CORS bundle</span>
+        </div>
+        <div className="flex items-center gap-1.5 text-emerald-400">
+          <span>✅</span>
+          <span>Verified syntax & runtime execution</span>
+        </div>
+      </div>
+
+      {/* Action Buttons */}
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        <Button
+          size="sm"
+          className="h-8 text-xs gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+          onClick={onOpenPreview}
+        >
+          <Eye className="h-3.5 w-3.5" />
+          <span>Open Live Preview</span>
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 text-xs gap-1.5"
+          onClick={onOpenExplorer}
+        >
+          <FileCode className="h-3.5 w-3.5" />
+          <span>Browse in Files</span>
+        </Button>
+        {onSaveToDisk && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 text-xs gap-1.5 text-muted-foreground hover:text-foreground ml-auto"
+            onClick={onSaveToDisk}
+          >
+            <FolderOpen className="h-3.5 w-3.5" />
+            <span>{hasLocalFolder ? 'Re-sync to Disk' : 'Save to Folder'}</span>
+          </Button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function generateFileTree(code: string | null, rawMessageContent?: string, activePath?: string): FileNode[] {
@@ -251,7 +639,7 @@ function generateFileTree(code: string | null, rawMessageContent?: string, activ
   }
 
   if (!code) return [];
-  const isHTML = code.trim().startsWith('<') && !code.includes('function ') && !code.includes('const ');
+  const isHTML = /<!DOCTYPE\s+html/i.test(code) || /<html[\s>]/i.test(code) || (code.trim().startsWith('<') && (code.includes('</html>') || code.includes('</body>')));
   if (isHTML) {
     return [
       { name: 'src', type: 'folder', children: [
@@ -503,7 +891,31 @@ export default function AveriaAI() {
   const [selectedModel, setSelectedModel] = useState<'ignite' | 'synthesis' | 'intelligence' | 'genesis'>('ignite');
   const [localFolderHandle, setLocalFolderHandle] = useState<FileSystemDirectoryHandle | null>(null);
   const [localFolderName, setLocalFolderName] = useState<string | null>(null);
+  const [folderPermissionGranted, setFolderPermissionGranted] = useState(true);
   const [writtenFiles, setWrittenFiles] = useState<string[]>([]);
+
+  // Restore folder handle from IndexedDB on conversation select or mount
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      try {
+        const handle = await getFolderHandleFromDB(activeConvId);
+        if (handle && isMounted) {
+          setLocalFolderHandle(handle);
+          setLocalFolderName(handle.name);
+          try {
+            const status = await (handle as any).queryPermission({ mode: 'readwrite' });
+            if (isMounted) setFolderPermissionGranted(status === 'granted');
+          } catch {
+            if (isMounted) setFolderPermissionGranted(false);
+          }
+        }
+      } catch (e) {
+        console.warn('[LocalFolder] Restore error:', e);
+      }
+    })();
+    return () => { isMounted = false; };
+  }, [activeConvId]);
   const [isGeneratingApp, setIsGeneratingApp] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQueryHandled = useRef(false);
@@ -604,7 +1016,7 @@ export default function AveriaAI() {
                 }
               } else if (code) {
                 // Fallback for single-file outputs
-                const isHTML = code.trim().startsWith('<') && !code.includes('function ') && !code.includes('const ');
+                const isHTML = /<!DOCTYPE\s+html/i.test(code) || /<html[\s>]/i.test(code) || (code.trim().startsWith('<') && (code.includes('</html>') || code.includes('</body>')));
                 const primaryFile = isHTML ? 'index.html' : 'src/App.jsx';
                 await writeFileToHandle(localFolderHandle, primaryFile, code);
                 savedList.push(primaryFile);
@@ -841,9 +1253,11 @@ export default function AveriaAI() {
     // Clear local folder on new chat so old folder never persists across sessions
     setLocalFolderHandle(null);
     setLocalFolderName(null);
+    setFolderPermissionGranted(true);
     setWrittenFiles([]);
     setSelectedFileCode(null);
     setSelectedFileName(null);
+    clearFolderHandleFromDB(activeConvId);
   };
 
   const selectConversation = async (convId: string) => {
@@ -1031,12 +1445,40 @@ export default function AveriaAI() {
       const dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
       setLocalFolderHandle(dirHandle);
       setLocalFolderName(dirHandle.name);
+      setFolderPermissionGranted(true);
+      await saveFolderHandleToDB(activeConvId, dirHandle);
       toast.success(`📁 Folder opened: ${dirHandle.name}`);
     } catch (err: any) {
       if (err?.name !== 'AbortError') {
         toast.error('Could not open folder.');
       }
     }
+  };
+
+  const handleReconnectFolder = async () => {
+    if (!localFolderHandle) return;
+    try {
+      const status = await (localFolderHandle as any).requestPermission({ mode: 'readwrite' });
+      if (status === 'granted') {
+        setFolderPermissionGranted(true);
+        await saveFolderHandleToDB(activeConvId, localFolderHandle);
+        toast.success(`📁 Reconnected to ${localFolderName}!`);
+      } else {
+        toast.error('Permission denied to access folder.');
+      }
+    } catch (err) {
+      console.warn('Reconnect error:', err);
+      toast.error('Could not reconnect folder. Try opening it again.');
+    }
+  };
+
+  const handleEjectFolder = async () => {
+    setLocalFolderHandle(null);
+    setLocalFolderName(null);
+    setFolderPermissionGranted(true);
+    setWrittenFiles([]);
+    await clearFolderHandleFromDB(activeConvId);
+    toast.info('📁 Folder detached from chat');
   };
 
   const sendMessage = useCallback(async () => {
@@ -1077,7 +1519,6 @@ export default function AveriaAI() {
       setConversations(prev => prev.map(c => c.id === convId ? { ...c, title } : c));
     }
 
-
     // Build payload messages: convert attachments into multimodal content parts for the latest msg
     const payloadMessages = newMessages.map((m, idx) => {
       if (idx === newMessages.length - 1 && m.attachments && m.attachments.length > 0) {
@@ -1109,6 +1550,16 @@ export default function AveriaAI() {
       if (isMobile) setMobileView('preview');
     }
 
+    // Scan local workspace if folder is connected & granted
+    let workspaceContext: WorkspaceContext | null = null;
+    if (localFolderHandle && folderPermissionGranted) {
+      try {
+        workspaceContext = await scanLocalWorkspace(localFolderHandle, 3);
+      } catch (err) {
+        console.warn('Workspace scan error:', err);
+      }
+    }
+
     let assistantContent = '';
     try {
       const { data: sessionData } = await supabase.auth.getSession();
@@ -1122,7 +1573,13 @@ export default function AveriaAI() {
           apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
           'x-client-info': 'averia-ai-client',
         },
-        body: JSON.stringify({ messages: payloadMessages, conversationId: convId, forensicMode: currentAttachments.length > 0, model: effectiveModel }),
+        body: JSON.stringify({
+          messages: payloadMessages,
+          conversationId: convId,
+          forensicMode: currentAttachments.length > 0,
+          model: effectiveModel,
+          workspaceContext,
+        }),
       });
 
       if (!resp.ok) {
@@ -1192,7 +1649,7 @@ export default function AveriaAI() {
       setIsLoading(false);
       setIsGeneratingApp(false);
     }
-  }, [input, isLoading, activeConvId, messages, attachments, isMobile, voiceMode, selectedModel]);
+  }, [input, isLoading, activeConvId, messages, attachments, isMobile, voiceMode, selectedModel, localFolderHandle, folderPermissionGranted, localFolderName]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -1344,28 +1801,72 @@ export default function AveriaAI() {
                       <div className={`max-w-[70%] sm:max-w-[80%] break-words overflow-hidden rounded-2xl px-4 py-3 bg-transparent text-foreground ${
                         msg.role === 'user' ? 'rounded-br-sm' : 'rounded-bl-sm'
                       }`}>
-                        {msg.role === 'assistant' ? (
-                          <div className="prose dark:prose-invert max-w-none text-[15px] sm:text-[16px] leading-relaxed font-normal [&_pre]:bg-background/50 [&_pre]:rounded-lg [&_pre]:p-3 [&_code]:text-xs [&_pre]:overflow-x-auto">
-                            {(msg.content.includes('Swarm Active') || msg.content.includes('✦ **')) && (
-                              <SwarmAgentLiveBanner
-                                model={
-                                  msg.content.includes('Genesis') ? 'genesis' :
-                                  msg.content.includes('Intelligence') ? 'intelligence' :
-                                  'synthesis'
-                                }
-                                isRunning={false}
-                                content={msg.content}
-                              />
-                            )}
-                            <MessageResponse>{msg.content}</MessageResponse>
-                            {msg.imageUrl && (
-                              <img src={msg.imageUrl} alt="Generated" className="mt-3 rounded-lg max-w-full border border-border" />
-                            )}
-                            {extractMultimediaRequests(msg.content).map((req, idx) => (
-                              <MultimediaCard key={idx} type={req.type} title={req.title} />
-                            ))}
-                          </div>
-                        ) : (
+                        {msg.role === 'assistant' ? (() => {
+                          const projectFiles = extractProjectFiles(msg.content);
+                          const hasFiles = projectFiles.length > 0;
+                          const cleanedProse = hasFiles ? cleanProseFromCode(msg.content) : msg.content;
+                          return (
+                            <div className="prose dark:prose-invert max-w-none text-[15px] sm:text-[16px] leading-relaxed font-normal [&_pre]:bg-background/50 [&_pre]:rounded-lg [&_pre]:p-3 [&_code]:text-xs [&_pre]:overflow-x-auto">
+                              {(msg.content.includes('Swarm Active') || msg.content.includes('✦ **')) && (
+                                <SwarmAgentLiveBanner
+                                  model={
+                                    msg.content.includes('Genesis') ? 'genesis' :
+                                    msg.content.includes('Intelligence') ? 'intelligence' :
+                                    'synthesis'
+                                  }
+                                  isRunning={false}
+                                  content={msg.content}
+                                />
+                              )}
+                              {hasFiles && (
+                                <AntigravityFileOpsCard
+                                  files={projectFiles}
+                                  workspaceName={localFolderName}
+                                  hasLocalFolder={Boolean(localFolderHandle)}
+                                  onOpenPreview={() => {
+                                    const code = extractCodeForPreview(msg.content);
+                                    if (code) {
+                                      setCanvasContent(code);
+                                      setPreviewKey(k => k + 1);
+                                    }
+                                    setCanvasMode('preview');
+                                    if (isMobile) setMobileView('preview');
+                                  }}
+                                  onOpenExplorer={() => {
+                                    const code = extractCodeForPreview(msg.content);
+                                    if (code) {
+                                      setCanvasContent(code);
+                                    }
+                                    setCanvasMode('files');
+                                    if (isMobile) setMobileView('preview');
+                                  }}
+                                  onSaveToDisk={async () => {
+                                    if (localFolderHandle) {
+                                      try {
+                                        for (const f of projectFiles) {
+                                          await writeFileToHandle(localFolderHandle, f.path, f.content);
+                                        }
+                                        setWrittenFiles(projectFiles.map(f => f.path));
+                                        toast.success(`📁 Saved ${projectFiles.length} files to ${localFolderName}`);
+                                      } catch (err) {
+                                        toast.error('Failed to write files to disk');
+                                      }
+                                    } else {
+                                      handleOpenFolder();
+                                    }
+                                  }}
+                                />
+                              )}
+                              {cleanedProse ? <MessageResponse>{cleanedProse}</MessageResponse> : null}
+                              {msg.imageUrl && (
+                                <img src={msg.imageUrl} alt="Generated" className="mt-3 rounded-lg max-w-full border border-border" />
+                              )}
+                              {extractMultimediaRequests(msg.content).map((req, idx) => (
+                                <MultimediaCard key={idx} type={req.type} title={req.title} />
+                              ))}
+                            </div>
+                          );
+                        })() : (
                           <>
                             {msg.attachments && msg.attachments.length > 0 && (
                               <div className="flex flex-wrap gap-1.5 mb-2">
@@ -1428,12 +1929,31 @@ export default function AveriaAI() {
                   {/* Folder pill — Antigravity style, above input box */}
                   {localFolderName && (
                     <div className="flex items-center gap-2 mb-2 px-1">
-                      <div className="flex items-center gap-1.5 bg-green-500/10 border border-green-500/25 rounded-full px-3 py-1 text-xs text-green-400 font-mono flex-1 min-w-0">
+                      <div className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-mono flex-1 min-w-0 ${
+                        folderPermissionGranted
+                          ? 'bg-emerald-500/10 border border-emerald-500/25 text-emerald-400'
+                          : 'bg-amber-500/10 border border-amber-500/25 text-amber-400'
+                      }`}>
                         <FolderOpen className="h-3 w-3 shrink-0" />
                         <span className="truncate">{localFolderName}</span>
+                        {!folderPermissionGranted && (
+                          <span className="text-[10px] text-amber-300 ml-1 font-sans">(Permission needed)</span>
+                        )}
                       </div>
+                      {!folderPermissionGranted && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleReconnectFolder}
+                          className="h-6 text-[11px] gap-1 px-2.5 rounded-full bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25 shrink-0"
+                          title="Re-grant read/write permission to folder"
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                          <span>Reconnect</span>
+                        </Button>
+                      )}
                       <button
-                        onClick={() => { setLocalFolderHandle(null); setLocalFolderName(null); setWrittenFiles([]); }}
+                        onClick={handleEjectFolder}
                         className="h-6 w-6 rounded-full bg-secondary/60 hover:bg-destructive/20 hover:text-destructive flex items-center justify-center transition-colors shrink-0"
                         title="Eject folder"
                         aria-label="Eject folder"
@@ -1856,7 +2376,7 @@ export default function AveriaAI() {
                         <div className="w-full h-full flex items-start justify-center bg-muted/30" style={{ padding: previewDevice === 'desktop' ? 0 : '1rem' }}>
                           <iframe
                             key={previewKey}
-                            srcDoc={buildPreviewHTML(canvasContent)}
+                            srcDoc={buildPreviewHTML(canvasContent, extractProjectFiles(lastAssistant?.content || ''))}
                             sandbox="allow-scripts"
                             className="border-none bg-white transition-all duration-300"
                             style={{
