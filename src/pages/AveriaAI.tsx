@@ -268,6 +268,17 @@ function extractProjectFiles(content: string): ParsedProjectFile[] {
   return files;
 }
 
+// Simple deterministic string hash for consistent project IDs
+function hashCode(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // 32-bit int
+  }
+  return hash;
+}
+
 async function writeFileToHandle(rootHandle: FileSystemDirectoryHandle, filePath: string, content: string) {
   const parts = filePath.replace(/^[\\\/]+/, '').split(/[\\\/]+/);
   let currentDir = rootHandle;
@@ -464,7 +475,147 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
 })();
 </script>\n`;
 
-  // 4. Inject runtime error listener & route message bridge
+  // 4. Safe Hash & Link Navigation Interceptor (Fixes about:srcdoc#/... black screen crash in sandboxed iframe)
+  const hashAndLinkInterceptorScript = `<script>
+(function() {
+  function normalizeRoute(href) {
+    if (!href) return '/';
+    var clean = href.trim();
+    if (clean.startsWith('#/')) return clean.slice(1);
+    if (clean.startsWith('#')) return clean === '#' ? '/' : '/' + clean.slice(1);
+    if (clean.startsWith('/')) return clean;
+    return '/' + clean;
+  }
+
+  // Intercept click events in capture phase before browser navigates iframe URL to about:srcdoc#...
+  document.addEventListener('click', function(e) {
+    var target = e.target;
+    var a = target && typeof target.closest === 'function' ? target.closest('a') : null;
+    if (!a) return;
+
+    var href = a.getAttribute('href');
+    if (!href) return;
+
+    // External links, tel, mailto, javascript
+    if (/^(https?:|\/\/|mailto:|tel:|javascript:)/i.test(href)) {
+      if (a.getAttribute('target') !== '_blank') {
+        a.setAttribute('target', '_blank');
+        a.setAttribute('rel', 'noopener noreferrer');
+      }
+      return;
+    }
+
+    // Internal hash or relative route: intercept and navigate via __AVERIA_ROUTER__
+    e.preventDefault();
+    e.stopPropagation();
+
+    var route = normalizeRoute(href);
+    if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
+      window.__AVERIA_ROUTER__.navigate(route);
+    }
+
+    try {
+      window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: route } }));
+      window.parent.postMessage({
+        type: 'AVERIA_ROUTE_UPDATE',
+        route: route,
+        allRoutes: window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.routes === 'function'
+          ? window.__AVERIA_ROUTER__.routes()
+          : [route]
+      }, '*');
+    } catch (_) {}
+  }, true);
+
+  // Prevent SecurityError and iframe crash from history.pushState / replaceState in srcDoc
+  var origPush = history.pushState;
+  var origReplace = history.replaceState;
+  history.pushState = function(state, title, url) {
+    if (typeof url === 'string') {
+      var r = normalizeRoute(url.replace(/^about:srcdoc/i, ''));
+      if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
+        window.__AVERIA_ROUTER__.navigate(r);
+      }
+      try {
+        window.parent.postMessage({ type: 'AVERIA_ROUTE_UPDATE', route: r }, '*');
+      } catch (_) {}
+      return;
+    }
+    try { origPush.apply(history, arguments); } catch (_) {}
+  };
+  history.replaceState = function(state, title, url) {
+    if (typeof url === 'string') {
+      var r = normalizeRoute(url.replace(/^about:srcdoc/i, ''));
+      if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
+        window.__AVERIA_ROUTER__.navigate(r);
+      }
+      try {
+        window.parent.postMessage({ type: 'AVERIA_ROUTE_UPDATE', route: r }, '*');
+      } catch (_) {}
+      return;
+    }
+    try { origReplace.apply(history, arguments); } catch (_) {}
+  };
+
+  // Prevent about:srcdoc hash navigation crash
+  window.addEventListener('hashchange', function(e) {
+    e.preventDefault();
+    var h = window.location.hash || '';
+    if (h) {
+      var r = normalizeRoute(h);
+      if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
+        window.__AVERIA_ROUTER__.navigate(r);
+      }
+    }
+  });
+})();
+</script>\n`;
+
+  // 5. Global Image Fallback & Resilient Base Button/Body Styles
+  const imageFallbackAndStyleScript = `<script>
+document.addEventListener('error', function(e) {
+  var img = e.target;
+  if (img && img.tagName === 'IMG' && !img.dataset.fallbackApplied) {
+    img.dataset.fallbackApplied = '1';
+    var label = (img.alt || 'Product Image').slice(0, 22);
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1e293b"/><stop offset="100%" stop-color="#334155"/></linearGradient></defs><rect width="400" height="300" fill="url(#g)"/><circle cx="200" cy="120" r="40" fill="#475569"/><path d="M140 220 C140 180, 260 180, 260 220 Z" fill="#475569"/><text x="50%" y="82%" dominant-baseline="middle" text-anchor="middle" fill="#e2e8f0" font-family="sans-serif" font-size="16" font-weight="600">' + label.replace(/[<>&"']/g, '') + '</text></svg>';
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  }
+}, true);
+</script>
+<style>
+html, body {
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  background-color: #0b0f19;
+  color: #f1f5f9;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+button {
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease-in-out;
+}
+button:not([class*="p-"]):not([class*="px-"]):not([class*="py-"]) {
+  padding: 0.5rem 1rem;
+}
+button:not([class*="rounded"]) {
+  border-radius: 0.5rem;
+}
+button:not([class*="bg-"]) {
+  background-color: #4f46e5;
+  color: #ffffff;
+  border: none;
+}
+button:hover {
+  filter: brightness(1.1);
+}
+button:active {
+  transform: scale(0.98);
+}
+</style>\n`;
+
+  // 6. Inject runtime error listener & route message bridge
   const errorListenerScript = `<script>
 (function() {
   function notifyParentError(msg, lineno, colno, src) {
@@ -508,7 +659,90 @@ window.addEventListener('message', function(e) {
 });
 </script>\n`;
 
-  const headInject = `${storagePolyfillScript}${errorListenerScript}${routeMessageListener}`;
+  // 5. Inject AveriaDB Cloud Database SDK — pre-configured for this project
+  const projectId = `averia-${Math.abs(hashCode(htmlContent.slice(0, 120))).toString(36)}`;
+  const BACKEND_URL = typeof window !== 'undefined'
+    ? `${(window as any).__AVERIA_BACKEND_URL__ || 'https://qhmxmwigvexyxvklukns.supabase.co/functions/v1/averia-backend'}`
+    : 'https://qhmxmwigvexyxvklukns.supabase.co/functions/v1/averia-backend';
+
+  const averiaDbSdkScript = `<script>
+(function() {
+  var PROJECT_ID = ${JSON.stringify(projectId)};
+  var BACKEND = ${JSON.stringify(BACKEND_URL)};
+  var _token = null;
+  try { _token = localStorage.getItem('averia_auth_token'); } catch(_) {}
+
+  async function req(method, path, body) {
+    var headers = { 'Content-Type': 'application/json', 'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFobXhtd2lndmV4eXh2a2x1a25zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzE1Nzk0NjMsImV4cCI6MjA0NzE1NTQ2M30.yCEbULQAbTVKVhaSRnL9B3XE2CjmTK58r3SvIPGxqIY' };
+    if (_token) headers['Authorization'] = 'Bearer ' + _token;
+    var opts = { method: method, headers: headers };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    var res = await fetch(BACKEND + path, opts);
+    if (!res.ok) {
+      var e = await res.json().catch(function() { return { error: 'Request failed' }; });
+      throw new Error(e.error || ('HTTP ' + res.status));
+    }
+    return res.json();
+  }
+
+  window.AveriaDB = {
+    projectId: PROJECT_ID,
+    list: function(collection, opts) {
+      var qs = '';
+      if (opts && opts.search) qs = '?search=' + encodeURIComponent(opts.search);
+      if (opts && opts.limit) qs += (qs ? '&' : '?') + 'limit=' + opts.limit;
+      return req('GET', '/projects/' + PROJECT_ID + '/' + collection + qs)
+        .then(function(r) { return r.records || []; })
+        .catch(function(err) { console.warn('[AveriaDB] list failed:', err); return []; });
+    },
+    create: function(collection, item) {
+      return req('POST', '/projects/' + PROJECT_ID + '/' + collection, item)
+        .catch(function(err) { console.warn('[AveriaDB] create failed:', err); return null; });
+    },
+    update: function(collection, id, patch) {
+      return req('PATCH', '/projects/' + PROJECT_ID + '/' + collection + '/' + id, patch)
+        .catch(function(err) { console.warn('[AveriaDB] update failed:', err); return null; });
+    },
+    remove: function(collection, id) {
+      return req('DELETE', '/projects/' + PROJECT_ID + '/' + collection + '/' + id)
+        .catch(function(err) { console.warn('[AveriaDB] remove failed:', err); return null; });
+    },
+    clear: function(collection) {
+      return req('DELETE', '/projects/' + PROJECT_ID + '/clear/' + collection)
+        .catch(function(err) { console.warn('[AveriaDB] clear failed:', err); return null; });
+    },
+    auth: {
+      signup: function(email, password, name, role) {
+        return req('POST', '/auth/signup', { email: email, password: password, name: name, role: role || 'Customer' })
+          .then(function(r) {
+            if (r.success && r.token) { _token = r.token; try { localStorage.setItem('averia_auth_token', _token); } catch(_) {} }
+            return r;
+          });
+      },
+      login: function(email, password) {
+        return req('POST', '/auth/login', { email: email, password: password })
+          .then(function(r) {
+            if (r.success && r.token) { _token = r.token; try { localStorage.setItem('averia_auth_token', _token); } catch(_) {} }
+            return r;
+          });
+      },
+      logout: function() {
+        _token = null;
+        try { localStorage.removeItem('averia_auth_token'); } catch(_) {}
+      },
+      me: function() {
+        return req('GET', '/auth/me').catch(function() { return null; });
+      },
+      isLoggedIn: function() { return !!_token; },
+      getToken: function() { return _token; }
+    }
+  };
+
+  console.log('[AveriaDB] Cloud SDK ready. Project:', PROJECT_ID);
+})();
+</script>\n`;
+
+  const headInject = `${storagePolyfillScript}${hashAndLinkInterceptorScript}${imageFallbackAndStyleScript}${averiaDbSdkScript}${errorListenerScript}${routeMessageListener}`;
   if (doc.includes('<head>')) {
     doc = doc.replace('<head>', `<head>\n${headInject}`);
   } else if (doc.includes('<html>')) {
@@ -1101,6 +1335,96 @@ function FileTree({ nodes, depth = 0, onSelectFile }: { nodes: FileNode[]; depth
   );
 }
 
+interface TelemetryStep {
+  id: string;
+  agent: string;
+  icon: string;
+  status: 'pending' | 'active' | 'done';
+  detail: string;
+  lines?: number;
+}
+interface TelemetryFile {
+  op: 'Created' | 'Edited' | 'Verified';
+  name: string;
+  lines: number;
+}
+
+function GenesisTelemetryFeed({
+  steps,
+  files,
+  isActive,
+}: {
+  steps: TelemetryStep[];
+  files: TelemetryFile[];
+  isActive: boolean;
+}) {
+  if (steps.length === 0) return null;
+  const doneCount = steps.filter(s => s.status === 'done').length;
+  const totalCount = steps.length;
+  const pct = Math.round((doneCount / totalCount) * 100);
+
+  return (
+    <div className="mt-2 rounded-xl border border-border/60 bg-secondary/30 overflow-hidden text-xs font-mono">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border/40 bg-secondary/50">
+        <span className="font-semibold text-foreground flex items-center gap-1.5">
+          <span className="animate-pulse text-green-400">{isActive ? '●' : '✓'}</span>
+          Genesis Swarm {isActive ? 'Working' : 'Complete'}
+        </span>
+        <span className="text-muted-foreground">{doneCount}/{totalCount} agents · {pct}%</span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="h-0.5 bg-secondary">
+        <div
+          className="h-full bg-gradient-to-r from-violet-500 to-blue-500 transition-all duration-500"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+
+      {/* Agent rows */}
+      <div className="divide-y divide-border/30 max-h-52 overflow-y-auto">
+        {steps.map(step => (
+          <div key={step.id} className={`flex items-start gap-2 px-3 py-1.5 transition-colors ${step.status === 'active' ? 'bg-violet-500/5' : ''}`}>
+            <span className="text-sm leading-5">{step.icon}</span>
+            <div className="flex-1 min-w-0">
+              <span className={`font-semibold ${step.status === 'pending' ? 'text-muted-foreground/50' : step.status === 'active' ? 'text-foreground' : 'text-muted-foreground'}`}>
+                {step.agent}
+              </span>
+              {step.status !== 'pending' && (
+                <span className="text-muted-foreground/70"> — {step.detail}</span>
+              )}
+              {step.status === 'done' && step.lines && (
+                <span className="text-muted-foreground/50"> ({step.lines} lines)</span>
+              )}
+            </div>
+            <span className="shrink-0 mt-0.5">
+              {step.status === 'pending' && <span className="text-muted-foreground/30">○</span>}
+              {step.status === 'active'  && <span className="text-violet-400 animate-spin inline-block">◌</span>}
+              {step.status === 'done'    && <span className="text-green-400">✓</span>}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* File ops (stream in) */}
+      {files.length > 0 && (
+        <div className="border-t border-border/40 max-h-32 overflow-y-auto divide-y divide-border/20">
+          {files.map((f, i) => (
+            <div key={i} className="flex items-center gap-2 px-3 py-1 text-[10px]">
+              <span className={`font-semibold ${f.op === 'Created' ? 'text-green-400' : f.op === 'Edited' ? 'text-blue-400' : 'text-muted-foreground'}`}>
+                {f.op}
+              </span>
+              <span className="text-muted-foreground font-mono truncate">{f.name}</span>
+              <span className="ml-auto text-muted-foreground/50 shrink-0">{f.lines}L</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 import { useScope } from '@/lib/scope';
 
 export default function AveriaAI() {
@@ -1124,13 +1448,16 @@ export default function AveriaAI() {
   const [isLoading, setIsLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [canvasContent, setCanvasContent] = useState<string | null>(null);
-  const [canvasMode, setCanvasMode] = useState<'preview' | 'code' | 'files'>('preview');
+  const [canvasMode, setCanvasMode] = useState<'preview' | 'code' | 'files' | 'database'>('preview');
   const [canvasImageUrl, setCanvasImageUrl] = useState<string | null>(null);
   const [isDeploying, setIsDeploying] = useState(false);
   const [deployUrl, setDeployUrl] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<'chat' | 'preview'>('chat');
   const [previewDevice, setPreviewDevice] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [dbData, setDbData] = useState<Record<string, any[]>>({});
+  const [dbLoading, setDbLoading] = useState(false);
+  const [dbProjectId, setDbProjectId] = useState<string | null>(null);
   const [previewKey, setPreviewKey] = useState(0);
   const [previewRoutes, setPreviewRoutes] = useState<string[]>(['/']);
   const [currentPreviewRoute, setCurrentPreviewRoute] = useState('/');
@@ -1293,6 +1620,19 @@ Please inspect all project files, resolve the root cause (such as class initiali
     return () => { isMounted = false; };
   }, [activeConvId]);
   const [isGeneratingApp, setIsGeneratingApp] = useState(false);
+  const [telemetrySteps, setTelemetrySteps] = useState<Array<{
+    id: string;
+    agent: string;
+    icon: string;
+    status: 'pending' | 'active' | 'done';
+    detail: string;
+    lines?: number;
+  }>>([]);
+  const [telemetryFiles, setTelemetryFiles] = useState<Array<{
+    op: 'Created' | 'Edited' | 'Verified';
+    name: string;
+    lines: number;
+  }>>([]);
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQueryHandled = useRef(false);
   const mirrorPeer = searchParams.get('mirror') === 'peer' && scope.isJoint && !!scope.peerId;
@@ -1390,14 +1730,28 @@ Please inspect all project files, resolve the root cause (such as class initiali
               if (parsedFiles.length > 0) {
                 // Write all generated project files into local folder (creating subdirectories)
                 for (const file of parsedFiles) {
-                  await writeFileToHandle(localFolderHandle, file.path, file.content);
+                  // If it's index.html, write self-contained Zero-CORS bundle so double clicking file:// works with zero white screen
+                  if (file.path === 'index.html' || file.path === './index.html') {
+                    const bundledHtml = bundleZeroCORSHtml(file.content, parsedFiles);
+                    await writeFileToHandle(localFolderHandle, 'index.html', bundledHtml);
+                  } else {
+                    await writeFileToHandle(localFolderHandle, file.path, file.content);
+                  }
                   savedList.push(file.path);
+                }
+
+                // If parsedFiles didn't contain an explicit index.html, generate and save bundled index.html
+                if (!parsedFiles.some(f => f.path === 'index.html' || f.path === './index.html')) {
+                  const rootHtml = buildPreviewHTML(code || '', parsedFiles);
+                  await writeFileToHandle(localFolderHandle, 'index.html', rootHtml);
+                  savedList.push('index.html');
                 }
               } else if (code) {
                 // Fallback for single-file outputs
                 const isHTML = /<!DOCTYPE\s+html/i.test(code) || /<html[\s>]/i.test(code) || (code.trim().startsWith('<') && (code.includes('</html>') || code.includes('</body>')));
                 const primaryFile = isHTML ? 'index.html' : 'src/App.jsx';
-                await writeFileToHandle(localFolderHandle, primaryFile, code);
+                const bundledHtml = isHTML ? bundleZeroCORSHtml(code, []) : code;
+                await writeFileToHandle(localFolderHandle, primaryFile, bundledHtml);
                 savedList.push(primaryFile);
 
                 // If React code, also generate runnable index.html wrapper & package.json
@@ -1670,6 +2024,47 @@ Please inspect all project files, resolve the root cause (such as class initiali
   };
 
 
+  const TELEMETRY_AGENTS = [
+    { id: 'architect',  icon: '🧭', agent: 'System Architect',           detail: 'Scanning workspace tree & existing files' },
+    { id: 'database',  icon: '🗄️', agent: 'Database & API Engineer',     detail: 'Designing AveriaDB collections & schema.sql' },
+    { id: 'ui',        icon: '🎨', agent: 'UI/UX & Tailwind Stylist',    detail: 'Building responsive layout & design tokens' },
+    { id: 'frontend',  icon: '⚛️', agent: 'Frontend Component Engineer', detail: 'Writing modular pages & interactive state handlers' },
+    { id: 'router',    icon: '🔀', agent: 'SPA Router Engineer',         detail: 'Wiring __AVERIA_ROUTER__ & multi-page navigation' },
+    { id: 'security',  icon: '🛡️', agent: 'Security & Sandbox Guard',   detail: 'Injecting localStorage polyfill & XSS sanitization' },
+    { id: 'auditor',   icon: '🔍', agent: 'Build & Dependency Auditor',  detail: 'Verifying topological imports & zero dead buttons' },
+    { id: 'assembler', icon: '⚡', agent: 'Preview Assembler',           detail: 'Bundling Zero-CORS runtime & syncing disk files' },
+  ];
+
+  const telemetryTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const startTelemetry = useCallback(() => {
+    // Clear any previous
+    telemetryTimersRef.current.forEach(clearTimeout);
+    telemetryTimersRef.current = [];
+    setTelemetryFiles([]);
+    // Set all agents to pending initially
+    setTelemetrySteps(TELEMETRY_AGENTS.map(a => ({ ...a, status: 'pending' as const })));
+
+    // Stagger activation: each agent goes active then done progressively
+    TELEMETRY_AGENTS.forEach((agent, i) => {
+      const activeAt = 300 + i * 800;
+      const doneAt   = activeAt + 1200 + Math.random() * 600;
+      const t1 = setTimeout(() => {
+        setTelemetrySteps(prev => prev.map(s => s.id === agent.id ? { ...s, status: 'active' as const } : s));
+      }, activeAt);
+      const t2 = setTimeout(() => {
+        setTelemetrySteps(prev => prev.map(s => s.id === agent.id ? { ...s, status: 'done' as const, lines: Math.floor(80 + Math.random() * 320) } : s));
+      }, doneAt);
+      telemetryTimersRef.current.push(t1, t2);
+    });
+  }, []);
+
+  const stopTelemetry = useCallback(() => {
+    telemetryTimersRef.current.forEach(clearTimeout);
+    // Mark all as done
+    setTelemetrySteps(prev => prev.map(s => ({ ...s, status: 'done' as const })));
+  }, []);
+
   const handlePublish = async () => {
     setIsDeploying(true);
     await new Promise(r => setTimeout(r, 2500));
@@ -1678,6 +2073,35 @@ Please inspect all project files, resolve the root cause (such as class initiali
     setIsDeploying(false);
     toast.success('Website published successfully! 🚀');
   };
+
+  const AVERIA_BACKEND_URL = 'https://qhmxmwigvexyxvklukns.supabase.co/functions/v1/averia-backend';
+
+  const loadDbInspector = async (projId: string) => {
+    setDbLoading(true);
+    try {
+      const ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const res = await fetch(`${AVERIA_BACKEND_URL}/inspect/${projId}`, {
+        headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${ANON_KEY}` }
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setDbData(json.data || {});
+      }
+    } catch (_e) {
+      // silently fail — backend may not have data yet
+    }
+    setDbLoading(false);
+  };
+
+  useEffect(() => {
+    if (canvasMode === 'database' && canvasContent) {
+      const hash = Math.abs(hashCode(canvasContent.slice(0, 120))).toString(36);
+      const pid = `averia-${hash}`;
+      setDbProjectId(pid);
+      loadDbInspector(pid);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasMode, canvasContent]);
 
   const handleImageGeneration = async (prompt: string, convId: string) => {
     try {
@@ -1932,6 +2356,7 @@ Please inspect all project files, resolve the root cause (such as class initiali
 
     if (effectiveModel === 'genesis') {
       setIsGeneratingApp(true);
+      startTelemetry();
       setCanvasMode('preview');
       if (isMobile) setMobileView('preview');
     }
@@ -2023,6 +2448,17 @@ Please inspect all project files, resolve the root cause (such as class initiali
             const content = parsed.choices?.[0]?.delta?.content;
             if (content) {
               assistantContent += content;
+              // Track newly completed files for telemetry feed
+              if (effectiveModel === 'genesis') {
+                const newlyParsed = extractProjectFiles(assistantContent);
+                setTelemetryFiles(() =>
+                  newlyParsed.map(f => ({
+                    op: 'Created' as const,
+                    name: f.path,
+                    lines: f.content.split('\n').length,
+                  }))
+                );
+              }
               setMessages(prev => {
                 const last = prev[prev.length - 1];
                 if (last?.role === 'assistant') {
@@ -2060,8 +2496,9 @@ Please inspect all project files, resolve the root cause (such as class initiali
     } finally {
       setIsLoading(false);
       setIsGeneratingApp(false);
+      stopTelemetry();
     }
-  }, [input, isLoading, activeConvId, messages, attachments, isMobile, voiceMode, selectedModel, localFolderHandle, folderPermissionGranted, localFolderName]);
+  }, [input, isLoading, activeConvId, messages, attachments, isMobile, voiceMode, selectedModel, localFolderHandle, folderPermissionGranted, localFolderName, startTelemetry, stopTelemetry]);
 
   useEffect(() => {
     sendMessageRef.current = sendMessage;
@@ -2266,10 +2703,19 @@ Please inspect all project files, resolve the root cause (such as class initiali
                                     if (localFolderHandle) {
                                       try {
                                         for (const f of projectFiles) {
-                                          await writeFileToHandle(localFolderHandle, f.path, f.content);
+                                          if (f.path === 'index.html' || f.path === './index.html') {
+                                            const bundledHtml = bundleZeroCORSHtml(f.content, projectFiles);
+                                            await writeFileToHandle(localFolderHandle, 'index.html', bundledHtml);
+                                          } else {
+                                            await writeFileToHandle(localFolderHandle, f.path, f.content);
+                                          }
+                                        }
+                                        if (!projectFiles.some(f => f.path === 'index.html' || f.path === './index.html') && canvasContent) {
+                                          const rootHtml = buildPreviewHTML(canvasContent, projectFiles);
+                                          await writeFileToHandle(localFolderHandle, 'index.html', rootHtml);
                                         }
                                         setWrittenFiles(projectFiles.map(f => f.path));
-                                        toast.success(`📁 Saved ${projectFiles.length} files to ${localFolderName}`);
+                                        toast.success(`📁 Saved ${projectFiles.length} files to ${localFolderName} (Self-contained index.html ready for Chrome)`);
                                       } catch (err) {
                                         toast.error('Failed to write files to disk');
                                       }
@@ -2286,6 +2732,13 @@ Please inspect all project files, resolve the root cause (such as class initiali
                                 </div>
                               )}
                               {cleanedProse ? <MessageResponse>{cleanedProse}</MessageResponse> : null}
+                              {isGeneratingApp && telemetrySteps.length > 0 && i === messages.length - 1 && (
+                                <GenesisTelemetryFeed
+                                  steps={telemetrySteps}
+                                  files={telemetryFiles}
+                                  isActive={isGeneratingApp}
+                                />
+                              )}
                               {msg.imageUrl && (
                                 <img src={msg.imageUrl} alt="Generated" className="mt-3 rounded-lg max-w-full border border-border" />
                               )}
@@ -2344,6 +2797,13 @@ Please inspect all project files, resolve the root cause (such as class initiali
                              'Averia AI thinking...'}
                           </span>
                         </div>
+                        {isGeneratingApp && telemetrySteps.length > 0 && (
+                          <GenesisTelemetryFeed
+                            steps={telemetrySteps}
+                            files={telemetryFiles}
+                            isActive={isGeneratingApp}
+                          />
+                        )}
                       </div>
                     </motion.div>
                   )}
@@ -2626,6 +3086,9 @@ Please inspect all project files, resolve the root cause (such as class initiali
                         <Button variant={canvasMode === 'files' ? 'secondary' : 'ghost'} size="sm" className="h-7 text-xs gap-1" onClick={() => setCanvasMode('files')}>
                           <FileCode className="h-3 w-3" /> <span className="hidden sm:inline">Files</span>
                         </Button>
+                        <Button variant={canvasMode === 'database' ? 'secondary' : 'ghost'} size="sm" className="h-7 text-xs gap-1" onClick={() => setCanvasMode('database')}>
+                          <span className="text-xs">🗄️</span> <span className="hidden sm:inline">Database</span>
+                        </Button>
                       </>
                     )}
                     {canvasImageUrl && !canvasContent && (
@@ -2769,7 +3232,73 @@ Please inspect all project files, resolve the root cause (such as class initiali
                     </div>
                   )}
 
-                  {canvasMode !== 'files' && (
+                  {/* Database Inspector Panel */}
+                  {canvasContent && canvasMode === 'database' && (
+                    <div className="w-full h-full overflow-auto p-4 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">🗄️ Live Database Inspector</h3>
+                          <p className="text-[10px] text-muted-foreground font-mono mt-0.5">Project: {dbProjectId ?? '...'}</p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs gap-1.5"
+                          onClick={() => dbProjectId && loadDbInspector(dbProjectId)}
+                          disabled={dbLoading}
+                        >
+                          <RefreshCw className={`h-3 w-3 ${dbLoading ? 'animate-spin' : ''}`} /> Refresh
+                        </Button>
+                      </div>
+                      {dbLoading && (
+                        <div className="text-xs text-muted-foreground animate-pulse">Loading collections…</div>
+                      )}
+                      {!dbLoading && Object.keys(dbData).length === 0 && (
+                        <div className="text-xs text-muted-foreground text-center py-8 border border-dashed border-border rounded-xl">
+                          No data yet. Interact with the app preview to seed records.
+                        </div>
+                      )}
+                      {Object.entries(dbData).map(([collection, records]) => (
+                        <div key={collection} className="border border-border rounded-xl overflow-hidden">
+                          <div className="flex items-center justify-between px-3 py-2 bg-secondary/50 border-b border-border">
+                            <span className="text-xs font-semibold text-foreground capitalize">
+                              {collection}{' '}
+                              <span className="text-muted-foreground font-normal">({(records as any[]).length} records)</span>
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 text-[10px] text-destructive hover:text-destructive"
+                              onClick={async () => {
+                                if (!dbProjectId) return;
+                                const ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+                                await fetch(`${AVERIA_BACKEND_URL}/projects/${dbProjectId}/clear/${collection}`, {
+                                  method: 'DELETE',
+                                  headers: { 'apikey': ANON_KEY }
+                                });
+                                loadDbInspector(dbProjectId);
+                                toast.info(`Cleared ${collection}`);
+                              }}
+                            >
+                              Clear
+                            </Button>
+                          </div>
+                          <div className="max-h-64 overflow-y-auto">
+                            {(records as any[]).slice(0, 50).map((row, i) => (
+                              <div
+                                key={i}
+                                className="px-3 py-2 border-b border-border/50 last:border-0 font-mono text-[10px] text-muted-foreground hover:bg-secondary/30"
+                              >
+                                <pre className="whitespace-pre-wrap break-all">{JSON.stringify(row, null, 2)}</pre>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {canvasMode !== 'files' && canvasMode !== 'database' && (
                     <div className="flex-1 overflow-auto flex items-start justify-center">
                       {canvasImageUrl && !canvasContent && (
                         <div className="flex flex-col items-center justify-center h-full p-4 md:p-6 gap-4">

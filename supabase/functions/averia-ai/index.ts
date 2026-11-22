@@ -332,7 +332,23 @@ EVERY generated website, SaaS app, dashboard, or platform MUST include:
      * Mutate live state persisted in localStorage
      * Run real calculations or API calls
    - NEVER use href="/about" or href="file://..." — these break in iframe srcDoc previews!
-   - ALWAYS use onclick="window.__AVERIA_ROUTER__.navigate('/about')" or similar router calls.
+   - NEVER use href="#/route" or href="#route" — in sandboxed iframes this causes about:srcdoc#/route black screen crashes!
+   - ALWAYS use onclick="event.preventDefault(); window.__AVERIA_ROUTER__.navigate('/about');" or onclick="window.__AVERIA_ROUTER__.navigate('/page')" for ALL navigation.
+   - ALL navigation buttons and sidebar links MUST call event.preventDefault() before navigating.
+
+3. BUTTON STYLING CONTRACT — EVERY button MUST use full Tailwind classes:
+   - Primary actions: class="px-4 py-2 rounded-lg font-semibold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors cursor-pointer"
+   - Secondary actions: class="px-4 py-2 rounded-lg font-semibold bg-slate-700 text-slate-200 hover:bg-slate-600 border border-slate-600 transition-colors cursor-pointer"
+   - Danger actions: class="px-4 py-2 rounded-lg font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors cursor-pointer"
+   - Ghost/nav links: class="px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-700 hover:text-white transition-colors cursor-pointer"
+   - NEVER generate a button with no classes, no padding, or invisible contrast.
+
+4. IMAGE HANDLING CONTRACT — ZERO broken external image URLs:
+   - NEVER use placeholder.com, picsum.photos, via.placeholder.com, or any external image URL that may fail.
+   - For product/item/avatar images, use clean inline SVG data-URIs as src:
+     src="data:image/svg+xml;charset=utf-8,<svg xmlns='http://www.w3.org/2000/svg' width='400' height='300' viewBox='0 0 400 300'><rect width='400' height='300' fill='%231e293b'/><text x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23e2e8f0' font-family='sans-serif' font-size='16' font-weight='600'>ProductName</text></svg>"
+   - Or generate product illustrations inline in a <svg> tag with simple shapes (rect, circle, path).
+   - Use CSS gradient backgrounds (background: linear-gradient(135deg, #1e293b, #334155)) for image placeholders instead of broken external URLs.
 
 3. MINIMUM MULTI-PAGE DEPTH (5+ pages for every app):
    - Landing/Home Page with hero, feature cards (each clickable to detail), CTAs, stats
@@ -342,7 +358,7 @@ EVERY generated website, SaaS app, dashboard, or platform MUST include:
    - About/Contact/Help Page with working contact form
    - Each page MUST have a consistent navbar/sidebar with active-state highlighting and working back navigation
 
-4. BREADCRUMB & ACTIVE NAV HIGHLIGHTING:
+5. BREADCRUMB & ACTIVE NAV HIGHLIGHTING:
    - Navbar links must show active state (e.g., underline, bg-primary) for the current route
    - Use window.__AVERIA_ROUTER__.onChange() to update active states reactively
    - Provide goBack() breadcrumb or back-arrow on sub-pages
@@ -396,7 +412,57 @@ When workspaceContext contains existing files AND the user asks to add a feature
 3. Full-Stack Web & SaaS:
    - Multi-file React/TSX/JS frontends with Express/FastAPI REST APIs
    - RBAC auth, PostgreSQL/Supabase schemas, realistic pre-populated datasets
-   - Working CRUD operations with localStorage persistence in preview
+   - Use window.AveriaDB for ALL persistent CRUD — NEVER use localStorage for entities:
+     * Products, Orders, Cart, Users, Leads, Tasks, Grammar History, Analytics, Blog Posts
+     * Seed initial data on first load: const items = await window.AveriaDB.list('products'); if (!items.length) await window.AveriaDB.create('products', {...})
+     * Create: await window.AveriaDB.create('orders', {id: uuid(), customer, items, total, status:'Processing', date: new Date().toISOString()})
+     * Read: const products = await window.AveriaDB.list('products')
+     * Update: await window.AveriaDB.update('orders', orderId, {status: 'Shipped'})
+     * Delete: await window.AveriaDB.remove('products', productId)
+     * Auth: await window.AveriaDB.auth.signup(email, password, name) / window.AveriaDB.auth.login(email, password) / window.AveriaDB.auth.me()
+   - window.AveriaDB is PRE-INJECTED into every preview — never import or define it yourself.
+
+═══════════════════════════════════════════════════════════
+ AVERIADB CLOUD DATABASE CONTRACT (MANDATORY FOR ALL SAAS & E-COMMERCE APPS)
+═══════════════════════════════════════════════════════════
+
+For EVERY SaaS, E-Commerce, CRM, Task Manager, Blog, or Form app:
+
+1. BOOT SEQUENCE (call in DOMContentLoaded or init function):
+   async function initApp() {
+     // Load real data from cloud DB on boot
+     const products = await window.AveriaDB.list('products');
+     if (products.length === 0) {
+       // Seed initial records if DB empty
+       await window.AveriaDB.create('products', {id:'p1', name:'Sample Product', price:29.99, category:'General', stock:50});
+     }
+     renderProducts(products);
+   }
+
+2. ADMIN PANEL (Product/Lead/Task Management):
+   // Add new product
+   document.getElementById('add-product-form').onsubmit = async (e) => {
+     e.preventDefault();
+     const item = { id: 'p' + Date.now(), name: nameInput.value, price: parseFloat(priceInput.value), category: catInput.value, stock: parseInt(stockInput.value) };
+     await window.AveriaDB.create('products', item);
+     await refreshProducts();
+   };
+   // Delete
+   await window.AveriaDB.remove('products', productId);
+   // Update stock
+   await window.AveriaDB.update('products', productId, { stock: newStock });
+
+3. CART & ORDER FLOW:
+   // Add to cart
+   let cart = await window.AveriaDB.list('cart');
+   await window.AveriaDB.create('cart', { id: 'c' + Date.now(), productId, name, price, qty: 1 });
+   // Place order
+   const orderId = 'o' + Date.now();
+   await window.AveriaDB.create('orders', { id: orderId, items: cart, total, status: 'Processing', date: new Date().toISOString() });
+   // Clear cart after checkout
+   for (const c of cart) await window.AveriaDB.remove('cart', c._id);
+
+4. ALWAYS refresh UI after every CRUD call — no stale data.
 
 4. Games & Simulations:
    - Immediate frame-0 visual rendering, 60fps physics
