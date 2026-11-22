@@ -109,7 +109,8 @@ export async function callSingleGeminiKey(
   messages: any[],
   systemPrompt: string,
   model = "gemini-2.5-flash",
-  supabase?: any
+  supabase?: any,
+  maxTokens = 32768
 ): Promise<string> {
   if (!apiKey) return "";
   const isLovable = apiKey.startsWith("lovable:");
@@ -135,7 +136,7 @@ export async function callSingleGeminiKey(
           model: targetModel,
           messages: [{ role: "system", content: systemPrompt }, ...messages],
           stream: false,
-          max_tokens: 4096,
+          max_tokens: maxTokens,
         }),
       });
 
@@ -183,7 +184,8 @@ export async function callRobustGemini(
   supabase: any,
   messages: any[],
   systemPrompt: string,
-  preferredModel = "gemini-2.5-flash"
+  preferredModel = "gemini-2.5-flash",
+  maxTokens = 32768
 ): Promise<string> {
   const keys = await getGeminiKeys(supabase);
   if (keys.length === 0) return "";
@@ -203,7 +205,7 @@ export async function callRobustGemini(
     for (let i = 0; i < rotated.length; i++) {
       const keyRec = rotated[i];
       const actualKey = keyRec.api_key.replace("lovable:", "");
-      const res = await callSingleGeminiKey(actualKey, messages, systemPrompt, model, supabase);
+      const res = await callSingleGeminiKey(actualKey, messages, systemPrompt, model, supabase, maxTokens);
       if (res && res.trim().length > 10) {
         if (keyRec.source === "database") {
           supabase
@@ -309,6 +311,7 @@ export async function executeWithGeminiRotation(
     forensicMode?: boolean;
     systemPrompt?: string;
     jsonMode?: boolean;
+    maxTokens?: number;
   }
 ): Promise<Response> {
   const keys = await getGeminiKeys(supabase);
@@ -362,6 +365,7 @@ export async function executeWithGeminiRotation(
         model: isLovable ? `google/${currentModel}` : currentModel,
         messages: finalMessages,
         stream: options.stream ?? false,
+        max_tokens: options.maxTokens ?? 32768,
       };
 
       if (options.jsonMode && !isLovable) {

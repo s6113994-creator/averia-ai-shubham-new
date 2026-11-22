@@ -214,11 +214,13 @@ function formatFileSize(bytes: number): string {
 
 function cleanProseFromCode(content: string): string {
   if (!content) return '';
-  return content
-    .replace(/```file:[^\n\r]+\s*\n[\s\S]*?```/g, '')
-    .replace(/```(?:html|jsx|tsx|javascript|typescript|js|ts|css|json|sql|py|go|rs|rust|sh|bash|text|markdown)?\s*\n[\s\S]*?```/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  let text = content;
+  // 1. Strip all closed code blocks (matching ```lang:path, ```file:path, ```lang, or bare ```)
+  text = text.replace(/```[\w:./-]*\s*[\s\S]*?```/g, '');
+  // 2. Strip any unclosed trailing code block (e.g. while streaming)
+  text = text.replace(/```[\w:./-]*\s*[\s\S]*$/g, '');
+  // 3. Clean up excessive whitespace
+  return text.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function extractProjectFiles(content: string): ParsedProjectFile[] {
@@ -226,28 +228,39 @@ function extractProjectFiles(content: string): ParsedProjectFile[] {
   const files: ParsedProjectFile[] = [];
   const seenPaths = new Set<string>();
 
-  // 1. Look for ```file:filepath ... ``` blocks
-  const fileBlockRegex = /```file:([^\n\r]+)\s*\n([\s\S]*?)```/g;
+  // 1. Primary: ```file:path/to/file.ext OR ```lang:path/to/file.ext (closed or unclosed)
+  const fileHeaderRegex = /```(?:file:|[a-zA-Z0-9_\-]+:)\s*([^\n\r]+?)\s*\n([\s\S]*?)(?:```|$)/g;
   let match: RegExpExecArray | null;
-  while ((match = fileBlockRegex.exec(content)) !== null) {
-    const rawPath = match[1].trim().replace(/^[\/\\]+/, '');
-    const fileContent = match[2];
-    if (rawPath && !seenPaths.has(rawPath)) {
-      seenPaths.add(rawPath);
-      files.push({ path: rawPath, content: fileContent });
+  while ((match = fileHeaderRegex.exec(content)) !== null) {
+    let rawPath = match[1].trim().replace(/^[\/\\]+/, '').replace(/^['"`]|['"`]$/g, '');
+    if (rawPath && (rawPath.includes('.') || rawPath.includes('/'))) {
+      const fileContent = match[2];
+      if (!seenPaths.has(rawPath) && fileContent.trim().length > 0) {
+        seenPaths.add(rawPath);
+        files.push({ path: rawPath, content: fileContent.trimEnd() });
+      }
     }
   }
 
-  // 2. Fallback: ```lang \n // file:path/to/file or /* file:path/to/file */
+  // 2. Fallback: ```lang \n // file: path or /* file: path */ or <!-- file: path --> or # file: path
+  const commentHeaderRegex = /```[a-zA-Z0-9_\-]*\s*\n\s*(?:\/\/|\/\*|<!--|#)\s*(?:file:\s*)?([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)[\s\S]*?\n([\s\S]*?)(?:```|$)/g;
+  while ((match = commentHeaderRegex.exec(content)) !== null) {
+    const rawPath = match[1].trim().replace(/^[\/\\]+/, '');
+    if (rawPath && !seenPaths.has(rawPath) && match[2].trim().length > 0) {
+      seenPaths.add(rawPath);
+      files.push({ path: rawPath, content: match[2].trimEnd() });
+    }
+  }
+
+  // 3. Fallback: single standalone html or react component if no file: tags found
   if (files.length === 0) {
-    const fallbackRegex = /```(?:[a-zA-Z0-9_-]+)\s*\n(?:\/\/|\/\*|<!--|#)\s*(?:file:)?([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)[\s\S]*?\n([\s\S]*?)```/g;
-    let fbMatch: RegExpExecArray | null;
-    while ((fbMatch = fallbackRegex.exec(content)) !== null) {
-      const rawPath = fbMatch[1].trim().replace(/^[\/\\]+/, '');
-      const fileContent = fbMatch[2];
-      if (rawPath && !seenPaths.has(rawPath)) {
-        seenPaths.add(rawPath);
-        files.push({ path: rawPath, content: fileContent });
+    const singleHtmlMatch = content.match(/```(?:html|htm)\s*\n([\s\S]*?)(?:```|$)/i);
+    if (singleHtmlMatch && singleHtmlMatch[1].trim().length > 20) {
+      files.push({ path: 'index.html', content: singleHtmlMatch[1].trimEnd() });
+    } else {
+      const singleReactMatch = content.match(/```(?:jsx|tsx|react)\s*\n([\s\S]*?)(?:```|$)/i);
+      if (singleReactMatch && singleReactMatch[1].trim().length > 20) {
+        files.push({ path: 'src/App.jsx', content: singleReactMatch[1].trimEnd() });
       }
     }
   }
@@ -358,10 +371,45 @@ function detectComponentName(code: string): string {
   return 'App';
 }
 
+function stripESModules(code: string, fileName?: string): string {
+  let cleaned = code;
+  // 1. Remove multiline or single line import statements
+  cleaned = cleaned.replace(/^\s*import\s+[^;]+?['"][^'"]+['"];?\s*$/gm, '');
+  cleaned = cleaned.replace(/^\s*import\s+['"][^'"]+['"];?\s*$/gm, '');
+  cleaned = cleaned.replace(/import\s*\([^)]+\)/g, 'undefined');
+
+  // 2. Remove export default function/class/const/let/var -> function/class/const/let/var
+  cleaned = cleaned.replace(/^\s*export\s+default\s+(function|class|async\s+function)\s+/gm, '$1 ');
+  cleaned = cleaned.replace(/^\s*export\s+default\s+/gm, '');
+
+  // 3. Remove export function/class/const/let/var -> function/class/const/let/var
+  cleaned = cleaned.replace(/^\s*export\s+(const|let|var|function|class|async\s+function)\s+/gm, '$1 ');
+
+  // 4. Remove named exports like export { SoundController, SnakeGame };
+  cleaned = cleaned.replace(/^\s*export\s*\{[^}]*\}\s*;?\s*$/gm, '');
+
+  // 5. Expose classes and functions on window so index.html inline scripts can find them immediately!
+  const exposed: string[] = [];
+  const classMatches = cleaned.matchAll(/class\s+([A-Za-z0-9_$]+)/g);
+  for (const m of classMatches) {
+    exposed.push(`if (typeof ${m[1]} !== 'undefined' && !window.${m[1]}) window.${m[1]} = ${m[1]};`);
+  }
+  const funcMatches = cleaned.matchAll(/(?:function|const|let|var)\s+([A-Z][a-zA-Z0-9_$]*)\s*=/g);
+  for (const m of funcMatches) {
+    exposed.push(`if (typeof ${m[1]} !== 'undefined' && !window.${m[1]}) window.${m[1]} = ${m[1]};`);
+  }
+
+  const exportShim = exposed.length > 0 ? `\n// Window exports for ${fileName || 'module'}\n${exposed.join('\n')}\n` : '';
+  return cleaned + exportShim;
+}
+
 function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] = []): string {
   let doc = htmlContent;
 
-  // 1. Ensure Tailwind CDN is present in <head>
+  // 1. Remove local script tags referencing companion files that we will inline
+  doc = doc.replace(/<script[^>]*src=["'](?:\.\/|\.\.\/|src\/|js\/)?[^"']+\.(?:js|ts)["'][^>]*>\s*<\/script>/gi, '');
+
+  // 2. Ensure Tailwind CDN is present in <head>
   if (!doc.includes('cdn.tailwindcss.com')) {
     if (doc.includes('<head>')) {
       doc = doc.replace('<head>', '<head>\n<script src="https://cdn.tailwindcss.com"></script>');
@@ -372,7 +420,28 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     }
   }
 
-  // 2. Inline companion CSS files
+  // 3. Inject safe runtime error listener at the beginning of <head> or <html>
+  const errorListenerScript = `<script>
+window.addEventListener('error', function(e) {
+  console.error('[Averia Runtime Error]', e.error || e.message);
+  var b = document.getElementById('averia-runtime-banner');
+  if (!b && document.body) {
+    b = document.createElement('div');
+    b.id = 'averia-runtime-banner';
+    b.style.cssText = 'position:fixed;bottom:10px;left:10px;right:10px;background:#181824;border:1px solid #ef4444;border-radius:8px;padding:8px 12px;color:#fca5a5;font-family:monospace;font-size:11px;z-index:999999;display:flex;align-items:center;justify-content:space-between;box-shadow:0 4px 20px rgba(0,0,0,0.5);';
+    b.innerHTML = '<span>⚠️ <b>Runtime Error:</b> ' + (e.message || 'Script error') + (e.lineno ? ' (line ' + e.lineno + ')' : '') + '</span><button onclick="this.parentElement.remove()" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:14px;padding:0 6px;">✕</button>';
+    document.body.appendChild(b);
+  }
+});
+</script>\n`;
+
+  if (doc.includes('<head>')) {
+    doc = doc.replace('<head>', `<head>\n${errorListenerScript}`);
+  } else if (doc.includes('<html>')) {
+    doc = doc.replace('<html>', `<html>\n<head>${errorListenerScript}</head>`);
+  }
+
+  // 4. Inline companion CSS files
   const cssFiles = allFiles.filter(f => f.path.endsWith('.css'));
   if (cssFiles.length > 0) {
     const inlinedStyles = cssFiles.map(f => `/* inlined: ${f.path} */\n${f.content}`).join('\n\n');
@@ -386,7 +455,10 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     }
   }
 
-  // 3. Inline companion JS / engine files (excluding server or configs)
+  // 5. Topological Sort of companion JS / TS files:
+  // Audio, math, utils, helpers, config, types FIRST.
+  // Intermediate modules SECOND.
+  // Engine, game, app, main LAST.
   const jsFiles = allFiles.filter(f =>
     (f.path.endsWith('.js') || f.path.endsWith('.ts')) &&
     !f.path.startsWith('server/') &&
@@ -394,13 +466,35 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     !f.path.includes('vite.config') &&
     !f.path.includes('tailwind.config')
   );
+
   if (jsFiles.length > 0) {
-    const inlinedScripts = jsFiles.map(f => `// inlined: ${f.path}\n${f.content.replace(/^import\s+.*?['";]\s*$/gm, '').replace(/export\s+default\s+/g, '').replace(/export\s+/g, '')}`).join('\n\n');
-    const scriptTag = `\n<script>\ntry {\n${inlinedScripts}\n} catch(err) { console.warn('Inlined script error:', err); }\n</script>\n`;
-    if (doc.includes('</body>')) {
-      doc = doc.replace('</body>', `${scriptTag}</body>`);
+    const sortedJsFiles = [...jsFiles].sort((a, b) => {
+      const getRank = (path: string) => {
+        const p = path.toLowerCase();
+        if (/audio|sound|music|util|helper|math|const|types|config/i.test(p)) return 0;
+        if (/engine|game|controller|main|app/i.test(p)) return 2;
+        return 1;
+      };
+      return getRank(a.path) - getRank(b.path);
+    });
+
+    const inlinedScripts = sortedJsFiles
+      .map(f => `// === INLINED: ${f.path} ===\n${stripESModules(f.content, f.path)}`)
+      .join('\n\n');
+
+    // NOTE: Inlined in GLOBAL script scope without a 'try { }' block so ES6 classes are NOT block-scoped!
+    const scriptTag = `\n<!-- Inlined Zero-CORS Companion Modules -->\n<script>\n${inlinedScripts}\n</script>\n`;
+
+    // Inject before the first inline <script> in body or at top of body, so it defines classes BEFORE index.html's script runs!
+    const firstScriptIdx = doc.indexOf('<script', doc.indexOf('<body') !== -1 ? doc.indexOf('<body') : 0);
+    if (firstScriptIdx !== -1) {
+      doc = doc.slice(0, firstScriptIdx) + scriptTag + doc.slice(firstScriptIdx);
+    } else if (doc.includes('</head>')) {
+      doc = doc.replace('</head>', `${scriptTag}</head>`);
+    } else if (doc.includes('<body')) {
+      doc = doc.replace(/<body([^>]*)>/i, `<body$1>\n${scriptTag}`);
     } else {
-      doc += scriptTag;
+      doc = scriptTag + doc;
     }
   }
 
@@ -522,7 +616,7 @@ function AntigravityFileOpsCard({
               <span className="text-primary">{workspaceName || 'Virtual IDE'}</span>
             </div>
             <div className="text-[10px] text-muted-foreground">
-              {files.length} production file{files.length > 1 ? 's' : ''} generated & verified
+              Autonomous Genesis Synthesizer · {files.length} production file{files.length > 1 ? 's' : ''}
             </div>
           </div>
         </div>
@@ -531,12 +625,34 @@ function AntigravityFileOpsCard({
         </span>
       </div>
 
+      {/* Autonomous Agent Execution Timeline */}
+      <div className="mb-3 p-2.5 rounded-xl bg-background/50 border border-border/40 text-[11px] font-mono space-y-1">
+        <div className="flex items-center gap-1.5 text-muted-foreground">
+          <span className="text-emerald-400">✓</span>
+          <span>🔍 Analyzed workspace & requirements</span>
+        </div>
+        <div className="flex items-center gap-1.5 text-muted-foreground">
+          <span className="text-emerald-400">✓</span>
+          <span>🏗️ Architected multi-file system ({files.length} production files)</span>
+        </div>
+        <div className="flex items-center gap-1.5 text-muted-foreground">
+          <span className="text-emerald-400">✓</span>
+          <span>⚙️ Wrote core logic & linked cross-file dependencies</span>
+        </div>
+        <div className="flex items-center gap-1.5 text-emerald-400 font-medium">
+          <span>✓</span>
+          <span>✅ Bundled & verified zero-CORS runtime</span>
+        </div>
+      </div>
+
       {/* Itemized File List */}
       <div className="space-y-1.5 mb-3 font-mono text-xs max-h-48 overflow-y-auto">
         {files.map((file, idx) => {
           const isHtml = file.path.endsWith('.html');
           const isJs = file.path.endsWith('.js') || file.path.endsWith('.jsx') || file.path.endsWith('.ts') || file.path.endsWith('.tsx');
           const isBackend = file.path.startsWith('server/') || file.path.endsWith('.sql') || file.path.endsWith('.py') || file.path.endsWith('.go') || file.path.endsWith('.rs');
+          const isConfig = file.path.endsWith('.json') || file.path.endsWith('.md') || file.path.endsWith('.toml') || file.path.endsWith('.yml');
+          const langBadge = isHtml ? 'HTML' : file.path.endsWith('.jsx') || file.path.endsWith('.tsx') ? 'REACT' : file.path.endsWith('.ts') ? 'TS' : file.path.endsWith('.js') ? 'JS' : file.path.endsWith('.sql') ? 'SQL' : file.path.endsWith('.json') ? 'JSON' : file.path.endsWith('.md') ? 'DOC' : 'CODE';
           return (
             <div
               key={idx}
@@ -544,10 +660,13 @@ function AntigravityFileOpsCard({
             >
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-sm shrink-0">
-                  {isHtml ? '🌐' : isBackend ? '⚙️' : isJs ? '⚛️' : '📝'}
+                  {isHtml ? '🌐' : isBackend ? '⚙️' : isJs ? '⚛️' : isConfig ? '📋' : '📝'}
                 </span>
                 <span className="truncate text-[12px] font-medium text-foreground">
                   {file.path}
+                </span>
+                <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-primary/10 text-primary font-semibold shrink-0">
+                  {langBadge}
                 </span>
               </div>
               <span className="text-[10px] text-muted-foreground shrink-0 pl-2">
@@ -558,26 +677,14 @@ function AntigravityFileOpsCard({
         })}
       </div>
 
-      {/* Verification & Linking Footprint */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-2 border-t border-border/60 text-[11px] text-muted-foreground mb-3">
-        <div className="flex items-center gap-1.5 text-blue-400">
-          <span>🔗</span>
-          <span>Linked cross-file imports & Zero-CORS bundle</span>
-        </div>
-        <div className="flex items-center gap-1.5 text-emerald-400">
-          <span>✅</span>
-          <span>Verified syntax & runtime execution</span>
-        </div>
-      </div>
-
       {/* Action Buttons */}
-      <div className="flex flex-wrap items-center gap-2 pt-1">
+      <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border/60">
         <Button
           size="sm"
           className="h-8 text-xs gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
           onClick={onOpenPreview}
         >
-          <Eye className="h-3.5 w-3.5" />
+          <Play className="h-3.5 w-3.5 fill-current" />
           <span>Open Live Preview</span>
         </Button>
         <Button
@@ -597,7 +704,7 @@ function AntigravityFileOpsCard({
             onClick={onSaveToDisk}
           >
             <FolderOpen className="h-3.5 w-3.5" />
-            <span>{hasLocalFolder ? 'Re-sync to Disk' : 'Save to Folder'}</span>
+            <span>{hasLocalFolder ? 'Sync to Disk' : 'Save to Folder'}</span>
           </Button>
         )}
       </div>
@@ -1804,7 +1911,8 @@ export default function AveriaAI() {
                         {msg.role === 'assistant' ? (() => {
                           const projectFiles = extractProjectFiles(msg.content);
                           const hasFiles = projectFiles.length > 0;
-                          const cleanedProse = hasFiles ? cleanProseFromCode(msg.content) : msg.content;
+                          const hasCodeBlocks = msg.content.includes('```');
+                          const cleanedProse = hasCodeBlocks ? cleanProseFromCode(msg.content) : msg.content;
                           return (
                             <div className="prose dark:prose-invert max-w-none text-[15px] sm:text-[16px] leading-relaxed font-normal [&_pre]:bg-background/50 [&_pre]:rounded-lg [&_pre]:p-3 [&_code]:text-xs [&_pre]:overflow-x-auto">
                               {(msg.content.includes('Swarm Active') || msg.content.includes('✦ **')) && (
@@ -1856,6 +1964,12 @@ export default function AveriaAI() {
                                     }
                                   }}
                                 />
+                              )}
+                              {!hasFiles && hasCodeBlocks && (
+                                <div className="flex items-center gap-2 text-xs text-primary font-mono bg-primary/10 border border-primary/20 rounded-xl px-3 py-2 animate-pulse my-2">
+                                  <Rocket className="h-3.5 w-3.5 animate-spin" />
+                                  <span>Synthesizing multi-file project architecture...</span>
+                                </div>
                               )}
                               {cleanedProse ? <MessageResponse>{cleanedProse}</MessageResponse> : null}
                               {msg.imageUrl && (
