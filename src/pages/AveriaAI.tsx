@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Eye, Code, X, FileCode, Globe, Play, Pause, Music, Video, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Smartphone, Tablet, Camera, Paperclip, FileText, Link2, Mic, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Eye, Code, X, FileCode, Globe, Play, Pause, Music, Video, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Smartphone, Tablet, Camera, Paperclip, FileText, Link2, Mic, CheckCircle2, RefreshCw, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
@@ -435,10 +435,18 @@ window.addEventListener('error', function(e) {
 });
 </script>\n`;
 
+  const routeMessageListener = `<script>
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === 'AVERIA_NAVIGATE' && window.__AVERIA_ROUTER__) {
+    window.__AVERIA_ROUTER__.navigate(e.data.route);
+  }
+});
+</script>\n`;
+
   if (doc.includes('<head>')) {
-    doc = doc.replace('<head>', `<head>\n${errorListenerScript}`);
+    doc = doc.replace('<head>', `<head>\n${errorListenerScript}${routeMessageListener}`);
   } else if (doc.includes('<html>')) {
-    doc = doc.replace('<html>', `<html>\n<head>${errorListenerScript}</head>`);
+    doc = doc.replace('<html>', `<html>\n<head>${errorListenerScript}${routeMessageListener}</head>`);
   }
 
   // 4. Inline companion CSS files
@@ -925,10 +933,34 @@ export default function AveriaAI() {
   const [previewDevice, setPreviewDevice] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewKey, setPreviewKey] = useState(0);
+  const [previewRoutes, setPreviewRoutes] = useState<string[]>(['/']);
+  const [currentPreviewRoute, setCurrentPreviewRoute] = useState('/');
   const [selectedFileCode, setSelectedFileCode] = useState<string | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Listen for route updates from preview iframe (Lovable-style route switcher)
+  useEffect(() => {
+    const handleRouteMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'AVERIA_ROUTE_UPDATE') {
+        const routes: string[] = e.data.allRoutes || ['/'];
+        const current: string = e.data.route || '/';
+        setPreviewRoutes(prev => {
+          const sorted = [...new Set(routes)].sort((a, b) => {
+            if (a === '/') return -1;
+            if (b === '/') return 1;
+            return a.localeCompare(b);
+          });
+          return JSON.stringify(sorted) !== JSON.stringify(prev) ? sorted : prev;
+        });
+        setCurrentPreviewRoute(current);
+      }
+    };
+    window.addEventListener('message', handleRouteMessage);
+    return () => window.removeEventListener('message', handleRouteMessage);
+  }, []);
+
   const toggleVoiceInput = () => {
     if (voiceActive) {
       recognitionRef.current?.stop();
@@ -1106,6 +1138,8 @@ export default function AveriaAI() {
       if (code && code !== canvasContent) {
         setCanvasContent(code);
         setPreviewKey(k => k + 1); // force iframe remount for hot-reload
+        setPreviewRoutes(['/']);
+        setCurrentPreviewRoute('/');
         setPreviewError(null);
         if (isMobile) setMobileView('preview');
         // Write to local folder if one is open
@@ -2326,6 +2360,56 @@ export default function AveriaAI() {
                     )}
                   </div>
                   <div className="flex items-center gap-1">
+                    {/* Lovable-style Route/Page Switcher */}
+                    {canvasContent && canvasMode === 'preview' && previewRoutes.length > 1 && (
+                      <div className="relative mr-2">
+                        <button
+                          onClick={() => {
+                            const menu = document.getElementById('averia-route-menu');
+                            if (menu) menu.classList.toggle('hidden');
+                          }}
+                          className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg bg-secondary/60 border border-border/60 text-xs font-medium text-foreground hover:bg-secondary/80 transition-colors"
+                        >
+                          <span className="truncate max-w-[120px]">
+                            {currentPreviewRoute === '/' ? 'Homepage' : currentPreviewRoute.replace(/^\//, '').replace(/\//g, ' › ').replace(/\b\w/g, c => c.toUpperCase())}
+                          </span>
+                          <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+                        </button>
+                        <div
+                          id="averia-route-menu"
+                          className="hidden absolute top-full left-0 mt-1 z-50 w-52 rounded-xl border border-border/80 bg-card/95 backdrop-blur-xl shadow-2xl shadow-black/30 p-1 overflow-hidden"
+                        >
+                          {previewRoutes.map(route => {
+                            const label = route === '/' ? 'Homepage' : route.replace(/^\//, '').replace(/\//g, ' › ').replace(/\b\w/g, c => c.toUpperCase());
+                            const isActive = route === currentPreviewRoute;
+                            return (
+                              <button
+                                key={route}
+                                onClick={() => {
+                                  // Send route change to preview iframe via postMessage
+                                  const iframe = document.querySelector('iframe[title="Live Preview"]') as HTMLIFrameElement;
+                                  if (iframe?.contentWindow) {
+                                    iframe.contentWindow.postMessage({ type: 'AVERIA_NAVIGATE', route }, '*');
+                                  }
+                                  setCurrentPreviewRoute(route);
+                                  document.getElementById('averia-route-menu')?.classList.add('hidden');
+                                }}
+                                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-xs transition-colors ${
+                                  isActive ? 'bg-primary/12 text-primary font-semibold' : 'hover:bg-secondary/60 text-foreground'
+                                }`}
+                              >
+                                <span className="truncate flex-1">{label}</span>
+                                {isActive && (
+                                  <svg className="h-3.5 w-3.5 text-primary shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                     {/* Device toggles (desktop only) */}
                     {canvasContent && canvasMode === 'preview' && !isMobile && (
                       <div className="flex items-center gap-0.5 mr-1">

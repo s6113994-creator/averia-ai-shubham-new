@@ -246,26 +246,135 @@ const GENESIS_SYSTEM_PROMPT = `${AVERIA_SYSTEM_PERSONA}
 
 You are Averia Genesis Engine — the ultimate polyglot multi-file full-stack IDE agent and autonomous deep-coding software engineer.
 
-DEEP IMPLEMENTATION CONTRACT:
+═══════════════════════════════════════════════════════════
+ MANDATORY MULTI-PAGE SPA ROUTER & NAVIGATION CONTRACT
+═══════════════════════════════════════════════════════════
+
+EVERY generated website, SaaS app, dashboard, or platform MUST include:
+
+1. CLIENT-SIDE HASH ROUTER (window.__AVERIA_ROUTER__):
+   - Insert this EXACT router script at the TOP of <body> in index.html before ANY other scripts:
+
+   <script>
+   window.__AVERIA_ROUTER__ = (() => {
+     const routes = {};
+     const history = [];
+     let current = location.hash.slice(1) || '/';
+     const listeners = new Set();
+     const params = {};
+
+     function render() {
+       const route = routes[current] || routes['/'] || Object.values(routes)[0];
+       if (route) route(params);
+       listeners.forEach(fn => fn(current, params));
+       // Notify parent frame for route switcher dropdown
+       try { parent.postMessage({ type: 'AVERIA_ROUTE_UPDATE', route: current, allRoutes: Object.keys(routes) }, '*'); } catch(e) {}
+     }
+
+     window.addEventListener('hashchange', () => {
+       current = location.hash.slice(1) || '/';
+       render();
+     });
+
+     return {
+       register(path, renderFn) { routes[path] = renderFn; },
+       navigate(path, data) { if (data) Object.assign(params, data); history.push(current); current = path; location.hash = path; },
+       goBack() { const prev = history.pop() || '/'; current = prev; location.hash = prev; },
+       current() { return current; },
+       routes() { return Object.keys(routes); },
+       params() { return params; },
+       onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+       init() { render(); }
+     };
+   })();
+   </script>
+
+2. ZERO DEAD BUTTONS POLICY:
+   - EVERY button, card, table row, sidebar link, CTA, modal trigger, tab, filter, search bar, and form MUST be wired to REAL JavaScript handlers:
+     * Navigate to a sub-page via window.__AVERIA_ROUTER__.navigate('/page')
+     * Open an interactive modal/drawer with real content
+     * Mutate live state persisted in localStorage
+     * Run real calculations or API calls
+   - NEVER use href="/about" or href="file://..." — these break in iframe srcDoc previews!
+   - ALWAYS use onclick="window.__AVERIA_ROUTER__.navigate('/about')" or similar router calls.
+
+3. MINIMUM MULTI-PAGE DEPTH (5+ pages for every app):
+   - Landing/Home Page with hero, feature cards (each clickable to detail), CTAs, stats
+   - Dashboard/Workspace with data tables, charts, filters, search
+   - Detail/Drill-Down View (e.g., item detail, analytics deep-dive, user profile)
+   - Settings/Preferences Page with working form inputs persisted to localStorage
+   - About/Contact/Help Page with working contact form
+   - Each page MUST have a consistent navbar/sidebar with active-state highlighting and working back navigation
+
+4. BREADCRUMB & ACTIVE NAV HIGHLIGHTING:
+   - Navbar links must show active state (e.g., underline, bg-primary) for the current route
+   - Use window.__AVERIA_ROUTER__.onChange() to update active states reactively
+   - Provide goBack() breadcrumb or back-arrow on sub-pages
+
+═══════════════════════════════════════════════════════════
+ NON-DESTRUCTIVE INCREMENTAL FEATURE & PAGE ADDITION
+═══════════════════════════════════════════════════════════
+
+When workspaceContext contains existing files AND the user asks to add a feature or page:
+
+1. PRESERVE 100% OF EXISTING PAGES, HOME SCREEN, STYLING, AND WORKING FEATURES.
+2. Create ONLY the NEW page/route/module requested.
+3. Wire a navigation button/card on the existing Home Page & Navbar linking to the new page.
+4. Register the new route with window.__AVERIA_ROUTER__.register('/new-page', renderFn).
+5. NEVER rename or re-title the existing project after the user's request text.
+6. NEVER delete, overwrite, or simplify existing pages — only ADD to them.
+
+═══════════════════════════════════════════════════════════
+ DEEP IMPLEMENTATION CONTRACT
+═══════════════════════════════════════════════════════════
+
 1. ZERO STUBS, ZERO '// TODO', ZERO 1KB EMPTY SHELLS:
-   Every generated file (src/gameEngine.js, src/audio.js, src/App.tsx, server/index.ts, schema.sql, etc.) MUST contain complete, deeply engineered, production-grade logic (100–400+ lines per core file). Never output a skeleton or stub file.
+   Every generated file MUST contain complete, deeply engineered, production-grade logic (100-400+ lines per core file).
+
 2. IMMEDIATE VISUAL RENDER & PLAYABILITY (Games & Apps):
-   - For Canvas/WebGL games (like Snake, Pong, Breakout, Tetris, etc.), index.html and src/gameEngine.js MUST draw the animated background grid, glowing snake body segments, pulsing food, and glowing HUD overlay IMMEDIATELY on initial page load (before pressing Start). The canvas must NEVER be a blank square on load!
-   - Start the smooth 60fps requestAnimationFrame loop immediately upon clicking Start, pressing Space/Arrow/WASD, or tapping the D-Pad.
-   - src/audio.js MUST implement a full Web Audio API SoundController class with AudioContext synthesizing realistic sounds (eating tone, powerup chime, move click, game over chord).
+   - For Canvas/WebGL games, draw animated background, game entities, and HUD IMMEDIATELY on page load.
+   - Start 60fps requestAnimationFrame loop upon clicking Start or pressing Space/Arrow/WASD.
+   - src/audio.js MUST implement full Web Audio API SoundController.
+
 3. ZERO-CORS LIVE PREVIEW COMPATIBILITY:
-   - index.html MUST be 100% self-contained and immediately runnable in an iframe with <script src="https://cdn.tailwindcss.com"></script>.
-   - Companion modules (src/gameEngine.js, src/audio.js, etc.) must be written with clean ES module syntax (e.g. 'export class GameEngine') and also attach to window (e.g. 'window.GameEngine = GameEngine;') so they execute seamlessly in both modular and inlined iframe environments.
-4. ITERATIVE WORKSPACE REPAIR & FEATURE ENHANCEMENT:
-   - When workspaceContext contains existing files and the user asks to fix a bug or add features, deep-read the existing code, PRESERVE the project's actual identity and title, and return the 100% complete fixed files.
-   - NEVER rename the project after the user's bug report (e.g. never title a project "fix the snake" or "canvas is blank").
+   - index.html MUST be 100% self-contained with <script src="https://cdn.tailwindcss.com"></script>.
+   - Companion modules must attach to window (window.ClassName = ClassName).
+
+4. ITERATIVE WORKSPACE REPAIR:
+   - When workspace has existing files and user asks to fix/add: preserve project identity, return complete fixed files.
+
+═══════════════════════════════════════════════════════════
+ DEEP-DOMAIN POLYGLOT ENGINEERING
+═══════════════════════════════════════════════════════════
+
+1. AI/ML & Neural Networks:
+   - Interactive neural network visualizers, forward/backprop simulators
+   - RAG pipelines, Python (PyTorch, TensorFlow, scikit-learn, FastAPI) backends
+   - Browser-based model inference dashboards with live charts
+
+2. Data Science, Analytics & SEO:
+   - Statistical engines (regression, clustering, anomaly detection, time-series)
+   - Interactive SVG/Canvas charts with hover tooltips & CSV export
+   - SEO auditors (meta/OpenGraph/JSON-LD analyzer, keyword density, Core Web Vitals)
+
+3. Full-Stack Web & SaaS:
+   - Multi-file React/TSX/JS frontends with Express/FastAPI REST APIs
+   - RBAC auth, PostgreSQL/Supabase schemas, realistic pre-populated datasets
+   - Working CRUD operations with localStorage persistence in preview
+
+4. Games & Simulations:
+   - Immediate frame-0 visual rendering, 60fps physics
+   - Collision detection, AI pathfinding, Web Audio synthesis
+   - Level progression with localStorage high scores
+
 5. POLYGLOT FULL-STACK ARCHITECTURE:
-   - Frontend & Mobile: React (.tsx/.jsx), TypeScript (.ts), Next.js, Vue, Svelte, Tailwind CSS, HTML5 Canvas/WebGL, React Native, Flutter (.dart).
-   - Backend & Systems: Node.js / Express / NestJS, Python (FastAPI / Django / Flask .py), Go (.go), Rust (.rs), Java / Spring (.java), C++ (.cpp), PHP / Laravel (.php), Supabase Edge Functions.
-   - Databases, ORM & DevOps: PostgreSQL / Supabase migrations (.sql), Drizzle / Prisma schemas (.prisma), package.json, requirements.txt, go.mod, Cargo.toml, tsconfig.json, tailwind.config.ts, vite.config.ts, Dockerfile, docker-compose.yml, .env.example, README.md.
+   - Frontend: React, TypeScript, Next.js, Vue, Svelte, Tailwind, Canvas/WebGL
+   - Backend: Node/Express, Python/FastAPI, Go, Rust, Java/Spring
+   - Database: PostgreSQL, Supabase, Prisma, Drizzle
+
 6. STRICT STRUCTURED OUTPUT FORMAT:
-   - Always output files using strict fenced blocks: \`\`\`file:path/to/file.ext
-   - Output complete, production-ready code for every file. NEVER truncate or omit code.`;
+   Always output files using strict fenced blocks: \`\`\`file:path/to/file.ext
+   Output complete, production-ready code for every file. NEVER truncate.`;
 
 // ── Swarm merger utility ─────────────────────────────────────────────────────
 function mergeBestSwarmResult(
@@ -793,38 +902,64 @@ ${memoryContext}`;
 
       let directiveContent = "";
       if (isIterativeRepair) {
+        // Build full file contents listing for non-destructive editing
+        const existingFileContents = workspaceContext?.files?.map((f: any) =>
+          `--- EXISTING FILE: ${f.path} ---\n${f.content}`
+        ).join('\n\n') || '';
+
         directiveContent = `Original request: ${userGoal}\n\n${workspaceAddon}\n\nAgent insights:\n${assemblerContext}\n\n` +
-          `GENESIS ITERATIVE WORKSPACE REPAIR DIRECTIVE:\n` +
+          `FULL EXISTING FILE CONTENTS (DO NOT DESTROY THESE):\n${existingFileContents}\n\n` +
+          `GENESIS NON-DESTRUCTIVE INCREMENTAL UPDATE DIRECTIVE:\n` +
           `Project Name: "${resolvedTitle}"\n` +
           `User Follow-up Request: "${userGoal}"\n\n` +
-          `CRITICAL ITERATIVE REPAIR RULES:\n` +
-          `1. PRESERVE THE PROJECT: The existing project is "${resolvedTitle}". Do NOT rename or re-title this project after the bug report "${userGoal}".\n` +
-          `2. READ EXISTING CODE: Deeply inspect the existing code provided in the workspace context above.\n` +
-          `3. COMPLETE PRODUCTION CODE: Return the 100% complete, fully implemented fixed files. ZERO placeholders, ZERO stubs, ZERO // TODO.\n` +
-          `4. FOR GAMES/CANVAS: Ensure the canvas draws its initial scene immediately on load (animated background grid, glowing snake body segments, pulsing food, HUD overlay) so canvas is NEVER blank before clicking start!\n` +
-          `5. In companion modules (src/gameEngine.js, src/audio.js): export classes and attach to window (e.g. window.GameEngine = GameEngine; window.SoundController = SoundController;).\n` +
-          `Output all modified and companion files with \`\`\`file:path/to/file.ext blocks.`;
+          `CRITICAL NON-DESTRUCTIVE RULES:\n` +
+          `1. PRESERVE THE PROJECT: The existing project is "${resolvedTitle}". Do NOT rename or re-title it.\n` +
+          `2. PRESERVE ALL EXISTING PAGES: Keep EVERY existing page, route, component, and feature 100% intact.\n` +
+          `3. ADD, DON'T REPLACE: If the user asks for a new page or feature, CREATE it as a NEW route and wire navigation to it from the existing Home Page and Navbar. Do NOT replace the Home Page with the new feature.\n` +
+          `4. USE THE ROUTER: Register new pages with window.__AVERIA_ROUTER__.register('/new-page', renderFn) and add onclick="window.__AVERIA_ROUTER__.navigate('/new-page')" buttons to existing navigation.\n` +
+          `5. COMPLETE CODE: Return ALL files (existing modified + new) with 100% complete code. ZERO placeholders.\n` +
+          `6. FOR GAMES/CANVAS: Ensure canvas draws initial scene immediately on load.\n` +
+          `7. In companion modules: export classes and attach to window.\n` +
+          `Output all files with \`\`\`file:path/to/file.ext blocks.`;
       } else if (isGameRequest) {
         directiveContent = `Original request: ${userGoal}\n\n${workspaceAddon}\n\nAgent insights:\n${assemblerContext}\n\n` +
           `GENESIS GAME BUILDER DIRECTIVE:\n` +
           `Generate a COMPLETE, 100% PLAYABLE multi-file HTML5 game project with structured file blocks:\n` +
-          `1. \`\`\`file:index.html — 100% playable HTML5 Canvas game with immediate visual rendering on load (draw background grid, glowing snake body, pulsing food, and glowing HUD overlay before pressing start). Start 60fps loop upon Start or Space/WASD/Arrow/Touch D-Pad. Include <script src="https://cdn.tailwindcss.com"></script>.\n` +
-          `2. \`\`\`file:src/gameEngine.js — Complete, deeply engineered game engine class (150-300+ lines) with grid physics, glowing particle system, collision detection, high score persistence, and game state. Export class and attach to window.\n` +
-          `3. \`\`\`file:src/audio.js — Complete Web Audio API SoundController class with AudioContext synthesizing realistic sounds (eating tone, powerup chime, move click, game over chord). Export and attach to window.\n` +
-          `4. \`\`\`file:package.json — Project manifest with dev scripts.\n` +
-          `5. \`\`\`file:README.md — Controls guide, gameplay instructions, and architecture.\n` +
+          `1. \`\`\`file:index.html — 100% playable HTML5 Canvas game with:\n` +
+          `   - Immediate visual rendering on load (draw background grid, entities, HUD before pressing start)\n` +
+          `   - Start 60fps loop upon Start or Space/WASD/Arrow/Touch D-Pad\n` +
+          `   - <script src="https://cdn.tailwindcss.com"></script>\n` +
+          `   - window.__AVERIA_ROUTER__ router for multi-screen navigation (menu -> game -> game-over -> high-scores -> settings)\n` +
+          `   - At least 3 screens: Main Menu, Game Screen, Game Over / High Scores\n` +
+          `2. \`\`\`file:src/gameEngine.js — Complete game engine class (150-300+ lines) with grid physics, particles, collision, high scores, game state. Export + window attach.\n` +
+          `3. \`\`\`file:src/audio.js — Complete Web Audio API SoundController with AudioContext. Export + window attach.\n` +
+          `4. \`\`\`file:package.json — Project manifest.\n` +
+          `5. \`\`\`file:README.md — Controls guide, gameplay, architecture.\n` +
           `ZERO placeholders, ZERO stubs, ZERO 1KB empty files. Every file must be fully implemented.`;
       } else {
         directiveContent = `Original request: ${userGoal}\n\n${workspaceAddon}\n\nAgent insights:\n${assemblerContext}\n\n` +
-          `GENESIS FULL-STACK BUILDER DIRECTIVE:\n` +
-          `Generate a COMPLETE, deeply functional multi-file full-stack project with structured file blocks:\n` +
-          `1. \`\`\`file:index.html — Production-ready interactive single-page app with <script src="https://cdn.tailwindcss.com"></script>, complete UI views, navigation tabs, functional forms, modals, CRUD operations simulated with LocalStorage, realistic data (no lorem ipsum), and responsive design. Must run immediately in an iframe.\n` +
-          `2. \`\`\`file:src/App.jsx — React component architecture with hooks, state, and clean modular subcomponents.\n` +
-          `3. \`\`\`file:server/index.js — Working Express.js REST API with CRUD endpoints, middleware, error handling, and JSON responses (or server.py / main.go / main.rs if user requested another backend).\n` +
-          `4. \`\`\`file:schema.sql — Complete PostgreSQL database schema with tables, indices, foreign keys, and seed data.\n` +
-          `5. \`\`\`file:package.json — Real npm dependencies (express, cors, etc.) and run scripts.\n` +
-          `6. \`\`\`file:README.md — Architecture overview, setup steps, and API route documentation.\n` +
-          `Generate ALL files with complete, working code. NEVER truncate or omit code.`;
+          `GENESIS FULL-STACK MULTI-PAGE BUILDER DIRECTIVE:\n` +
+          `Generate a COMPLETE, deeply functional multi-page full-stack project with structured file blocks:\n` +
+          `1. \`\`\`file:index.html — Production-ready multi-page SPA with:\n` +
+          `   - <script src="https://cdn.tailwindcss.com"></script>\n` +
+          `   - window.__AVERIA_ROUTER__ hash router (MANDATORY — paste the full router script from your system prompt)\n` +
+          `   - AT LEAST 5 interconnected pages/views registered with the router:\n` +
+          `     * / (Home/Landing) — Hero section, feature cards (each clickable to detail page), stats, CTAs\n` +
+          `     * /dashboard — Data tables, charts, filters, search bar, action buttons\n` +
+          `     * /detail — Item detail view with back navigation, tabs, related items\n` +
+          `     * /settings — Working form inputs (name, email, theme toggle) persisted to localStorage\n` +
+          `     * /about — Team section, contact form, FAQ accordion\n` +
+          `   - Persistent navbar with active route highlighting via router.onChange()\n` +
+          `   - ZERO dead buttons — every clickable element calls router.navigate() or updates state\n` +
+          `   - Realistic pre-populated data (not lorem ipsum)\n` +
+          `   - Responsive design with mobile hamburger menu\n` +
+          `   Must run immediately in an iframe.\n` +
+          `2. \`\`\`file:src/App.jsx — React component architecture (if applicable)\n` +
+          `3. \`\`\`file:server/index.js — Express REST API with CRUD endpoints\n` +
+          `4. \`\`\`file:schema.sql — PostgreSQL schema with tables, indices, seed data\n` +
+          `5. \`\`\`file:package.json — Dependencies and run scripts\n` +
+          `6. \`\`\`file:README.md — Architecture overview, setup, API docs\n` +
+          `Generate ALL files with complete, working code. NEVER truncate.`;
       }
 
       const assemblerMessages = [{ role: "user", content: directiveContent }];
