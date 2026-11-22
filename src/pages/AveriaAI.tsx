@@ -373,22 +373,20 @@ function detectComponentName(code: string): string {
 
 function stripESModules(code: string, fileName?: string): string {
   let cleaned = code;
-  // 1. Remove multiline or single line import statements
-  cleaned = cleaned.replace(/^\s*import\s+[^;]+?['"][^'"]+['"];?\s*$/gm, '');
+
+  // 1. Remove multiline or single-line import statements
+  // Handles: import { a, b } from '...'; import * as x from '...'; import x from '...'; import x, { y } from '...';
+  cleaned = cleaned.replace(/import\s+(?:(?:\*\s+as\s+[\w$]+)|(?:[\w$]+(?:\s*,\s*\{[\s\S]*?\})?)|(?:\{[\s\S]*?\}))\s+from\s*['"][^'"]+['"];?/g, '');
   cleaned = cleaned.replace(/^\s*import\s+['"][^'"]+['"];?\s*$/gm, '');
   cleaned = cleaned.replace(/import\s*\([^)]+\)/g, 'undefined');
 
-  // 2. Remove export default function/class/const/let/var -> function/class/const/let/var
+  // 2. Remove multiline or single-line export statements
   cleaned = cleaned.replace(/^\s*export\s+default\s+(function|class|async\s+function)\s+/gm, '$1 ');
   cleaned = cleaned.replace(/^\s*export\s+default\s+/gm, '');
-
-  // 3. Remove export function/class/const/let/var -> function/class/const/let/var
   cleaned = cleaned.replace(/^\s*export\s+(const|let|var|function|class|async\s+function)\s+/gm, '$1 ');
+  cleaned = cleaned.replace(/export\s*\{[\s\S]*?\}\s*;?/g, '');
 
-  // 4. Remove named exports like export { SoundController, SnakeGame };
-  cleaned = cleaned.replace(/^\s*export\s*\{[^}]*\}\s*;?\s*$/gm, '');
-
-  // 5. Expose classes and functions on window so index.html inline scripts can find them immediately!
+  // 3. Expose classes and functions on window so index.html inline scripts can find them immediately!
   const exposed: string[] = [];
   const classMatches = cleaned.matchAll(/class\s+([A-Za-z0-9_$]+)/g);
   for (const m of classMatches) {
@@ -420,19 +418,86 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     }
   }
 
-  // 3. Inject safe runtime error listener at the beginning of <head> or <html>
-  const errorListenerScript = `<script>
-window.addEventListener('error', function(e) {
-  console.error('[Averia Runtime Error]', e.error || e.message);
-  var b = document.getElementById('averia-runtime-banner');
-  if (!b && document.body) {
-    b = document.createElement('div');
-    b.id = 'averia-runtime-banner';
-    b.style.cssText = 'position:fixed;bottom:10px;left:10px;right:10px;background:#181824;border:1px solid #ef4444;border-radius:8px;padding:8px 12px;color:#fca5a5;font-family:monospace;font-size:11px;z-index:999999;display:flex;align-items:center;justify-content:space-between;box-shadow:0 4px 20px rgba(0,0,0,0.5);';
-    b.innerHTML = '<span>⚠️ <b>Runtime Error:</b> ' + (e.message || 'Script error') + (e.lineno ? ' (line ' + e.lineno + ')' : '') + '</span><button onclick="this.parentElement.remove()" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:14px;padding:0 6px;">✕</button>';
-    document.body.appendChild(b);
+  // 3. Inject safe in-memory localStorage & sessionStorage polyfill BEFORE any app scripts run
+  // Fixes: "SecurityError: Failed to read the 'localStorage' property from 'Window': The document is sandboxed"
+  const storagePolyfillScript = `<script>
+(function() {
+  function createInMemoryStorage() {
+    var store = {};
+    return {
+      getItem: function(key) { return Object.prototype.hasOwnProperty.call(store, key) ? store[key] : null; },
+      setItem: function(key, val) { store[key] = String(val); },
+      removeItem: function(key) { delete store[key]; },
+      clear: function() { store = {}; },
+      key: function(i) { return Object.keys(store)[i] || null; },
+      get length() { return Object.keys(store).length; }
+    };
   }
-});
+  try {
+    var testKey = '__averia_storage_test__';
+    window.localStorage.setItem(testKey, testKey);
+    window.localStorage.removeItem(testKey);
+  } catch (e) {
+    try {
+      Object.defineProperty(window, 'localStorage', {
+        value: createInMemoryStorage(),
+        configurable: true,
+        enumerable: true,
+        writable: true
+      });
+    } catch (_) {}
+  }
+  try {
+    var testSessionKey = '__averia_session_test__';
+    window.sessionStorage.setItem(testSessionKey, testSessionKey);
+    window.sessionStorage.removeItem(testSessionKey);
+  } catch (e) {
+    try {
+      Object.defineProperty(window, 'sessionStorage', {
+        value: createInMemoryStorage(),
+        configurable: true,
+        enumerable: true,
+        writable: true
+      });
+    } catch (_) {}
+  }
+})();
+</script>\n`;
+
+  // 4. Inject runtime error listener & route message bridge
+  const errorListenerScript = `<script>
+(function() {
+  function notifyParentError(msg, lineno, colno, src) {
+    try {
+      window.parent.postMessage({
+        type: 'AVERIA_RUNTIME_ERROR',
+        error: {
+          message: String(msg || 'Runtime script error'),
+          lineno: lineno || 0,
+          colno: colno || 0,
+          filename: src || ''
+        }
+      }, '*');
+    } catch (_) {}
+  }
+  window.addEventListener('error', function(e) {
+    console.error('[Averia Runtime Error]', e.error || e.message);
+    notifyParentError(e.message || (e.error && e.error.message), e.lineno, e.colno, e.filename);
+    var b = document.getElementById('averia-runtime-banner');
+    if (!b && document.body) {
+      b = document.createElement('div');
+      b.id = 'averia-runtime-banner';
+      b.style.cssText = 'position:fixed;bottom:10px;left:10px;right:10px;background:#181824;border:1px solid #ef4444;border-radius:8px;padding:8px 12px;color:#fca5a5;font-family:monospace;font-size:11px;z-index:999999;display:flex;align-items:center;justify-content:space-between;box-shadow:0 4px 20px rgba(0,0,0,0.5);';
+      b.innerHTML = '<span>⚠️ <b>Runtime Error:</b> ' + (e.message || 'Script error') + (e.lineno ? ' (line ' + e.lineno + ')' : '') + '</span><button onclick="this.parentElement.remove()" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:14px;padding:0 6px;">✕</button>';
+      document.body.appendChild(b);
+    }
+  });
+  window.addEventListener('unhandledrejection', function(e) {
+    var reason = e.reason ? (e.reason.message || String(e.reason)) : 'Unhandled Promise Rejection';
+    console.error('[Averia Unhandled Rejection]', reason);
+    notifyParentError(reason, 0, 0, 'promise');
+  });
+})();
 </script>\n`;
 
   const routeMessageListener = `<script>
@@ -443,13 +508,16 @@ window.addEventListener('message', function(e) {
 });
 </script>\n`;
 
+  const headInject = `${storagePolyfillScript}${errorListenerScript}${routeMessageListener}`;
   if (doc.includes('<head>')) {
-    doc = doc.replace('<head>', `<head>\n${errorListenerScript}${routeMessageListener}`);
+    doc = doc.replace('<head>', `<head>\n${headInject}`);
   } else if (doc.includes('<html>')) {
-    doc = doc.replace('<html>', `<html>\n<head>${errorListenerScript}${routeMessageListener}</head>`);
+    doc = doc.replace('<html>', `<html>\n<head>${headInject}</head>`);
+  } else {
+    doc = headInject + doc;
   }
 
-  // 4. Inline companion CSS files
+  // 5. Inline companion CSS files
   const cssFiles = allFiles.filter(f => f.path.endsWith('.css'));
   if (cssFiles.length > 0) {
     const inlinedStyles = cssFiles.map(f => `/* inlined: ${f.path} */\n${f.content}`).join('\n\n');
@@ -463,10 +531,8 @@ window.addEventListener('message', function(e) {
     }
   }
 
-  // 5. Topological Sort of companion JS / TS files:
-  // Audio, math, utils, helpers, config, types FIRST.
-  // Intermediate modules SECOND.
-  // Engine, game, app, main LAST.
+  // 6. 4-Tier & Topological Sort of companion JS / TS files:
+  // Fixes: "ReferenceError: Cannot access 'NotificationController' before initialization"
   const jsFiles = allFiles.filter(f =>
     (f.path.endsWith('.js') || f.path.endsWith('.ts')) &&
     !f.path.startsWith('server/') &&
@@ -476,13 +542,40 @@ window.addEventListener('message', function(e) {
   );
 
   if (jsFiles.length > 0) {
+    // Extract declared symbols per file
+    const fileSymbols = jsFiles.map(f => {
+      const symbols: string[] = [];
+      const classMatches = f.content.matchAll(/class\s+([A-Za-z0-9_$]+)/g);
+      for (const m of classMatches) symbols.push(m[1]);
+      const fnMatches = f.content.matchAll(/(?:function|const|let|var)\s+([A-Z][A-Za-z0-9_$]*)\s*=/g);
+      for (const m of fnMatches) symbols.push(m[1]);
+      return { path: f.path, symbols };
+    });
+
+    const getRank = (path: string) => {
+      const p = path.toLowerCase();
+      // Tier 1: Config, constants, types, math, audio, sounds, storage, utils, helpers
+      if (/audio|sound|music|util|helper|math|const|types|config|storage/i.test(p)) return 0;
+      // Tier 2: Controllers, services, stores, models, state, api, components, notification
+      if (/controller|service|store|model|state|api|component|notification/i.test(p)) return 1;
+      // Tier 3: Views, pages, screens, routes, ui
+      if (/view|page|screen|route|ui/i.test(p)) return 2;
+      // Tier 4: Engine, game, app, main, index, bootstrap
+      if (/engine|game|app|main|index|bootstrap/i.test(p)) return 3;
+      return 1.5;
+    };
+
     const sortedJsFiles = [...jsFiles].sort((a, b) => {
-      const getRank = (path: string) => {
-        const p = path.toLowerCase();
-        if (/audio|sound|music|util|helper|math|const|types|config/i.test(p)) return 0;
-        if (/engine|game|controller|main|app/i.test(p)) return 2;
-        return 1;
-      };
+      // 1. If A declares a symbol used in B, A must come before B (-1)
+      const aSymbols = fileSymbols.find(x => x.path === a.path)?.symbols || [];
+      const bSymbols = fileSymbols.find(x => x.path === b.path)?.symbols || [];
+      const bUsesA = aSymbols.some(s => new RegExp(`\\b${s}\\b`).test(b.content));
+      const aUsesB = bSymbols.some(s => new RegExp(`\\b${s}\\b`).test(a.content));
+
+      if (bUsesA && !aUsesB) return -1;
+      if (aUsesB && !bUsesA) return 1;
+
+      // 2. Fall back to tiered ranks
       return getRank(a.path) - getRank(b.path);
     });
 
@@ -490,7 +583,7 @@ window.addEventListener('message', function(e) {
       .map(f => `// === INLINED: ${f.path} ===\n${stripESModules(f.content, f.path)}`)
       .join('\n\n');
 
-    // NOTE: Inlined in GLOBAL script scope without a 'try { }' block so ES6 classes are NOT block-scoped!
+    // Inlined in global script scope without block scope so classes are accessible across files
     const scriptTag = `\n<!-- Inlined Zero-CORS Companion Modules -->\n<script>\n${inlinedScripts}\n</script>\n`;
 
     // Inject before the first inline <script> in body or at top of body, so it defines classes BEFORE index.html's script runs!
@@ -1048,6 +1141,12 @@ export default function AveriaAI() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Autonomous Self-Healing Auto-Repair Ref Tracker & Function Bridge
+  const repairCountRef = useRef(0);
+  const isLoadingRef = useRef(isLoading);
+  useEffect(() => { isLoadingRef.current = isLoading; }, [isLoading]);
+  const sendMessageRef = useRef<((customPrompt?: string) => Promise<void>) | null>(null);
+
   const navigatePreview = (route: string) => {
     setCurrentPreviewRoute(route);
     setShowRouteMenu(false);
@@ -1058,7 +1157,7 @@ export default function AveriaAI() {
     } catch {}
   };
 
-  // Listen for route updates from preview iframe (Lovable-style route switcher)
+  // Listen for route updates & runtime errors from preview iframe (Lovable-style route switcher + self-healing loop)
   useEffect(() => {
     const handleRouteMessage = (e: MessageEvent) => {
       if (e.data?.type === 'AVERIA_ROUTE_UPDATE') {
@@ -1073,6 +1172,26 @@ export default function AveriaAI() {
           return JSON.stringify(sorted) !== JSON.stringify(prev) ? sorted : prev;
         });
         setCurrentPreviewRoute(current);
+      } else if (e.data?.type === 'AVERIA_RUNTIME_ERROR') {
+        const err = e.data.error || {};
+        console.warn('[Averia Runtime Error Captured]', err);
+        setPreviewError(`${err.message || 'Script error'}${err.lineno ? ` (line ${err.lineno})` : ''}`);
+
+        // Autonomous auto-repair: up to 2 silent self-healing attempts
+        if (repairCountRef.current < 2 && !isLoadingRef.current && sendMessageRef.current) {
+          repairCountRef.current += 1;
+          const attempt = repairCountRef.current;
+          toast.info(`Autonomous Auto-Repair (${attempt}/2): Genesis is resolving detected runtime error...`);
+          const prompt = `⚠️ Live Preview Runtime Error Detected:
+Error: ${err.message || 'Script error'}${err.lineno ? ` at line ${err.lineno}` : ''}${err.filename ? ` in ${err.filename}` : ''}
+
+Please inspect all project files, resolve the root cause (such as class initialization order, undefined references, missing function definitions, or broken DOM selectors), and output the complete updated files with zero truncated code.`;
+          setTimeout(() => {
+            if (!isLoadingRef.current && sendMessageRef.current) {
+              sendMessageRef.current(prompt);
+            }
+          }, 600);
+        }
       }
     };
     window.addEventListener('message', handleRouteMessage);
@@ -1741,8 +1860,13 @@ export default function AveriaAI() {
     toast.info('📁 Folder detached from chat');
   };
 
-  const sendMessage = useCallback(async () => {
-    if ((!input.trim() && attachments.length === 0) || isLoading) return;
+  const sendMessage = useCallback(async (customPrompt?: string) => {
+    const textContent = typeof customPrompt === 'string' ? customPrompt : input.trim();
+    if ((!textContent && attachments.length === 0) || isLoading) return;
+
+    if (!customPrompt) {
+      repairCountRef.current = 0;
+    }
 
     let convId = activeConvId;
     if (!convId) {
@@ -1750,12 +1874,14 @@ export default function AveriaAI() {
       if (!convId) return;
     }
 
-    const currentAttachments = attachments;
-    const userMsg: Message = { role: 'user', content: input.trim() || '(forensic analysis request)', attachments: currentAttachments };
+    const currentAttachments = customPrompt ? [] : attachments;
+    const userMsg: Message = { role: 'user', content: textContent || '(forensic analysis request)', attachments: currentAttachments };
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
-    setInput('');
-    setAttachments([]);
+    if (!customPrompt) {
+      setInput('');
+      setAttachments([]);
+    }
     setIsLoading(true);
     if (isMobile) setMobileView('chat');
 
@@ -1817,6 +1943,32 @@ export default function AveriaAI() {
         workspaceContext = await scanLocalWorkspace(localFolderHandle, 3);
       } catch (err) {
         console.warn('Workspace scan error:', err);
+      }
+    }
+
+    // Full Workspace & Conversation Memory Bundle:
+    // If no physical folder handle, extract virtual project files from previous messages
+    if (!workspaceContext || !workspaceContext.files || workspaceContext.files.length === 0) {
+      const virtualFilesMap = new Map<string, string>();
+      for (const m of newMessages) {
+        if (m.role === 'assistant' && m.content) {
+          const parsed = extractProjectFiles(m.content);
+          for (const f of parsed) {
+            virtualFilesMap.set(f.path, f.content);
+          }
+        }
+      }
+      if (virtualFilesMap.size > 0) {
+        const virtualFiles = Array.from(virtualFilesMap.entries()).map(([path, content]) => ({
+          path,
+          content,
+          size: new Blob([content]).size,
+        }));
+        workspaceContext = {
+          folderName: 'Virtual Project Workspace',
+          files: virtualFiles,
+          tree: virtualFiles.map(f => f.path),
+        };
       }
     }
 
@@ -1910,6 +2062,10 @@ export default function AveriaAI() {
       setIsGeneratingApp(false);
     }
   }, [input, isLoading, activeConvId, messages, attachments, isMobile, voiceMode, selectedModel, localFolderHandle, folderPermissionGranted, localFolderName]);
+
+  useEffect(() => {
+    sendMessageRef.current = sendMessage;
+  }, [sendMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }

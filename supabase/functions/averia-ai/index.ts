@@ -788,12 +788,13 @@ Analyze all provided frames, spectrograms, text or URL data with maximum scienti
 9. 📇 Truth-Share Summary
 ` : "";
 
-    const workspaceAddon = workspaceContext?.folderName ? `
-📁 **ATTACHED LOCAL WORKSPACE: "${workspaceContext.folderName}"**
+    const hasAnyWorkspace = Boolean(workspaceContext?.folderName || (workspaceContext?.files && workspaceContext.files.length > 0));
+    const workspaceAddon = hasAnyWorkspace ? `
+📁 **ATTACHED WORKSPACE: "${workspaceContext?.folderName || "Virtual Project Workspace"}"**
 Existing Directory Structure:
-${(workspaceContext.fileTree || []).slice(0, 100).join("\n")}
-${workspaceContext.files && workspaceContext.files.length > 0 ? `\nExisting Key Files:\n${workspaceContext.files.map((f: any) => `--- ${f.path} ---\n${f.content.slice(0, 2000)}`).join("\n\n")}` : ""}
-WORKSPACE DIRECTIVE: The user has attached this local folder. When generating, modifying, or extending code, inspect existing files, follow the project conventions, and output all updated or newly added files using \`\`\`file:path/to/file.ext blocks.
+${(workspaceContext?.fileTree || workspaceContext?.tree || workspaceContext?.files?.map((f: any) => f.path) || []).slice(0, 100).join("\n")}
+${workspaceContext?.files && workspaceContext.files.length > 0 ? `\nExisting Key Files:\n${workspaceContext.files.map((f: any) => `--- ${f.path} ---\n${(f.content || "").slice(0, 25000)}`).join("\n\n")}` : ""}
+WORKSPACE DIRECTIVE: The user has an active project workspace. When generating, modifying, or extending code, inspect existing files, follow the project conventions, maintain multi-page integrity, and output all updated or newly added files using \`\`\`file:path/to/file.ext blocks.
 ` : "";
 
     const baseSystemPrompt = `${AVERIA_SYSTEM_PERSONA}
@@ -940,7 +941,7 @@ ${memoryContext}`;
       if (isIterativeRepair) {
         // Build full file contents listing for non-destructive editing
         const existingFileContents = workspaceContext?.files?.map((f: any) =>
-          `--- EXISTING FILE: ${f.path} ---\n${f.content}`
+          `--- EXISTING FILE: ${f.path} ---\n${(f.content || "").slice(0, 25000)}`
         ).join('\n\n') || '';
 
         directiveContent = `Original request: ${userGoal}\n\n${workspaceAddon}\n\nAgent insights:\n${assemblerContext}\n\n` +
