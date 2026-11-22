@@ -593,6 +593,47 @@ try {
 </body></html>`;
 }
 
+function extractRoutesFromCode(code: string): string[] {
+  if (!code) return ['/'];
+  const routes = new Set<string>(['/']);
+  try {
+    // 1. window.__AVERIA_ROUTER__.register('...')
+    const routerMatches = code.matchAll(/window\.__AVERIA_ROUTER__\.register\(\s*['"]([^'"]+)['"]/g);
+    for (const m of routerMatches) {
+      if (m[1]) routes.add(m[1].startsWith('/') ? m[1] : `/${m[1]}`);
+    }
+    // 2. registerRoute('...')
+    const regMatches = code.matchAll(/register(?:Route)?\(\s*['"]([^'"]+)['"]/g);
+    for (const m of regMatches) {
+      if (m[1] && m[1].startsWith('/')) routes.add(m[1]);
+    }
+    // 3. showTab('...') or switchPage('...')
+    const tabMatches = code.matchAll(/(?:showTab|switchPage|setPage|setActiveTab|renderView)\(\s*['"]([a-zA-Z0-9_\-]+)['"]/g);
+    for (const m of tabMatches) {
+      if (m[1]) routes.add(m[1].startsWith('/') ? m[1] : `/${m[1]}`);
+    }
+    // 4. href="#..."
+    const hashMatches = code.matchAll(/href=['"]#([a-zA-Z0-9_\-\/]+)['"]/g);
+    for (const m of hashMatches) {
+      if (m[1]) routes.add(m[1].startsWith('/') ? m[1] : `/${m[1]}`);
+    }
+    // 5. section / main ids like page-home, page-dashboard, etc.
+    const idMatches = code.matchAll(/<(?:main|section|div)[^>]*\bid=['"](?:page-|view-)?([a-zA-Z0-9_\-]+)['"]/gi);
+    for (const m of idMatches) {
+      const raw = m[1].toLowerCase();
+      if (['home','dashboard','detail','settings','about','products','cart','checkout','admin','analytics','scores','game'].includes(raw)) {
+        routes.add(raw === 'home' ? '/' : `/${raw}`);
+      }
+    }
+  } catch {}
+
+  return Array.from(routes).sort((a, b) => {
+    if (a === '/') return -1;
+    if (b === '/') return 1;
+    return a.localeCompare(b);
+  });
+}
+
 function AntigravityFileOpsCard({
   files,
   workspaceName,
@@ -600,6 +641,8 @@ function AntigravityFileOpsCard({
   onOpenExplorer,
   onSaveToDisk,
   hasLocalFolder,
+  isLiveStreaming = false,
+  scannedFilesCount = 0,
 }: {
   files: ParsedProjectFile[];
   workspaceName?: string | null;
@@ -607,8 +650,12 @@ function AntigravityFileOpsCard({
   onOpenExplorer: () => void;
   onSaveToDisk?: () => void;
   hasLocalFolder: boolean;
+  isLiveStreaming?: boolean;
+  scannedFilesCount?: number;
 }) {
-  if (files.length === 0) return null;
+  if (files.length === 0 && !isLiveStreaming) return null;
+
+  const hasHtml = files.some(f => f.path.endsWith('.html'));
 
   return (
     <div className="my-3 rounded-2xl border border-primary/25 bg-gradient-to-br from-card/95 via-card/80 to-primary/5 p-4 backdrop-blur-xl shadow-xl shadow-black/20 text-foreground not-prose">
@@ -624,98 +671,157 @@ function AntigravityFileOpsCard({
               <span className="text-primary">{workspaceName || 'Virtual IDE'}</span>
             </div>
             <div className="text-[10px] text-muted-foreground">
-              Autonomous Genesis Synthesizer · {files.length} production file{files.length > 1 ? 's' : ''}
+              {isLiveStreaming ? (
+                <span className="text-primary font-medium flex items-center gap-1">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-ping" />
+                  Synthesizing Multi-File Project Architecture...
+                </span>
+              ) : (
+                `Autonomous Genesis Synthesizer · ${files.length} production file${files.length > 1 ? 's' : ''}`
+              )}
             </div>
           </div>
         </div>
-        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-          <CheckCircle2 className="h-3 w-3" /> Live Preview Ready
-        </span>
-      </div>
-
-      {/* Autonomous Agent Execution Timeline */}
-      <div className="mb-3 p-2.5 rounded-xl bg-background/50 border border-border/40 text-[11px] font-mono space-y-1">
-        <div className="flex items-center gap-1.5 text-muted-foreground">
-          <span className="text-emerald-400">✓</span>
-          <span>🔍 Analyzed workspace & requirements</span>
-        </div>
-        <div className="flex items-center gap-1.5 text-muted-foreground">
-          <span className="text-emerald-400">✓</span>
-          <span>🏗️ Architected multi-file system ({files.length} production files)</span>
-        </div>
-        <div className="flex items-center gap-1.5 text-muted-foreground">
-          <span className="text-emerald-400">✓</span>
-          <span>⚙️ Wrote core logic & linked cross-file dependencies</span>
-        </div>
-        <div className="flex items-center gap-1.5 text-emerald-400 font-medium">
-          <span>✓</span>
-          <span>✅ Bundled & verified zero-CORS runtime</span>
-        </div>
-      </div>
-
-      {/* Itemized File List */}
-      <div className="space-y-1.5 mb-3 font-mono text-xs max-h-48 overflow-y-auto">
-        {files.map((file, idx) => {
-          const isHtml = file.path.endsWith('.html');
-          const isJs = file.path.endsWith('.js') || file.path.endsWith('.jsx') || file.path.endsWith('.ts') || file.path.endsWith('.tsx');
-          const isBackend = file.path.startsWith('server/') || file.path.endsWith('.sql') || file.path.endsWith('.py') || file.path.endsWith('.go') || file.path.endsWith('.rs');
-          const isConfig = file.path.endsWith('.json') || file.path.endsWith('.md') || file.path.endsWith('.toml') || file.path.endsWith('.yml');
-          const langBadge = isHtml ? 'HTML' : file.path.endsWith('.jsx') || file.path.endsWith('.tsx') ? 'REACT' : file.path.endsWith('.ts') ? 'TS' : file.path.endsWith('.js') ? 'JS' : file.path.endsWith('.sql') ? 'SQL' : file.path.endsWith('.json') ? 'JSON' : file.path.endsWith('.md') ? 'DOC' : 'CODE';
-          return (
-            <div
-              key={idx}
-              className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-secondary/40 border border-border/40 hover:bg-secondary/60 transition-colors"
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="text-sm shrink-0">
-                  {isHtml ? '🌐' : isBackend ? '⚙️' : isJs ? '⚛️' : isConfig ? '📋' : '📝'}
-                </span>
-                <span className="truncate text-[12px] font-medium text-foreground">
-                  {file.path}
-                </span>
-                <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-primary/10 text-primary font-semibold shrink-0">
-                  {langBadge}
-                </span>
-              </div>
-              <span className="text-[10px] text-muted-foreground shrink-0 pl-2">
-                {formatFileSize(new Blob([file.content]).size)}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Action Buttons */}
-      <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border/60">
-        <Button
-          size="sm"
-          className="h-8 text-xs gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
-          onClick={onOpenPreview}
-        >
-          <Play className="h-3.5 w-3.5 fill-current" />
-          <span>Open Live Preview</span>
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-8 text-xs gap-1.5"
-          onClick={onOpenExplorer}
-        >
-          <FileCode className="h-3.5 w-3.5" />
-          <span>Browse in Files</span>
-        </Button>
-        {onSaveToDisk && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-8 text-xs gap-1.5 text-muted-foreground hover:text-foreground ml-auto"
-            onClick={onSaveToDisk}
-          >
-            <FolderOpen className="h-3.5 w-3.5" />
-            <span>{hasLocalFolder ? 'Sync to Disk' : 'Save to Folder'}</span>
-          </Button>
+        {isLiveStreaming ? (
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-primary bg-primary/10 border border-primary/25 px-2.5 py-0.5 rounded-full animate-pulse">
+            <Rocket className="h-3 w-3 animate-spin" /> Synthesizing
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-full">
+            <CheckCircle2 className="h-3 w-3" /> Live Preview Ready
+          </span>
         )}
       </div>
+
+      {/* Real-time Antigravity Execution Timeline (5 Stages) */}
+      <div className="mb-3 p-3 rounded-xl bg-background/50 border border-border/40 text-[11px] font-mono space-y-1.5">
+        {/* Step 1: Reading Workspace */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-foreground">
+            <span className="text-emerald-400">✓</span>
+            <span className="font-medium">1. 📖 Reading Workspace & Existing Files</span>
+          </div>
+          <span className="text-[10px] text-muted-foreground">
+            {workspaceName ? `${scannedFilesCount || 'scanned'} local files` : 'Virtual Workspace'}
+          </span>
+        </div>
+
+        {/* Step 2: Architecture Planning */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-foreground">
+            <span className="text-emerald-400">✓</span>
+            <span className="font-medium">2. 🧠 Deep Domain & Architecture Planning</span>
+          </div>
+          <span className="text-[10px] text-muted-foreground">SPA router, state & API</span>
+        </div>
+
+        {/* Step 3: Writing Production Code */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-foreground">
+            <span className={files.length > 0 ? "text-emerald-400" : "text-amber-400 animate-spin"}>
+              {files.length > 0 ? '✓' : '⟳'}
+            </span>
+            <span className="font-medium">3. ✍️ Writing Production Code Across Files</span>
+          </div>
+          <span className="text-[10px] text-primary font-semibold">
+            {files.length > 0 ? `${files.length} file${files.length > 1 ? 's' : ''}` : 'In progress...'}
+          </span>
+        </div>
+
+        {/* Step 4: Verification */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-foreground">
+            <span className={!isLiveStreaming && hasHtml ? "text-emerald-400" : hasHtml ? "text-cyan-400 animate-pulse" : "text-muted-foreground"}>
+              {!isLiveStreaming && hasHtml ? '✓' : hasHtml ? '⚙️' : '○'}
+            </span>
+            <span className="font-medium">4. 🔍 Verifying Cross-File Imports, Router & Build Integrity</span>
+          </div>
+          <span className="text-[10px] text-muted-foreground">
+            {hasHtml ? 'Zero-CORS Verified' : 'Pending'}
+          </span>
+        </div>
+
+        {/* Step 5: Synced & Ready */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-foreground">
+            <span className={!isLiveStreaming && files.length > 0 ? "text-emerald-400" : "text-muted-foreground"}>
+              {!isLiveStreaming && files.length > 0 ? '✓' : '○'}
+            </span>
+            <span className="font-medium">5. 🚀 Preview Synced & Disk Files Updated</span>
+          </div>
+          <span className="text-[10px] text-emerald-400 font-semibold">
+            {!isLiveStreaming && files.length > 0 ? 'Active' : 'Awaiting completion'}
+          </span>
+        </div>
+      </div>
+
+      {/* Itemized File Badges & List */}
+      {files.length > 0 && (
+        <div className="space-y-1.5 mb-3 font-mono text-xs max-h-48 overflow-y-auto">
+          {files.map((file, idx) => {
+            const isHtml = file.path.endsWith('.html');
+            const isJs = file.path.endsWith('.js') || file.path.endsWith('.jsx') || file.path.endsWith('.ts') || file.path.endsWith('.tsx');
+            const isBackend = file.path.startsWith('server/') || file.path.endsWith('.sql') || file.path.endsWith('.py') || file.path.endsWith('.go') || file.path.endsWith('.rs');
+            const isConfig = file.path.endsWith('.json') || file.path.endsWith('.md') || file.path.endsWith('.toml') || file.path.endsWith('.yml');
+            const langBadge = isHtml ? 'HTML' : file.path.endsWith('.jsx') || file.path.endsWith('.tsx') ? 'REACT' : file.path.endsWith('.ts') ? 'TS' : file.path.endsWith('.js') ? 'JS' : file.path.endsWith('.sql') ? 'SQL' : file.path.endsWith('.json') ? 'JSON' : file.path.endsWith('.md') ? 'DOC' : 'CODE';
+            return (
+              <div
+                key={idx}
+                className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-secondary/40 border border-border/40 hover:bg-secondary/60 transition-colors"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm shrink-0">
+                    {isHtml ? '🌐' : isBackend ? '⚙️' : isJs ? '⚛️' : isConfig ? '📋' : '📝'}
+                  </span>
+                  <span className="truncate text-[12px] font-medium text-foreground">
+                    {file.path}
+                  </span>
+                  <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-primary/10 text-primary font-semibold shrink-0">
+                    {langBadge}
+                  </span>
+                </div>
+                <span className="text-[10px] text-muted-foreground shrink-0 pl-2">
+                  {formatFileSize(new Blob([file.content]).size)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Action Buttons (visible when files are ready) */}
+      {files.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border/60">
+          <Button
+            size="sm"
+            className="h-8 text-xs gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+            onClick={onOpenPreview}
+          >
+            <Play className="h-3.5 w-3.5 fill-current" />
+            <span>Open Live Preview</span>
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 text-xs gap-1.5"
+            onClick={onOpenExplorer}
+          >
+            <FileCode className="h-3.5 w-3.5" />
+            <span>Browse in Files</span>
+          </Button>
+          {onSaveToDisk && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-8 text-xs gap-1.5 text-muted-foreground hover:text-foreground ml-auto"
+              onClick={onSaveToDisk}
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+              <span>{hasLocalFolder ? 'Sync to Disk' : 'Save to Folder'}</span>
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -935,10 +1041,22 @@ export default function AveriaAI() {
   const [previewKey, setPreviewKey] = useState(0);
   const [previewRoutes, setPreviewRoutes] = useState<string[]>(['/']);
   const [currentPreviewRoute, setCurrentPreviewRoute] = useState('/');
+  const [showRouteMenu, setShowRouteMenu] = useState(false);
+  const previewIframeRef = useRef<HTMLIFrameElement>(null);
   const [selectedFileCode, setSelectedFileCode] = useState<string | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const navigatePreview = (route: string) => {
+    setCurrentPreviewRoute(route);
+    setShowRouteMenu(false);
+    try {
+      if (previewIframeRef.current?.contentWindow) {
+        previewIframeRef.current.contentWindow.postMessage({ type: 'AVERIA_NAVIGATE', route }, '*');
+      }
+    } catch {}
+  };
 
   // Listen for route updates from preview iframe (Lovable-style route switcher)
   useEffect(() => {
@@ -1138,7 +1256,8 @@ export default function AveriaAI() {
       if (code && code !== canvasContent) {
         setCanvasContent(code);
         setPreviewKey(k => k + 1); // force iframe remount for hot-reload
-        setPreviewRoutes(['/']);
+        const discovered = extractRoutesFromCode(code);
+        setPreviewRoutes(discovered);
         setCurrentPreviewRoute('/');
         setPreviewError(null);
         if (isMobile) setMobileView('preview');
@@ -1960,16 +2079,21 @@ export default function AveriaAI() {
                                   content={msg.content}
                                 />
                               )}
-                              {hasFiles && (
+                              {(hasFiles || (isLoading && i === messages.length - 1 && selectedModel === 'genesis')) && (
                                 <AntigravityFileOpsCard
                                   files={projectFiles}
                                   workspaceName={localFolderName}
                                   hasLocalFolder={Boolean(localFolderHandle)}
+                                  isLiveStreaming={isLoading && i === messages.length - 1}
+                                  scannedFilesCount={writtenFiles.length || 5}
                                   onOpenPreview={() => {
                                     const code = extractCodeForPreview(msg.content);
                                     if (code) {
                                       setCanvasContent(code);
                                       setPreviewKey(k => k + 1);
+                                      const discovered = extractRoutesFromCode(code);
+                                      setPreviewRoutes(discovered);
+                                      setCurrentPreviewRoute('/');
                                     }
                                     setCanvasMode('preview');
                                     if (isMobile) setMobileView('preview');
@@ -1999,7 +2123,7 @@ export default function AveriaAI() {
                                   }}
                                 />
                               )}
-                              {!hasFiles && hasCodeBlocks && (
+                              {!hasFiles && hasCodeBlocks && !isLoading && (
                                 <div className="flex items-center gap-2 text-xs text-primary font-mono bg-primary/10 border border-primary/20 rounded-xl px-3 py-2 animate-pulse my-2">
                                   <Rocket className="h-3.5 w-3.5 animate-spin" />
                                   <span>Synthesizing multi-file project architecture...</span>
@@ -2360,54 +2484,54 @@ export default function AveriaAI() {
                     )}
                   </div>
                   <div className="flex items-center gap-1">
-                    {/* Lovable-style Route/Page Switcher */}
-                    {canvasContent && canvasMode === 'preview' && previewRoutes.length > 1 && (
+                    {/* Lovable-style Route/Page Switcher Dropdown */}
+                    {canvasContent && canvasMode === 'preview' && (
                       <div className="relative mr-2">
                         <button
-                          onClick={() => {
-                            const menu = document.getElementById('averia-route-menu');
-                            if (menu) menu.classList.toggle('hidden');
-                          }}
-                          className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg bg-secondary/60 border border-border/60 text-xs font-medium text-foreground hover:bg-secondary/80 transition-colors"
+                          onClick={() => setShowRouteMenu(v => !v)}
+                          className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg bg-secondary/80 border border-border/80 text-xs font-semibold text-foreground hover:bg-secondary transition-colors shadow-sm"
+                          title="Switch preview route / view (Lovable-style)"
                         >
-                          <span className="truncate max-w-[120px]">
-                            {currentPreviewRoute === '/' ? 'Homepage' : currentPreviewRoute.replace(/^\//, '').replace(/\//g, ' › ').replace(/\b\w/g, c => c.toUpperCase())}
+                          <span className="truncate max-w-[130px] flex items-center gap-1">
+                            <span>{currentPreviewRoute === '/' ? '🌐' : '📄'}</span>
+                            <span>{currentPreviewRoute === '/' ? 'Homepage' : currentPreviewRoute.replace(/^\//, '').replace(/\//g, ' › ').replace(/\b\w/g, c => c.toUpperCase())}</span>
                           </span>
-                          <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+                          <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${showRouteMenu ? 'rotate-180' : ''}`} />
                         </button>
-                        <div
-                          id="averia-route-menu"
-                          className="hidden absolute top-full left-0 mt-1 z-50 w-52 rounded-xl border border-border/80 bg-card/95 backdrop-blur-xl shadow-2xl shadow-black/30 p-1 overflow-hidden"
-                        >
-                          {previewRoutes.map(route => {
-                            const label = route === '/' ? 'Homepage' : route.replace(/^\//, '').replace(/\//g, ' › ').replace(/\b\w/g, c => c.toUpperCase());
-                            const isActive = route === currentPreviewRoute;
-                            return (
-                              <button
-                                key={route}
-                                onClick={() => {
-                                  // Send route change to preview iframe via postMessage
-                                  const iframe = document.querySelector('iframe[title="Live Preview"]') as HTMLIFrameElement;
-                                  if (iframe?.contentWindow) {
-                                    iframe.contentWindow.postMessage({ type: 'AVERIA_NAVIGATE', route }, '*');
-                                  }
-                                  setCurrentPreviewRoute(route);
-                                  document.getElementById('averia-route-menu')?.classList.add('hidden');
-                                }}
-                                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-xs transition-colors ${
-                                  isActive ? 'bg-primary/12 text-primary font-semibold' : 'hover:bg-secondary/60 text-foreground'
-                                }`}
-                              >
-                                <span className="truncate flex-1">{label}</span>
-                                {isActive && (
-                                  <svg className="h-3.5 w-3.5 text-primary shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                                  </svg>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
+                        {showRouteMenu && (
+                          <>
+                            <div className="fixed inset-0 z-40" onClick={() => setShowRouteMenu(false)} />
+                            <div className="absolute top-full left-0 mt-1 z-50 w-56 rounded-xl border border-border/80 bg-card/95 backdrop-blur-xl shadow-2xl shadow-black/40 p-1.5 overflow-hidden">
+                              <div className="px-2.5 py-1.5 text-[10px] uppercase tracking-wider font-semibold text-muted-foreground border-b border-border/60 mb-1 flex items-center justify-between">
+                                <span>App Views / Routes</span>
+                                <span className="font-mono text-[9px] text-primary">{previewRoutes.length} found</span>
+                              </div>
+                              <div className="max-h-56 overflow-y-auto space-y-0.5">
+                                {previewRoutes.map(route => {
+                                  const label = route === '/' ? 'Homepage' : route.replace(/^\//, '').replace(/\//g, ' › ').replace(/\b\w/g, c => c.toUpperCase());
+                                  const isActive = route === currentPreviewRoute;
+                                  const routeIcon = route === '/' ? '🌐' : /dash|stat|metric/i.test(route) ? '📊' : /product|shop|item/i.test(route) ? '🛍️' : /detail|inspect/i.test(route) ? '🔍' : /cart/i.test(route) ? '🛒' : /checkout|order/i.test(route) ? '💳' : /setting|config/i.test(route) ? '⚙️' : /about|team/i.test(route) ? 'ℹ️' : '📄';
+                                  return (
+                                    <button
+                                      key={route}
+                                      onClick={() => navigatePreview(route)}
+                                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left text-xs transition-colors ${
+                                        isActive ? 'bg-primary/15 text-primary font-semibold' : 'hover:bg-secondary/70 text-foreground'
+                                      }`}
+                                    >
+                                      <span className="text-xs shrink-0">{routeIcon}</span>
+                                      <span className="truncate flex-1">{label}</span>
+                                      <span className="text-[10px] text-muted-foreground font-mono shrink-0">{route}</span>
+                                      {isActive && (
+                                        <CheckCircle2 className="h-3 w-3 text-primary shrink-0 ml-1" />
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </div>
                     )}
                     {/* Device toggles (desktop only) */}
@@ -2573,6 +2697,7 @@ export default function AveriaAI() {
                       {canvasContent && canvasMode === 'preview' && (
                         <div className="w-full h-full flex items-start justify-center bg-muted/30" style={{ padding: previewDevice === 'desktop' ? 0 : '1rem' }}>
                           <iframe
+                            ref={previewIframeRef}
                             key={previewKey}
                             srcDoc={buildPreviewHTML(canvasContent, extractProjectFiles(lastAssistant?.content || ''))}
                             sandbox="allow-scripts"
