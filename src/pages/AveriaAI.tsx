@@ -1879,6 +1879,7 @@ export default function AveriaAI() {
   const [localFolderName, setLocalFolderName] = useState<string | null>(null);
   const [folderPermissionGranted, setFolderPermissionGranted] = useState(true);
   const [writtenFiles, setWrittenFiles] = useState<string[]>([]);
+  const [workspaceContext, setWorkspaceContext] = useState<WorkspaceContext | null>(null);
 
   // Restore folder handle from IndexedDB on conversation select or mount
   useEffect(() => {
@@ -1891,7 +1892,15 @@ export default function AveriaAI() {
           setLocalFolderName(handle.name);
           try {
             const status = await (handle as any).queryPermission({ mode: 'readwrite' });
-            if (isMounted) setFolderPermissionGranted(status === 'granted');
+            if (isMounted) {
+              const isGranted = status === 'granted';
+              setFolderPermissionGranted(isGranted);
+              if (isGranted) {
+                scanLocalWorkspace(handle, 3).then(ctx => {
+                  if (ctx && isMounted) setWorkspaceContext(ctx);
+                }).catch(() => {});
+              }
+            }
           } catch {
             if (isMounted) setFolderPermissionGranted(false);
           }
@@ -2536,6 +2545,9 @@ export default function AveriaAI() {
       setLocalFolderName(dirHandle.name);
       setFolderPermissionGranted(true);
       await saveFolderHandleToDB(activeConvId, dirHandle);
+      scanLocalWorkspace(dirHandle, 3).then(ctx => {
+        if (ctx) setWorkspaceContext(ctx);
+      }).catch(() => {});
       toast.success(`📁 Folder opened: ${dirHandle.name}`);
     } catch (err: any) {
       if (err?.name !== 'AbortError') {
@@ -2551,6 +2563,9 @@ export default function AveriaAI() {
       if (status === 'granted') {
         setFolderPermissionGranted(true);
         await saveFolderHandleToDB(activeConvId, localFolderHandle);
+        scanLocalWorkspace(localFolderHandle, 3).then(ctx => {
+          if (ctx) setWorkspaceContext(ctx);
+        }).catch(() => {});
         toast.success(`📁 Reconnected to ${localFolderName}!`);
       } else {
         toast.error('Permission denied to access folder.');
@@ -2566,6 +2581,7 @@ export default function AveriaAI() {
     setLocalFolderName(null);
     setFolderPermissionGranted(true);
     setWrittenFiles([]);
+    setWorkspaceContext(null);
     await clearFolderHandleFromDB(activeConvId);
     toast.info('📁 Folder detached from chat');
   };
@@ -2793,10 +2809,14 @@ export default function AveriaAI() {
     }
 
     // Scan local workspace if folder is connected & granted
-    let workspaceContext: WorkspaceContext | null = null;
+    let activeWorkspace: WorkspaceContext | null = workspaceContext;
     if (localFolderHandle && folderPermissionGranted) {
       try {
-        workspaceContext = await scanLocalWorkspace(localFolderHandle, 3);
+        const scanned = await scanLocalWorkspace(localFolderHandle, 3);
+        if (scanned) {
+          activeWorkspace = scanned;
+          setWorkspaceContext(scanned);
+        }
       } catch (err) {
         console.warn('Workspace scan error:', err);
       }
@@ -2804,7 +2824,7 @@ export default function AveriaAI() {
 
     // Full Workspace & Conversation Memory Bundle:
     // If no physical folder handle, extract virtual project files from previous messages
-    if (!workspaceContext || !workspaceContext.files || workspaceContext.files.length === 0) {
+    if (!activeWorkspace || !activeWorkspace.files || activeWorkspace.files.length === 0) {
       const virtualFilesMap = new Map<string, string>();
       for (const m of newMessages) {
         if (m.role === 'assistant' && m.content) {
@@ -2820,11 +2840,12 @@ export default function AveriaAI() {
           content,
           size: new Blob([content]).size,
         }));
-        workspaceContext = {
+        activeWorkspace = {
           folderName: 'Virtual Project Workspace',
           files: virtualFiles,
           tree: virtualFiles.map(f => f.path),
         };
+        setWorkspaceContext(activeWorkspace);
       }
     }
 
@@ -2834,7 +2855,7 @@ export default function AveriaAI() {
       const authToken = sessionData?.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
       const hasExistingFiles = Boolean(
-        (workspaceContext?.files && workspaceContext.files.length > 0) ||
+        (activeWorkspace?.files && activeWorkspace.files.length > 0) ||
         messages.some(m => m.role === 'assistant' && extractProjectFiles(m.content).length > 0)
       );
       const isIterativeRepair = hasExistingFiles && (
@@ -2900,7 +2921,7 @@ export default function AveriaAI() {
                 agentRole: role.role,
                 keySlot: role.keySlot,
                 sharedContract: contract,
-                workspaceContext,
+                workspaceContext: activeWorkspace,
               }),
             });
 
@@ -3125,7 +3146,7 @@ export default function AveriaAI() {
             forensicMode: currentAttachments.length > 0,
             model: effectiveModel,
             agentRole: isIterativeRepair ? 'full' : undefined,
-            workspaceContext,
+            workspaceContext: activeWorkspace,
           }),
         });
 
