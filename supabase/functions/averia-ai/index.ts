@@ -1018,20 +1018,20 @@ Your job is to generate ONLY TWO files for "${resolvedTitle}":
 2. \`\`\`markdown:README.md — Comprehensive architecture specification, list of modules, route table, database schema overview, and setup instructions.
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
-RULES: Start immediately on line 1 with \`\`\`json:package.json. ZERO preamble text. Every file must be complete.`
+RULES: Start immediately on line 1 with \`\`\`json:package.json. ZERO conversational prose. Every file must be complete.`
         },
         db_engineer: {
           roleName: "Database & API Engineer",
           prompt: `You are the Database Engineer in the 10-agent Genesis swarm.
 Your job is to generate ONLY ONE file for "${resolvedTitle}":
 \`\`\`sql:schema.sql — Complete PostgreSQL DDL with:
-- CREATE TABLE IF NOT EXISTS statements for all collections (products/items, orders, cart_items, users, activity_logs)
-- UUID primary keys, indices on foreign keys and search columns, CHECK constraints, and timestamps
+- CREATE TABLE IF NOT EXISTS statements for all domain collections matching the application goal: "${userGoal}"
+- UUID primary keys, foreign key relations, indices on search columns, CHECK constraints, and timestamps
 - Row-Level Security (RLS) policies
-- Pre-populated realistic seed data (at least 8-10 records with names, prices, categories, statuses)
+- Pre-populated realistic seed data (at least 8-10 authentic records with realistic names, metadata, and statuses)
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
-RULES: Start immediately on line 1 with \`\`\`sql:schema.sql. ZERO preamble. Complete SQL only.`
+RULES: Start immediately on line 1 with \`\`\`sql:schema.sql. ZERO conversational prose. Complete SQL only.`
         },
         backend_api: {
           roleName: "Backend REST API Engineer",
@@ -1039,268 +1039,156 @@ RULES: Start immediately on line 1 with \`\`\`sql:schema.sql. ZERO preamble. Com
 Your job is to generate ONLY ONE file for "${resolvedTitle}":
 \`\`\`javascript:server/index.js — Complete Express.js REST API server with:
 - express, cors, express.json() middleware
-- REST CRUD routes: GET /api/items, POST /api/items, GET /api/items/:id, PATCH /api/items/:id, DELETE /api/items/:id
-- Orders endpoints: POST /api/orders, GET /api/orders, GET /api/orders/:id
-- Auth endpoints: POST /api/auth/login, POST /api/auth/signup, GET /api/auth/me
+- REST CRUD routes matching domain entities: GET /api/items, POST /api/items, GET /api/items/:id, PATCH /api/items/:id, DELETE /api/items/:id
+- Domain action endpoints (e.g. /api/action, /api/process, /api/auth)
 - Health check: GET /api/health
 - AveriaDB cloud database integration fallback
 - app.listen(port) with graceful startup log
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
-RULES: Start immediately on line 1 with \`\`\`javascript:server/index.js. ZERO preamble. Complete code only.`
+RULES: Start immediately on line 1 with \`\`\`javascript:server/index.js. ZERO conversational prose. Complete code only.`
         },
         data_sdk: {
           roleName: "Data SDK & State Engineer",
           prompt: `You are the Data SDK Engineer in the 10-agent Genesis swarm.
 Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`javascript:src/data.js — Complete data management layer exported as window.AveriaStore with:
-- Initial pre-seeded mock records (products, orders, categories, stats)
+\`\`\`javascript:src/data.js — Complete data management layer wired to window.__AVERIA_APP__ with:
+- Initial pre-seeded mock records tailored authentically to: "${userGoal}"
 - AveriaDB cloud bridge: methods to list, create, update, remove items using window.AveriaDB
-- LocalStorage fallback when cloud DB is unavailable
-- Reactive event bus: window.AveriaStore.subscribe(event, callback), window.AveriaStore.notify(event, payload)
-- Cart store: getCart(), addToCart(item), removeFromCart(id), updateQty(id, qty), clearCart()
-- User auth session state: getCurrentUser(), login(email), logout()
+- In-memory & LocalStorage state fallback when cloud DB is unavailable
+- Reactive event bus: subscribe(event, callback), notify(event, payload)
+- Domain state methods (CRUD operations, filtering, active selection, persistence)
+- REGISTRATION: Must register on the app bus:
+  if (window.__AVERIA_APP__) window.__AVERIA_APP__.register('data', AveriaStore);
+  window.AveriaStore = AveriaStore;
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
-RULES: Attach to window.AveriaStore = AveriaStore. Start immediately on line 1 with \`\`\`javascript:src/data.js. ZERO preamble. Complete code only.`
+RULES: Start immediately on line 1 with \`\`\`javascript:src/data.js. ZERO conversational prose. Complete browser JS only.`
         },
         logic_engine: {
           roleName: "Core Logic Engine",
           prompt: `You are the Core Logic Engine Engineer in the 10-agent Genesis swarm.
 Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`javascript:src/engine.js — Core algorithms and business logic exported as window.AveriaEngine with:
-- Calculation engine: calculateTotals(cartItems, promoCode, taxRate)
-- Search & multi-facet filter engine: filterItems(items, { query, category, priceMin, priceMax, sortBy })
-- State machine transitions for orders: transitionOrder(orderId, 'Pending' -> 'Processing' -> 'Shipped' -> 'Delivered')
-- Analytics metric aggregator: computeStats(items, orders)
-- Event dispatcher connecting store events to UI rerenders
+\`\`\`javascript:src/engine.js — Core calculations, business logic, or game loop/physics for: "${userGoal}"
+- If the user prompt is a game: implement full 60FPS physics, loop updates, collision detection, score calculation, particle effects
+- If the user prompt is SaaS/E-Commerce/Tool: implement calculation algorithms, multi-facet filtering, sorting, state transitions, metric aggregators
+- REGISTRATION: Must register on the app bus:
+  if (window.__AVERIA_APP__) window.__AVERIA_APP__.register('engine', AveriaEngine);
+  window.AveriaEngine = AveriaEngine;
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
-RULES: Attach to window.AveriaEngine = AveriaEngine. Start immediately on line 1 with \`\`\`javascript:src/engine.js. ZERO preamble. Complete code only.`
+RULES: Start immediately on line 1 with \`\`\`javascript:src/engine.js. ZERO conversational prose. Complete browser JS only.`
         },
         ui_shell: {
           roleName: "UI Shell & Layout Architect",
           prompt: `You are the UI Shell Architect in the 10-agent Genesis swarm.
 Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`html:index.html — 100% self-contained root HTML5 layout with:
-- <script src="https://cdn.tailwindcss.com"></script> and modern dark theme styles (slate-900 background, vibrant indigo/emerald accents)
-- Top navigation bar with logo, brand title "${resolvedTitle}", route navigation links, search bar, and cart badge
-- Root app container: <div id="app" class="min-h-screen flex flex-col"></div>
+\`\`\`html:index.html — Complete, authentic root HTML5 layout specifically tailored to "${userGoal}":
+- <script src="https://cdn.tailwindcss.com"></script> and modern styling matching the domain (Game HUD/Theme for games, Storefront for e-commerce, Dashboard/Sidebar for SaaS, Creative Canvas for tools)
+- Navigation bar / Top bar with brand "${resolvedTitle}", domain-specific controls/tabs, and status indicators
+- Main app viewport: <main id="app" class="flex-1 min-h-[calc(100vh-4rem)]"></main>
 - Modal container: <div id="modal-root"></div>
-- Script loading tags in topological order:
-  <script src="src/router.js"></script>
+- Toast container: <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2"></div>
+- Script tags in topological order:
   <script src="src/data.js"></script>
   <script src="src/engine.js"></script>
-  <script src="src/qaGuard.js"></script>
+  <script src="src/router.js"></script>
   <script src="src/pages/HomePage.js"></script>
   <script src="src/pages/AppPages.js"></script>
+  <script src="src/qaGuard.js"></script>
+- Automatic bootstrap:
   <script>
-    window.addEventListener('DOMContentLoaded', async () => {
-      if (window.__AVERIA_ROUTER__) {
-        window.__AVERIA_ROUTER__.register('/', () => window.HomePage && window.HomePage.render());
-        if (window.AppPages) {
-          window.__AVERIA_ROUTER__.register('/catalog', () => window.AppPages.renderCatalog());
-          window.__AVERIA_ROUTER__.register('/detail', (p) => window.AppPages.renderDetail(p));
-          window.__AVERIA_ROUTER__.register('/cart', () => window.AppPages.renderCart());
-          window.__AVERIA_ROUTER__.register('/orders', () => window.AppPages.renderOrders());
-          window.__AVERIA_ROUTER__.register('/admin', () => window.AppPages.renderAdmin());
-          window.__AVERIA_ROUTER__.register('/settings', () => window.AppPages.renderSettings());
-          window.__AVERIA_ROUTER__.register('/about', () => window.AppPages.renderAbout());
-        }
-        window.__AVERIA_ROUTER__.init();
+    window.addEventListener('DOMContentLoaded', function() {
+      if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.mount === 'function') {
+        window.__AVERIA_APP__.mount();
       }
     });
   </script>
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
-RULES: Start immediately on line 1 with \`\`\`html:index.html. ZERO preamble. Complete code only.`
+RULES: Start immediately on line 1 with \`\`\`html:index.html. ZERO conversational prose. Complete code only.`
         },
         spa_router: {
           roleName: "SPA Router Engineer",
           prompt: `You are the SPA Router Engineer in the 10-agent Genesis swarm.
 Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`javascript:src/router.js — Robust client-side hash router exported as window.__AVERIA_ROUTER__ with:
-- Route registry: register(path, handler)
-- Navigation: navigate(path, params)
+\`\`\`javascript:src/router.js — Robust client-side hash router wired to window.__AVERIA_APP__:
+- Route registry: window.__AVERIA_APP__.route(path, renderFn)
+- Navigation: window.__AVERIA_APP__.navigate(path, params)
 - Back history: goBack()
-- State: current(), params(), routes()
-- Listener: onChange(fn)
-- Automatic parent frame postMessage notification: parent.postMessage({ type: 'AVERIA_ROUTE_UPDATE', route, allRoutes }, '*')
+- Notification: window.parent.postMessage({ type: 'AVERIA_ROUTE_UPDATE', route, allRoutes }, '*')
 - Prevention of about:srcdoc hash navigation crashes
-- Active navbar highlighting synchronization
+- Dual registration:
+  if (window.__AVERIA_APP__) window.__AVERIA_APP__.register('router', router);
+  window.__AVERIA_ROUTER__ = window.__AVERIA_ROUTER__ || router;
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
-RULES: Attach to window.__AVERIA_ROUTER__ = router. Start immediately on line 1 with \`\`\`javascript:src/router.js. ZERO preamble. Complete code only.`
+RULES: Start immediately on line 1 with \`\`\`javascript:src/router.js. ZERO conversational prose. Complete browser JS only.`
         },
         home_view: {
           roleName: "Home View Specialist",
           prompt: `You are the Home View Specialist in the 10-agent Genesis swarm.
 Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`javascript:src/pages/HomePage.js — Complete landing & overview page exported as window.HomePage with:
-- render(): Renders into document.getElementById('app')
-- Hero section: Bold gradient headline for "${resolvedTitle}", subheadline, and primary/secondary CTAs
-- Metrics & stats cards: Live numbers calculated from window.AveriaStore or window.AveriaEngine
-- Interactive feature grid: 4-6 cards with hover effects, each wired to onclick="window.__AVERIA_ROUTER__.navigate('/catalog' or '/detail')"
-- Quick Action triggers: "Explore Catalog", "View Orders", "Open Admin"
-- Recent activity timeline
+\`\`\`javascript:src/pages/HomePage.js — Primary view implementation for: "${userGoal}":
+- If the application is a GAME: Render a responsive HTML5 <canvas id="game-canvas"> and launch full interactive 60FPS gameplay loop with keyboard/touch controls, HUD, restart button, and high score display!
+- If the application is a SAAS / TOOL / DASHBOARD / E-COMMERCE: Render rich domain-specific hero, live metrics/stats cards, interactive item grid/list with filters, quick actions, and detail drilldowns!
+- Renders directly into: document.getElementById('app')
+- REGISTRATION: Must register route and export:
+  if (window.__AVERIA_APP__) {
+    window.__AVERIA_APP__.route('/', function() { HomePage.render(); });
+    window.__AVERIA_APP__.register('home', HomePage);
+  }
+  window.HomePage = HomePage;
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
-RULES: Attach to window.HomePage = HomePage. Start immediately on line 1 with \`\`\`javascript:src/pages/HomePage.js. ZERO preamble. Complete code only.`
+RULES: Start immediately on line 1 with \`\`\`javascript:src/pages/HomePage.js. ZERO conversational prose. Complete browser JS only.`
         },
         sub_pages: {
           roleName: "Sub-Pages & Views Specialist",
           prompt: `You are the Sub-Pages & Views Specialist in the 10-agent Genesis swarm.
 Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`javascript:src/pages/AppPages.js — Deep hierarchical multi-page views exported as window.AppPages with:
-1. renderCatalog(): Searchable, filterable catalog/dashboard with category pills, price range slider, grid/table view toggle, live search filter, and "Inspect" / "Add to Cart" actions
-2. renderDetail(params): Deep drill-down detail view with multi-tab panels (Overview, Technical Specs, Verified Customer Reviews, Delivery ETA), interactive image gallery, quantity incrementer, and back button (window.__AVERIA_ROUTER__.goBack())
-3. renderCart(): Live responsive cart drawer & table, line-item quantity modifiers, promo-code applicator with instant calculation, order breakdown (Subtotal, Tax, Shipping, Total), and Checkout CTA
-4. renderCheckout(): Multi-step checkout wizard (Shipping Address, Payment Method, Order Review), form validation, and "Confirm Order" button that records to window.AveriaDB
-5. renderOrders(): Detailed order history with lifecycle tracking badges (Pending -> Processing -> Shipped -> Delivered), order search, and drill-down tracking modal (/order-tracking)
-6. renderAdmin(): Complete administration portal (/admin) with live stats cards, Add/Edit/Delete record modal dialogs, status toggles, and live AveriaDB table sync
-7. renderAnalytics(): Nested admin drill-down (/admin-analytics) with revenue charts, order volume metrics, and export data buttons
-8. renderSettings(): User preferences (theme mode, currency selector, notifications toggle) with localStorage persistence
-9. renderAbout(): Mission statement, team bios, interactive FAQ accordion, and inquiry contact form
-MANDATORY CODE QUALITY RULES:
-- STRICT VALID BROWSER JAVASCRIPT (ES5/ES2020): ZERO TypeScript types/interfaces (NO ': string', NO ': void', NO '<T>').
-- SAFE STRING ESCAPING: Use valid template literals, do not introduce unclosed syntax or unescaped nested backticks.
-- ZERO DEAD BUTTONS: Wire EVERY navigation link/button to onclick="window.__AVERIA_ROUTER__.navigate('/route')".
+\`\`\`javascript:src/pages/AppPages.js — Deep domain-specific secondary views, modals, and detail panels for: "${userGoal}":
+- Implement views tailored to the domain (e.g. /detail, /settings, /history, /admin, /analytics, /levels, /leaderboard, /inventory depending on the app)
+- Each view renders into document.getElementById('app') with full interactive buttons, back buttons, and state updates
+- REGISTRATION: Must register secondary routes:
+  if (window.__AVERIA_APP__) {
+    window.__AVERIA_APP__.register('pages', AppPages);
+  }
+  window.AppPages = AppPages;
+MANDATORY QUALITY RULES:
+- STRICT VALID BROWSER JAVASCRIPT: ZERO TypeScript types/interfaces (NO ': string', NO ': void', NO '<T>').
+- ZERO DEAD BUTTONS: Wire EVERY navigation link/button to window.__AVERIA_APP__.navigate('/route') or window.__AVERIA_ROUTER__.navigate('/route').
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
-RULES: Attach to window.AppPages = AppPages. Start immediately on line 1 with \`\`\`javascript:src/pages/AppPages.js. ZERO preamble. Complete code only.`
+RULES: Start immediately on line 1 with \`\`\`javascript:src/pages/AppPages.js. ZERO conversational prose. Complete browser JS only.`
         },
         qa_security: {
           roleName: "QA & Security Auditor",
           prompt: `You are the QA & Security Auditor in the 10-agent Genesis swarm.
 Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`javascript:src/qaGuard.js — Quality assurance, security sanitization, and self-healing exported as window.QAGuard with:
-- sanitizeHTML(str): XSS prevention function for user inputs
-- safeJSONParse(str, fallback): Safe JSON parsing with fallback
-- getFallbackSVG(label, width, height): In-memory SVG data-URI generator for missing or broken product images so zero images are ever broken
-- nullSafeGet(obj, path, defaultValue): Deep object property accessor
-- runHealthCheck(): Verifies that window.AveriaStore, window.AveriaEngine, window.__AVERIA_ROUTER__, window.HomePage, and window.AppPages are all properly loaded and functional; displays a floating badge in preview if all modules pass!
+\`\`\`javascript:src/qaGuard.js — Quality assurance, security sanitization, and self-healing:
+- sanitizeHTML(str): XSS prevention
+- safeJSONParse(str, fallback): Safe JSON parsing
+- getFallbackSVG(label, width, height): In-memory SVG data-URI generator
+- runHealthCheck(): Verifies that window.__AVERIA_APP__, data, engine, and views are mounted properly
+- REGISTRATION:
+  if (window.__AVERIA_APP__) window.__AVERIA_APP__.register('qa', QAGuard);
+  window.QAGuard = QAGuard;
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
-RULES: Attach to window.QAGuard = QAGuard. Start immediately on line 1 with \`\`\`javascript:src/qaGuard.js. ZERO preamble. Complete code only.`
+RULES: Start immediately on line 1 with \`\`\`javascript:src/qaGuard.js. ZERO conversational prose. Complete browser JS only.`
         },
       };
 
       const cfg = ROLE_CONFIGS[agentRole] || ROLE_CONFIGS.ui_shell;
       const roleMessages = [{ role: "user", content: `Generate the production code for: "${userGoal}". Follow your role and contract strictly.` }];
 
-      const generatedCode = await callRobustGemini(
-        supabase,
-        roleMessages,
-        cfg.prompt,
-        "gemini-2.5-flash",
-        8192,
-        slot
-      );
-
-            let output = generatedCode || "";
-      if (agentRole === "ui_shell") {
-        if (!output.includes("```html:index.html")) {
-          if (output.includes("```html")) {
-            output = output.replace(/```html(?::[^\n]*)?/i, "```html:index.html");
-          } else if (output.includes("<!DOCTYPE") || output.includes("<html")) {
-            const rawHtml = output.replace(/```[a-z0-9_-]*\n?/gi, "").trim();
-            output = "```html:index.html\n" + rawHtml + "\n```";
-          } else {
-            output = "```html:index.html\n" +
-`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${resolvedTitle}</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-</head>
-<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
-  <!-- Top Navigation Bar -->
-  <header class="sticky top-0 z-50 backdrop-blur-md bg-slate-900/90 border-b border-slate-800">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-      <div class="flex items-center gap-3 cursor-pointer" onclick="window.__AVERIA_ROUTER__.navigate('/')">
-        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-emerald-400 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-          <i class="fa-solid fa-bolt text-white text-lg"></i>
-        </div>
-        <span class="font-bold text-lg tracking-tight bg-gradient-to-r from-white via-slate-100 to-slate-400 bg-clip-text text-transparent">
-          ${resolvedTitle}
-        </span>
-      </div>
-
-      <nav class="hidden md:flex items-center gap-1 bg-slate-800/50 p-1 rounded-xl border border-slate-700/50 text-sm">
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Home</button>
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/catalog')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Catalog</button>
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/cart')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Cart</button>
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/orders')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Orders</button>
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/admin')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Admin</button>
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/settings')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Settings</button>
-      </nav>
-
-      <div class="flex items-center gap-3">
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/cart')" class="relative p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-colors">
-          <i class="fa-solid fa-cart-shopping text-sm"></i>
-          <span id="cart-badge" class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-indigo-500 text-[10px] font-bold flex items-center justify-center text-white ring-2 ring-slate-950">0</span>
-        </button>
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/catalog')" class="hidden sm:inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm transition-all shadow-md shadow-indigo-600/30">
-          <span>Explore</span>
-          <i class="fa-solid fa-arrow-right text-xs"></i>
-        </button>
-      </div>
-    </div>
-  </header>
-
-  <!-- Root Application Container -->
-  <main id="app" class="flex-1 flex flex-col"></main>
-
-  <!-- Dynamic Modal & Toast Mounts -->
-  <div id="modal-root"></div>
-  <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2"></div>
-
-  <!-- Companion Module Script Tags -->
-  <script src="src/data.js"></script>
-  <script src="src/engine.js"></script>
-  <script src="src/router.js"></script>
-  <script src="src/qaGuard.js"></script>
-  <script src="src/pages/HomePage.js"></script>
-  <script src="src/pages/AppPages.js"></script>
-
-  <!-- Router Initialization -->
-  <script>
-    window.addEventListener('DOMContentLoaded', function() {
-      if (window.__AVERIA_ROUTER__) {
-        window.__AVERIA_ROUTER__.register('/', function() {
-          if (window.HomePage && typeof window.HomePage.render === 'function') window.HomePage.render();
-        });
-        if (window.AppPages) {
-          window.__AVERIA_ROUTER__.register('/catalog', function() { window.AppPages.renderCatalog(); });
-          window.__AVERIA_ROUTER__.register('/detail', function(p) { window.AppPages.renderDetail(p); });
-          window.__AVERIA_ROUTER__.register('/cart', function() { window.AppPages.renderCart(); });
-          window.__AVERIA_ROUTER__.register('/checkout', function() { window.AppPages.renderCheckout ? window.AppPages.renderCheckout() : window.AppPages.renderCart(); });
-          window.__AVERIA_ROUTER__.register('/orders', function() { window.AppPages.renderOrders(); });
-          window.__AVERIA_ROUTER__.register('/admin', function() { window.AppPages.renderAdmin(); });
-          window.__AVERIA_ROUTER__.register('/admin-analytics', function() { window.AppPages.renderAnalytics ? window.AppPages.renderAnalytics() : window.AppPages.renderAdmin(); });
-          window.__AVERIA_ROUTER__.register('/settings', function() { window.AppPages.renderSettings(); });
-          window.__AVERIA_ROUTER__.register('/about', function() { window.AppPages.renderAbout ? window.AppPages.renderAbout() : window.AppPages.renderCatalog(); });
-        }
-        window.__AVERIA_ROUTER__.navigate('/');
-      }
-    });
-  </script>
-</body>
-</html>` + "\n```";
-          }
-        }
-      } else {
-        const targetFilename = cfg.targetFile || `src/${agentRole}.js`;
-        const targetExt = targetFilename.endsWith('.sql') ? 'sql' : targetFilename.endsWith('.json') ? 'json' : 'javascript';
-        if (!output.includes("```")) {
-          output = "```" + targetExt + ":" + targetFilename + "\n// Auto-generated module for " + cfg.roleName + "\n```";
-        }
-      }
-
-      return streamTextAsSSE(output);
+      return await executeWithGeminiRotation(supabase, {
+        messages: roleMessages,
+        systemPrompt: cfg.prompt,
+        stream: true,
+        model: "gemini-3.8-flash",
+      });
     }
 
     // ── GENESIS: 10 parallel full-stack builder agents ─────────────────────

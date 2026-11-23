@@ -237,8 +237,16 @@ function extractProjectFiles(content: string): ParsedProjectFile[] {
       .trim();
 
     if (!cleanPath || seenPaths.has(cleanPath)) return;
-    const body = rawContent.trimEnd();
+    let body = rawContent.trim();
+    body = body.replace(/^```[a-zA-Z0-9_\-]+(?::[^\n\r]*)?\s*\n?/m, '');
+    body = body.replace(/\n?```\s*$/m, '').trim();
+
     if (!body || body.length < 2) return;
+
+    // Filter out dummy stubs
+    if (body.length < 60 && body.includes('Auto-generated module for')) {
+      return;
+    }
 
     // Must look like a valid filename with extension or standard names (e.g. Dockerfile)
     if (/\.[a-zA-Z0-9]+$/i.test(cleanPath) || /^Dockerfile$/i.test(cleanPath)) {
@@ -312,8 +320,8 @@ function extractProjectFiles(content: string): ParsedProjectFile[] {
   return files;
 }
 
-// Deterministic SPA Shell Auto-Synthesizer
-// Guarantees index.html is NEVER missing, NEVER 3 lines, and ALWAYS renders 100% of the time!
+// Universal SPA Shell Auto-Synthesizer
+// Neutral, domain-agnostic layout that boots window.__AVERIA_APP__.mount()
 function generateDeterministicSpaHtml(brandTitle: string, allFiles: { path: string; content: string }[] = []): string {
   const safeTitle = brandTitle || 'Averia App';
   return `<!DOCTYPE html>
@@ -329,10 +337,10 @@ function generateDeterministicSpaHtml(brandTitle: string, allFiles: { path: stri
   </style>
 </head>
 <body class="min-h-screen flex flex-col bg-slate-950 text-slate-100 selection:bg-indigo-500 selection:text-white">
-  <!-- Top Navigation Bar -->
+  <!-- Dynamic Top Bar -->
   <header class="sticky top-0 z-50 backdrop-blur-md bg-slate-900/90 border-b border-slate-800">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-      <div class="flex items-center gap-3 cursor-pointer" onclick="window.__AVERIA_ROUTER__.navigate('/')">
+      <div class="flex items-center gap-3 cursor-pointer" onclick="if(window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/'); else if(window.__AVERIA_ROUTER__) window.__AVERIA_ROUTER__.navigate('/');">
         <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-emerald-400 flex items-center justify-center shadow-lg shadow-indigo-500/20">
           <i class="fa-solid fa-bolt text-white text-lg"></i>
         </div>
@@ -340,26 +348,7 @@ function generateDeterministicSpaHtml(brandTitle: string, allFiles: { path: stri
           ${safeTitle}
         </span>
       </div>
-
-      <nav class="hidden md:flex items-center gap-1 bg-slate-800/50 p-1 rounded-xl border border-slate-700/50 text-sm">
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Home</button>
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/catalog')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Catalog</button>
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/cart')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Cart</button>
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/orders')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Orders</button>
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/admin')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Admin</button>
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/settings')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Settings</button>
-      </nav>
-
-      <div class="flex items-center gap-3">
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/cart')" class="relative p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-colors">
-          <i class="fa-solid fa-cart-shopping text-sm"></i>
-          <span id="cart-badge" class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-indigo-500 text-[10px] font-bold flex items-center justify-center text-white ring-2 ring-slate-950">0</span>
-        </button>
-        <button onclick="window.__AVERIA_ROUTER__.navigate('/catalog')" class="hidden sm:inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm transition-all shadow-md shadow-indigo-600/30">
-          <span>Explore</span>
-          <i class="fa-solid fa-arrow-right text-xs"></i>
-        </button>
-      </div>
+      <nav id="app-nav" class="flex items-center gap-2 text-sm"></nav>
     </div>
   </header>
 
@@ -374,30 +363,16 @@ function generateDeterministicSpaHtml(brandTitle: string, allFiles: { path: stri
   <script src="src/data.js"></script>
   <script src="src/engine.js"></script>
   <script src="src/router.js"></script>
-  <script src="src/qaGuard.js"></script>
   <script src="src/pages/HomePage.js"></script>
   <script src="src/pages/AppPages.js"></script>
+  <script src="src/qaGuard.js"></script>
 
-  <!-- SPA Router Wiring -->
+  <!-- Automatic App Bus Mount -->
   <script>
     window.addEventListener('DOMContentLoaded', function() {
-      if (window.__AVERIA_ROUTER__) {
-        window.__AVERIA_ROUTER__.register('/', function() {
-          if (window.HomePage && typeof window.HomePage.render === 'function') {
-            window.HomePage.render();
-          }
-        });
-        if (window.AppPages) {
-          window.__AVERIA_ROUTER__.register('/catalog', function() { window.AppPages.renderCatalog(); });
-          window.__AVERIA_ROUTER__.register('/detail', function(p) { window.AppPages.renderDetail(p); });
-          window.__AVERIA_ROUTER__.register('/cart', function() { window.AppPages.renderCart(); });
-          window.__AVERIA_ROUTER__.register('/checkout', function() { window.AppPages.renderCheckout ? window.AppPages.renderCheckout() : window.AppPages.renderCart(); });
-          window.__AVERIA_ROUTER__.register('/orders', function() { window.AppPages.renderOrders(); });
-          window.__AVERIA_ROUTER__.register('/admin', function() { window.AppPages.renderAdmin(); });
-          window.__AVERIA_ROUTER__.register('/admin-analytics', function() { window.AppPages.renderAnalytics ? window.AppPages.renderAnalytics() : window.AppPages.renderAdmin(); });
-          window.__AVERIA_ROUTER__.register('/settings', function() { window.AppPages.renderSettings(); });
-          window.__AVERIA_ROUTER__.register('/about', function() { window.AppPages.renderAbout ? window.AppPages.renderAbout() : window.AppPages.renderCatalog(); });
-        }
+      if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.mount === 'function') {
+        window.__AVERIA_APP__.mount();
+      } else if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
         window.__AVERIA_ROUTER__.navigate('/');
       }
     });
@@ -612,64 +587,182 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
 })();
 </script>\n`;
 
-  // 4. Guaranteed built-in window.__AVERIA_ROUTER__ fallback engine in <head>
-  // Guarantees window.__AVERIA_ROUTER__.navigate('/route') is ALWAYS defined on millisecond 0!
-  const guaranteedRouterFallbackScript = `<script>
+  // 4. Unified Runtime Application Bus (window.__AVERIA_APP__) + Router Engine
+  const averiaAppRuntimeBusScript = `<script>
 (function() {
-  if (!window.__AVERIA_ROUTER__) {
-    var _currentRoute = '/';
-    var _listeners = [];
-    var _knownRoutes = ['/', '/products', '/catalog', '/cart', '/checkout', '/orders', '/admin', '/detail', '/settings', '/about'];
-    
-    window.__AVERIA_ROUTER__ = {
-      currentRoute: function() { return _currentRoute; },
-      routes: function() { return _knownRoutes.slice(); },
-      navigate: function(route) {
-        if (!route) route = '/';
-        if (route.startsWith('#/')) route = route.slice(1);
-        else if (route.startsWith('#')) route = route === '#' ? '/' : '/' + route.slice(1);
-        _currentRoute = route;
-        
-        window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: route } }));
-        window.dispatchEvent(new CustomEvent('popstate'));
-        
-        try {
-          window.parent.postMessage({
-            type: 'AVERIA_ROUTE_UPDATE',
-            route: route,
-            allRoutes: _knownRoutes
-          }, '*');
-        } catch (_) {}
-        
-        try {
-          var views = document.querySelectorAll('[data-route], [data-page], .page-view');
-          views.forEach(function(v) {
-            var r = v.getAttribute('data-route') || v.getAttribute('data-page') || ('/' + v.id.replace(/(-page|-view)$/, ''));
-            if (r === route || (route === '/' && (r === '/' || r === '/home' || r === 'home'))) {
-              v.style.display = '';
-              v.classList.remove('hidden');
-            } else {
-              v.style.display = 'none';
-              v.classList.add('hidden');
-            }
-          });
-          _listeners.forEach(function(fn) { try { fn(route); } catch(e) { console.warn(e); } });
-        } catch (domErr) {
-          console.warn('[AveriaRouter Fallback]', domErr);
-        }
-      },
-      onRouteChange: function(fn) {
-        if (typeof fn === 'function') _listeners.push(fn);
-      },
-      registerRoute: function(r) {
-        if (r && _knownRoutes.indexOf(r) === -1) _knownRoutes.push(r);
-      }
-    };
+  if (window.__AVERIA_APP__) return;
+
+  var _state = {};
+  var _modules = {};
+  var _routes = {};
+  var _currentRoute = '/';
+  var _listeners = [];
+  var _mounted = false;
+
+  function normalizeRoute(path) {
+    if (!path) return '/';
+    var p = String(path).trim();
+    if (p.startsWith('#/')) p = p.slice(1);
+    else if (p.startsWith('#')) p = p === '#' ? '/' : '/' + p.slice(1);
+    if (!p.startsWith('/')) p = '/' + p;
+    if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+    return p;
   }
+
+  var app = {
+    state: _state,
+    modules: _modules,
+    routes: _routes,
+    get currentRoute() { return _currentRoute; },
+
+    register: function(name, api) {
+      if (!name) return api;
+      _modules[name] = api;
+      if (name === 'data' || name === 'store') window.AveriaStore = api;
+      else if (name === 'engine') window.AveriaEngine = api;
+      else if (name === 'home' || name === 'homePage' || name === 'HomePage') window.HomePage = api;
+      else if (name === 'pages' || name === 'appPages' || name === 'AppPages') window.AppPages = api;
+      else if (name === 'qa' || name === 'qaGuard' || name === 'QAGuard') window.QAGuard = api;
+      else if (name === 'router') window.__AVERIA_ROUTER__ = window.__AVERIA_ROUTER__ || api;
+      return api;
+    },
+
+    route: function(path, renderFn) {
+      if (!path) return;
+      var clean = normalizeRoute(path);
+      if (typeof renderFn === 'function') {
+        _routes[clean] = renderFn;
+      }
+    },
+
+    navigate: function(path, params) {
+      var target = normalizeRoute(path);
+      _currentRoute = target;
+
+      window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: target, params: params } }));
+      window.dispatchEvent(new CustomEvent('popstate'));
+
+      try {
+        window.parent.postMessage({
+          type: 'AVERIA_ROUTE_UPDATE',
+          route: target,
+          allRoutes: Object.keys(_routes)
+        }, '*');
+      } catch (_) {}
+
+      app.render(target, params);
+
+      for (var i = 0; i < _listeners.length; i++) {
+        try { _listeners[i](target, params); } catch (e) { console.warn('[AveriaApp listener err]', e); }
+      }
+    },
+
+    onRouteChange: function(fn) {
+      if (typeof fn === 'function') _listeners.push(fn);
+    },
+
+    render: function(route, params) {
+      var r = normalizeRoute(route || _currentRoute);
+      var container = document.getElementById('app') || document.getElementById('root') || document.body;
+
+      // 1. Matched route function
+      var renderFn = _routes[r];
+
+      // 2. Fallbacks for root/home
+      if (!renderFn && (r === '/' || r === '/home')) {
+        if (_routes['/']) renderFn = _routes['/'];
+        else if (_routes['/home']) renderFn = _routes['/home'];
+        else if (window.HomePage && typeof window.HomePage.render === 'function') {
+          renderFn = function() { window.HomePage.render(params); };
+        }
+      }
+
+      // 3. Fallback to subpages if available
+      if (!renderFn && window.AppPages) {
+        var subName = r.replace(/^\\//, '').toLowerCase();
+        if (typeof window.AppPages['render' + subName.charAt(0).toUpperCase() + subName.slice(1)] === 'function') {
+          renderFn = function() { window.AppPages['render' + subName.charAt(0).toUpperCase() + subName.slice(1)](params); };
+        } else if (subName === 'catalog' && typeof window.AppPages.renderCatalog === 'function') renderFn = function() { window.AppPages.renderCatalog(params); };
+        else if (subName === 'cart' && typeof window.AppPages.renderCart === 'function') renderFn = function() { window.AppPages.renderCart(params); };
+        else if (subName === 'detail' && typeof window.AppPages.renderDetail === 'function') renderFn = function() { window.AppPages.renderDetail(params); };
+        else if (subName === 'orders' && typeof window.AppPages.renderOrders === 'function') renderFn = function() { window.AppPages.renderOrders(params); };
+        else if (subName === 'checkout' && typeof window.AppPages.renderCheckout === 'function') renderFn = function() { window.AppPages.renderCheckout(params); };
+        else if (subName === 'admin' && typeof window.AppPages.renderAdmin === 'function') renderFn = function() { window.AppPages.renderAdmin(params); };
+        else if (subName === 'settings' && typeof window.AppPages.renderSettings === 'function') renderFn = function() { window.AppPages.renderSettings(params); };
+        else if (subName === 'about' && typeof window.AppPages.renderAbout === 'function') renderFn = function() { window.AppPages.renderAbout(params); };
+      }
+
+      // 4. Fallback DOM sections with [data-route], [data-page], .page-view
+      var domViews = document.querySelectorAll('[data-route], [data-page], .page-view');
+      if (domViews.length > 0) {
+        var anyMatched = false;
+        domViews.forEach(function(v) {
+          var vr = normalizeRoute(v.getAttribute('data-route') || v.getAttribute('data-page') || ('/' + v.id.replace(/(-page|-view)$/, '')));
+          if (vr === r || (r === '/' && (vr === '/' || vr === '/home'))) {
+            v.style.display = '';
+            v.classList.remove('hidden');
+            anyMatched = true;
+          } else {
+            v.style.display = 'none';
+            v.classList.add('hidden');
+          }
+        });
+        if (anyMatched) return;
+      }
+
+      if (typeof renderFn === 'function') {
+        try {
+          renderFn(params);
+        } catch (renderErr) {
+          console.error('[AveriaApp Render Error on ' + r + ']:', renderErr);
+        }
+      }
+    },
+
+    mount: function() {
+      if (_mounted) return;
+      _mounted = true;
+
+      // Auto-register any modules attached to window
+      if (window.HomePage && !_routes['/']) {
+        app.route('/', function() { window.HomePage.render(); });
+      }
+      if (window.AppPages) {
+        if (typeof window.AppPages.renderCatalog === 'function' && !_routes['/catalog']) app.route('/catalog', function(p) { window.AppPages.renderCatalog(p); });
+        if (typeof window.AppPages.renderDetail === 'function' && !_routes['/detail']) app.route('/detail', function(p) { window.AppPages.renderDetail(p); });
+        if (typeof window.AppPages.renderCart === 'function' && !_routes['/cart']) app.route('/cart', function(p) { window.AppPages.renderCart(p); });
+        if (typeof window.AppPages.renderOrders === 'function' && !_routes['/orders']) app.route('/orders', function(p) { window.AppPages.renderOrders(p); });
+        if (typeof window.AppPages.renderCheckout === 'function' && !_routes['/checkout']) app.route('/checkout', function(p) { window.AppPages.renderCheckout(p); });
+        if (typeof window.AppPages.renderAdmin === 'function' && !_routes['/admin']) app.route('/admin', function(p) { window.AppPages.renderAdmin(p); });
+        if (typeof window.AppPages.renderSettings === 'function' && !_routes['/settings']) app.route('/settings', function(p) { window.AppPages.renderSettings(p); });
+        if (typeof window.AppPages.renderAbout === 'function' && !_routes['/about']) app.route('/about', function(p) { window.AppPages.renderAbout(p); });
+      }
+
+      var initial = (window.location.hash ? normalizeRoute(window.location.hash) : '/');
+      app.navigate(initial);
+    }
+  };
+
+  window.__AVERIA_APP__ = app;
+
+  // Seamless Dual Router Alias
+  window.__AVERIA_ROUTER__ = {
+    currentRoute: function() { return app.currentRoute; },
+    current: function() { return app.currentRoute; },
+    routes: function() { return Object.keys(_routes); },
+    navigate: function(p, params) { return app.navigate(p, params); },
+    register: function(p, fn) { return app.route(p, fn); },
+    onRouteChange: function(fn) { return app.onRouteChange(fn); },
+    init: function() { return app.mount(); }
+  };
+
+  window.addEventListener('DOMContentLoaded', function() {
+    app.mount();
+  });
 })();
 </script>\n`;
 
-  // 5. Safe Hash & Link Navigation Interceptor
+  // 5. Safe Hash & Link Navigation Interceptor (Capture Phase)
   const hashAndLinkInterceptorScript = `<script>
 (function() {
   function normalizeRoute(href) {
@@ -689,7 +782,7 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     var href = a.getAttribute('href');
     if (!href) return;
 
-    if (/^(https?:|\/\/|mailto:|tel:|javascript:)/i.test(href)) {
+    if (/^(https?:|\\/\\/|mailto:|tel:|javascript:)/i.test(href)) {
       if (a.getAttribute('target') !== '_blank') {
         a.setAttribute('target', '_blank');
         a.setAttribute('rel', 'noopener noreferrer');
@@ -701,7 +794,9 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     e.stopPropagation();
 
     var route = normalizeRoute(href);
-    if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
+    if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.navigate === 'function') {
+      window.__AVERIA_APP__.navigate(route);
+    } else if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
       window.__AVERIA_ROUTER__.navigate(route);
     }
   }, true);
@@ -711,7 +806,9 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
   history.pushState = function(state, title, url) {
     if (typeof url === 'string') {
       var r = normalizeRoute(url.replace(/^about:srcdoc/i, ''));
-      if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
+      if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.navigate === 'function') {
+        window.__AVERIA_APP__.navigate(r);
+      } else if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
         window.__AVERIA_ROUTER__.navigate(r);
       }
       return;
@@ -721,7 +818,9 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
   history.replaceState = function(state, title, url) {
     if (typeof url === 'string') {
       var r = normalizeRoute(url.replace(/^about:srcdoc/i, ''));
-      if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
+      if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.navigate === 'function') {
+        window.__AVERIA_APP__.navigate(r);
+      } else if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
         window.__AVERIA_ROUTER__.navigate(r);
       }
       return;
@@ -734,7 +833,9 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     var h = window.location.hash || '';
     if (h) {
       var r = normalizeRoute(h);
-      if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
+      if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.navigate === 'function') {
+        window.__AVERIA_APP__.navigate(r);
+      } else if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
         window.__AVERIA_ROUTER__.navigate(r);
       }
     }
@@ -896,7 +997,7 @@ button:active {
 })();
 </script>\n`;
 
-  const headInject = `${storagePolyfillScript}${guaranteedRouterFallbackScript}${hashAndLinkInterceptorScript}${imageFallbackAndStyleScript}${averiaDbSdkScript}${errorListenerScript}`;
+  const headInject = `${storagePolyfillScript}${averiaAppRuntimeBusScript}${hashAndLinkInterceptorScript}${imageFallbackAndStyleScript}${averiaDbSdkScript}${errorListenerScript}`;
   if (doc.includes('<head>')) {
     doc = doc.replace('<head>', `<head>\n${headInject}`);
   } else if (doc.includes('<html>')) {
@@ -2592,35 +2693,42 @@ export default function AveriaAI() {
     repairCountRef.current += 1;
     const attempt = repairCountRef.current;
 
-    const errText = `${err.filename || ''} ${err.message || ''}`.toLowerCase();
+    const fn = (err.filename || '').toLowerCase();
+    const msg = (err.message || '').toLowerCase();
+    const errText = `${fn} ${msg}`;
+
     let targetFile = 'src/pages/AppPages.js';
     let agentRole = 'sub_pages';
     let keySlot = 8;
 
-    if (errText.includes('qaguard') || errText.includes('guard') || errText.includes('xss') || errText.includes('svg')) {
-      targetFile = 'src/qaGuard.js';
-      agentRole = 'qa_security';
-      keySlot = 9;
-    } else if (errText.includes('homepage') || errText.includes('hero')) {
+    if (fn.includes('homepage') || errText.includes('homepage') || errText.includes('home') || errText.includes('hero') || errText.includes('canvas') || errText.includes('game')) {
       targetFile = 'src/pages/HomePage.js';
       agentRole = 'home_view';
       keySlot = 7;
-    } else if (errText.includes('router') || errText.includes('navigate') || errText.includes('route')) {
+    } else if (fn.includes('router') || errText.includes('router') || errText.includes('navigate') || errText.includes('route')) {
       targetFile = 'src/router.js';
       agentRole = 'spa_router';
       keySlot = 6;
-    } else if (errText.includes('engine') || errText.includes('filter') || errText.includes('total') || errText.includes('averiaengine')) {
+    } else if (fn.includes('engine') || errText.includes('engine') || errText.includes('physics') || errText.includes('averiaengine')) {
       targetFile = 'src/engine.js';
       agentRole = 'logic_engine';
       keySlot = 4;
-    } else if (errText.includes('store') || errText.includes('data') || errText.includes('averiadb') || errText.includes('averiastore')) {
+    } else if (fn.includes('data') || errText.includes('store') || errText.includes('data') || errText.includes('averiadb') || errText.includes('averiastore')) {
       targetFile = 'src/data.js';
       agentRole = 'data_sdk';
       keySlot = 3;
-    } else if (errText.includes('index.html') || errText.includes('domcontentloaded') || errText.includes('navbar')) {
+    } else if (fn.includes('qaguard') || errText.includes('qaguard') || errText.includes('guard') || errText.includes('xss') || errText.includes('svg')) {
+      targetFile = 'src/qaGuard.js';
+      agentRole = 'qa_security';
+      keySlot = 9;
+    } else if (fn.includes('index.html') || errText.includes('index.html') || errText.includes('domcontentloaded') || errText.includes('navbar')) {
       targetFile = 'index.html';
       agentRole = 'ui_shell';
       keySlot = 5;
+    } else if (fn.includes('apppages') || errText.includes('apppages') || errText.includes('page') || errText.includes('view')) {
+      targetFile = 'src/pages/AppPages.js';
+      agentRole = 'sub_pages';
+      keySlot = 8;
     }
 
     toast.info(`Autonomous Self-Healing (${attempt}/2): Surgically repairing ${targetFile}...`);
@@ -2978,15 +3086,71 @@ export default function AveriaAI() {
               lines: finalLines,
             } : w));
 
-            // Parse files
+            // Parse files with canonical mapping
             let parsedFiles = extractProjectFiles(workerText);
+
+            // Filter out any 45-byte stubs or dummy modules
+            parsedFiles = parsedFiles.filter(f => {
+              if (f.content.length < 60 && f.content.includes('Auto-generated module for')) return false;
+              if (f.path === 'src/architect.js' || f.path === 'src/ui_shell.js' || f.path === 'src/db_engineer.js') return false;
+              return true;
+            });
+
+            // Normalize file paths according to canonical role assignment
+            parsedFiles = parsedFiles.map(f => {
+              if (role.role === 'ui_shell' && (f.path.includes('ui_shell') || f.path.endsWith('.html'))) {
+                return { ...f, path: 'index.html' };
+              }
+              if (role.role === 'home_view' && (f.path.includes('home_view') || f.path.endsWith('HomePage.js') || f.path.endsWith('home.js'))) {
+                return { ...f, path: 'src/pages/HomePage.js' };
+              }
+              if (role.role === 'sub_pages' && (f.path.includes('sub_pages') || f.path.endsWith('AppPages.js') || f.path.endsWith('pages.js'))) {
+                return { ...f, path: 'src/pages/AppPages.js' };
+              }
+              if (role.role === 'spa_router' && f.path.includes('router')) {
+                return { ...f, path: 'src/router.js' };
+              }
+              if (role.role === 'logic_engine' && f.path.includes('engine')) {
+                return { ...f, path: 'src/engine.js' };
+              }
+              if (role.role === 'data_sdk' && (f.path.includes('data') || f.path.includes('store'))) {
+                return { ...f, path: 'src/data.js' };
+              }
+              if (role.role === 'qa_security' && (f.path.includes('qa') || f.path.includes('guard'))) {
+                return { ...f, path: 'src/qaGuard.js' };
+              }
+              return f;
+            });
+
+            const CANONICAL_ROLE_FILES: Record<string, string> = {
+              architect: 'package.json',
+              db_engineer: 'schema.sql',
+              backend_api: 'server/index.js',
+              data_sdk: 'src/data.js',
+              logic_engine: 'src/engine.js',
+              ui_shell: 'index.html',
+              spa_router: 'src/router.js',
+              home_view: 'src/pages/HomePage.js',
+              sub_pages: 'src/pages/AppPages.js',
+              qa_security: 'src/qaGuard.js',
+            };
+
+            // If 0 files parsed but worker returned code, map strictly to its canonical target
             if (parsedFiles.length === 0 && workerText.trim().length > 20) {
-              const inferredLang = role.targetFile.endsWith('.html') ? 'html' : role.targetFile.endsWith('.sql') ? 'sql' : role.targetFile.endsWith('.json') ? 'json' : 'javascript';
-              parsedFiles = [{
-                path: role.targetFile,
-                content: workerText.trim(),
-                language: inferredLang,
-              }];
+              const canonicalTarget = CANONICAL_ROLE_FILES[role.role];
+              if (canonicalTarget) {
+                const inferredLang = canonicalTarget.endsWith('.html') ? 'html' : canonicalTarget.endsWith('.sql') ? 'sql' : canonicalTarget.endsWith('.json') ? 'json' : 'javascript';
+                let cleanBody = workerText.trim();
+                cleanBody = cleanBody.replace(/^```[a-zA-Z0-9_\-]+(?::[^\n\r]*)?\s*\n?/m, '');
+                cleanBody = cleanBody.replace(/\n?```\s*$/m, '').trim();
+                if (cleanBody.length > 20 && !cleanBody.includes('Auto-generated module for')) {
+                  parsedFiles = [{
+                    path: canonicalTarget,
+                    content: cleanBody,
+                    language: inferredLang,
+                  }];
+                }
+              }
             }
 
             // Incremental disk write
@@ -3050,6 +3214,8 @@ export default function AveriaAI() {
         for (const res of results) {
           if (res.status === 'fulfilled' && res.value.files) {
             for (const f of res.value.files) {
+              if (f.content.length < 60 && f.content.includes('Auto-generated module for')) continue;
+              if (f.path === 'src/architect.js' || f.path === 'src/ui_shell.js' || f.path === 'src/db_engineer.js') continue;
               const normalizedPath = (f.path.includes('ui_shell') || (res.value.role === 'ui_shell' && f.path.endsWith('.html'))) ? 'index.html' : f.path;
               filesMap.set(normalizedPath, { ...f, path: normalizedPath });
             }

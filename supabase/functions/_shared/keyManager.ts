@@ -24,16 +24,16 @@ export function getAdminSupabase() {
 }
 
 /** Clean & map model name to standard Gemini / OpenAI compatible names */
-export function sanitizeAveriaModel(model: string = "gemini-2.5-flash"): string {
+export function sanitizeAveriaModel(model: string = "gemini-3.8-flash"): string {
   let clean = model.replace(/^google\//i, "").replace(/-preview$/i, "");
-  if (clean.includes("gemini-3") || clean.includes("gemini-2.5-flash")) {
-    return "gemini-2.5-flash";
+  if (clean.includes("gemini-3.8-flash") || clean.includes("gemini-3") || clean.includes("gemini-2.5-flash")) {
+    return "gemini-3.8-flash";
   }
-  if (clean.includes("gemini-2.5-pro")) {
-    return "gemini-2.5-pro";
+  if (clean.includes("gemini-2.5-pro") || clean.includes("gemini-3.5-pro")) {
+    return "gemini-3.8-pro";
   }
   if (!clean.startsWith("gemini-")) {
-    return "gemini-2.5-flash";
+    return "gemini-3.8-flash";
   }
   return clean;
 }
@@ -47,19 +47,28 @@ export async function getGeminiKeys(supabase: any): Promise<KeyRecord[]> {
 
   // 1. From database table `gemini_api_keys` - fetch STRICTLY ACTIVE keys ordered by error_count ASC, last_used_at ASC
   try {
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("gemini_api_keys")
       .select("api_key, error_count, is_active, last_used_at")
       .eq("is_active", true)
       .order("error_count", { ascending: true })
       .order("last_used_at", { ascending: true, nullsFirst: true });
 
+    if (!error && (!data || data.length === 0)) {
+      // Auto-heal: If keys were mistakenly marked inactive by 400 errors, reactivate them
+      await supabase.from("gemini_api_keys").update({ is_active: true, error_count: 0 }).neq("api_key", "");
+      const res = await supabase.from("gemini_api_keys").select("api_key, error_count, is_active, last_used_at").eq("is_active", true);
+      data = res.data;
+    }
+
     if (!error && Array.isArray(data)) {
       for (const row of data) {
         const k = row.api_key?.trim();
         if (k && row.is_active === true && !seen.has(k)) {
-          seen.add(k);
-          records.push({ api_key: k, source: "database" });
+          if (k.startsWith("AIza") || k.startsWith("sk_") || k.startsWith("sk-") || k.startsWith("lovable:")) {
+            seen.add(k);
+            records.push({ api_key: k, source: "database" });
+          }
         }
       }
     }
@@ -113,8 +122,8 @@ export async function callSingleGeminiKey(
   maxTokens = 32768
 ): Promise<string> {
   if (!apiKey) return "";
-  const isLovable = apiKey.startsWith("lovable:");
-  const actualKey = isLovable ? apiKey.replace("lovable:", "") : apiKey;
+  const isLovable = apiKey.startsWith("lovable:") || apiKey.startsWith("sk_") || apiKey.startsWith("sk-");
+  const actualKey = apiKey.replace("lovable:", "");
   const endpoint = isLovable
     ? "https://ai.gateway.lovable.dev/v1/chat/completions"
     : "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
@@ -122,7 +131,7 @@ export async function callSingleGeminiKey(
   // Try the requested model, with fallback to lighter models if rate limited
   const modelChain = isLovable
     ? [`google/${sanitizeAveriaModel(model)}`]
-    : [sanitizeAveriaModel(model), "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-1.5-flash"];
+    : [sanitizeAveriaModel(model), "gemini-2.5-flash", "gemini-2.0-flash"];
 
   for (const targetModel of modelChain) {
     try {
@@ -195,8 +204,6 @@ export async function callRobustGemini(
     preferredModel,
     "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-1.5-flash",
   ].filter((m, i, arr) => arr.indexOf(m) === i);
 
   // Rotate starting at startKeyIndex for dedicated per-subagent key slots
@@ -206,8 +213,7 @@ export async function callRobustGemini(
   for (const model of models) {
     for (let i = 0; i < rotated.length; i++) {
       const keyRec = rotated[i];
-      const actualKey = keyRec.api_key.replace("lovable:", "");
-      const res = await callSingleGeminiKey(actualKey, messages, systemPrompt, model, supabase, maxTokens);
+      const res = await callSingleGeminiKey(keyRec.api_key, messages, systemPrompt, model, supabase, maxTokens);
       if (res && res.trim().length > 10) {
         if (keyRec.source === "database") {
           supabase
@@ -253,10 +259,7 @@ export async function executeSwarm(
       wave.map((agent, waveIdx) => {
         const globalIdx = i + waveIdx;
         const keyRec = keys[globalIdx % keys.length];
-        const actualKey = keyRec.api_key.startsWith("lovable:")
-          ? keyRec.api_key.replace("lovable:", "")
-          : keyRec.api_key;
-        return callSingleGeminiKey(actualKey, userMessages, agent.systemPrompt, model, supabase);
+        return callSingleGeminiKey(keyRec.api_key, userMessages, agent.systemPrompt, model, supabase);
       })
     );
 
@@ -331,12 +334,10 @@ export async function executeWithGeminiRotation(
   const selectedModel = options.forensicMode ? "gemini-2.5-pro" : (options.model || "gemini-2.5-flash");
   const cleanModel = sanitizeAveriaModel(selectedModel);
 
-  // Model fallback chain: primary -> 2.0-flash -> 2.5-flash-lite -> 1.5-flash
+  // Model fallback chain: primary -> 3.8-flash
   const modelsToTry = [
     cleanModel,
-    "gemini-2.0-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-1.5-flash",
+    "gemini-3.8-flash",
   ].filter((m, i, arr) => arr.indexOf(m) === i);
 
   const finalMessages = [
@@ -351,8 +352,8 @@ export async function executeWithGeminiRotation(
   for (const currentModel of modelsToTry) {
     for (let i = 0; i < rotated.length; i++) {
       const keyRec = rotated[i];
-      const isLovable = keyRec.api_key.startsWith("lovable:");
-      const actualKey = isLovable ? keyRec.api_key.replace("lovable:", "") : keyRec.api_key;
+      const isLovable = keyRec.api_key.startsWith("lovable:") || keyRec.api_key.startsWith("sk_") || keyRec.api_key.startsWith("sk-");
+      const actualKey = keyRec.api_key.replace("lovable:", "");
 
       // Auto-skip any key known to be dead (400/403)
       if (deadKeys.has(actualKey)) {
@@ -367,7 +368,7 @@ export async function executeWithGeminiRotation(
         model: isLovable ? `google/${currentModel}` : currentModel,
         messages: finalMessages,
         stream: options.stream ?? false,
-        max_tokens: options.maxTokens ?? 32768,
+        max_tokens: Math.min(options.maxTokens ?? 8192, 8192),
       };
 
       if (options.jsonMode && !isLovable) {
@@ -415,11 +416,12 @@ export async function executeWithGeminiRotation(
         lastStatus = res.status;
         lastErrorText = await res.text().catch(() => "");
 
-        // ── 1. DEAD-KEY BYPASS (HTTP 400 Bad Request / 403 Forbidden / Revoked) ──
-        if (res.status === 400 || res.status === 403) {
+        // ── 1. DEAD-KEY BYPASS (HTTP 403 Forbidden / Invalid Key / Revoked) ──
+        const isKeyAuthError = res.status === 403 || lastErrorText.includes("API_KEY_INVALID") || lastErrorText.includes("PERMISSION_DENIED");
+        if (isKeyAuthError) {
           deadKeys.add(actualKey);
           console.error(
-            `[Averia AI] Key #${i + 1} (${actualKey.slice(0, 10)}...) rejected with HTTP ${res.status}: "${lastErrorText.slice(0, 250)}". Auto-deactivating (is_active = false) in public.gemini_api_keys.`
+            `[Averia AI] Key #${i + 1} (${actualKey.slice(0, 10)}...) rejected with HTTP ${res.status}: "${lastErrorText.slice(0, 250)}". Auto-deactivating in database.`
           );
 
           if (keyRec.source === "database") {
@@ -427,14 +429,9 @@ export async function executeWithGeminiRotation(
               .from("gemini_api_keys")
               .update({ is_active: false, error_count: 999 })
               .eq("api_key", keyRec.api_key)
-              .then(() => {
-                console.log(`[Averia AI] Successfully marked key ${keyRec.api_key.slice(0, 8)}... as is_active = false in database`);
-              })
-              .catch((err: any) => {
-                console.warn(`[Averia AI] Failed to update is_active in DB:`, err);
-              });
+              .then(() => {})
+              .catch(() => {});
           }
-          // Immediately bypass to next key
           continue;
         }
 
