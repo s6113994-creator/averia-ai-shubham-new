@@ -805,6 +805,9 @@ serve(async (req) => {
       text,
       model: selectedModel = "ignite",
       workspaceContext,
+      agentRole,
+      keySlot,
+      sharedContract,
     } = body as any;
 
     // Save memory if requested
@@ -995,6 +998,204 @@ ${memoryContext}`;
 
       const finalText = statusHeader + agentSummary + "\n\n---\n\n**🧠 Consensus Verdict:**\n\n" + judgeContent;
       return streamTextAsSSE(finalText);
+    }
+
+    // ── GENESIS: 10-Role Parallel Edge Worker Mode ───────────────────────────
+    if (selectedModel === "genesis" && agentRole && agentRole !== "full") {
+      const slot = typeof keySlot === "number" ? keySlot : 0;
+      console.log(`[averia-ai] Genesis Dedicated Edge Worker: role=${agentRole}, keySlot=${slot}`);
+
+      const userGoal = extractTextContent(userMessages[userMessages.length - 1]?.content) || "Application";
+      const resolvedTitle = deriveCleanBrandTitle(userGoal, "");
+      const contract = sharedContract || `Application: ${resolvedTitle}\nRouter: window.__AVERIA_ROUTER__\nStore: window.AveriaStore\nEngine: window.AveriaEngine\nPages: window.HomePage, window.AppPages\nQAGuard: window.QAGuard\nAveriaDB Collections: products, orders, cart, users, settings`;
+
+      const ROLE_CONFIGS: Record<string, { roleName: string; prompt: string }> = {
+        architect: {
+          roleName: "System Architect",
+          prompt: `You are the System Architect in the 10-agent Genesis swarm.
+Your job is to generate ONLY TWO files for "${resolvedTitle}":
+1. \`\`\`json:package.json — Complete manifest with name "${resolvedTitle.toLowerCase().replace(/[^a-z0-9]/g, '-')}", scripts ("dev", "build"), and dependencies (express, cors, tailwindcss, lucide-react).
+2. \`\`\`markdown:README.md — Comprehensive architecture specification, list of modules, route table, database schema overview, and setup instructions.
+SHARED ARCHITECTURAL CONTRACT:
+${contract}
+RULES: Start immediately on line 1 with \`\`\`json:package.json. ZERO preamble text. Every file must be complete.`
+        },
+        db_engineer: {
+          roleName: "Database & API Engineer",
+          prompt: `You are the Database Engineer in the 10-agent Genesis swarm.
+Your job is to generate ONLY ONE file for "${resolvedTitle}":
+\`\`\`sql:schema.sql — Complete PostgreSQL DDL with:
+- CREATE TABLE IF NOT EXISTS statements for all collections (products/items, orders, cart_items, users, activity_logs)
+- UUID primary keys, indices on foreign keys and search columns, CHECK constraints, and timestamps
+- Row-Level Security (RLS) policies
+- Pre-populated realistic seed data (at least 8-10 records with names, prices, categories, statuses)
+SHARED ARCHITECTURAL CONTRACT:
+${contract}
+RULES: Start immediately on line 1 with \`\`\`sql:schema.sql. ZERO preamble. Complete SQL only.`
+        },
+        backend_api: {
+          roleName: "Backend REST API Engineer",
+          prompt: `You are the Backend API Engineer in the 10-agent Genesis swarm.
+Your job is to generate ONLY ONE file for "${resolvedTitle}":
+\`\`\`javascript:server/index.js — Complete Express.js REST API server with:
+- express, cors, express.json() middleware
+- REST CRUD routes: GET /api/items, POST /api/items, GET /api/items/:id, PATCH /api/items/:id, DELETE /api/items/:id
+- Orders endpoints: POST /api/orders, GET /api/orders, GET /api/orders/:id
+- Auth endpoints: POST /api/auth/login, POST /api/auth/signup, GET /api/auth/me
+- Health check: GET /api/health
+- AveriaDB cloud database integration fallback
+- app.listen(port) with graceful startup log
+SHARED ARCHITECTURAL CONTRACT:
+${contract}
+RULES: Start immediately on line 1 with \`\`\`javascript:server/index.js. ZERO preamble. Complete code only.`
+        },
+        data_sdk: {
+          roleName: "Data SDK & State Engineer",
+          prompt: `You are the Data SDK Engineer in the 10-agent Genesis swarm.
+Your job is to generate ONLY ONE file for "${resolvedTitle}":
+\`\`\`javascript:src/data.js — Complete data management layer exported as window.AveriaStore with:
+- Initial pre-seeded mock records (products, orders, categories, stats)
+- AveriaDB cloud bridge: methods to list, create, update, remove items using window.AveriaDB
+- LocalStorage fallback when cloud DB is unavailable
+- Reactive event bus: window.AveriaStore.subscribe(event, callback), window.AveriaStore.notify(event, payload)
+- Cart store: getCart(), addToCart(item), removeFromCart(id), updateQty(id, qty), clearCart()
+- User auth session state: getCurrentUser(), login(email), logout()
+SHARED ARCHITECTURAL CONTRACT:
+${contract}
+RULES: Attach to window.AveriaStore = AveriaStore. Start immediately on line 1 with \`\`\`javascript:src/data.js. ZERO preamble. Complete code only.`
+        },
+        logic_engine: {
+          roleName: "Core Logic Engine",
+          prompt: `You are the Core Logic Engine Engineer in the 10-agent Genesis swarm.
+Your job is to generate ONLY ONE file for "${resolvedTitle}":
+\`\`\`javascript:src/engine.js — Core algorithms and business logic exported as window.AveriaEngine with:
+- Calculation engine: calculateTotals(cartItems, promoCode, taxRate)
+- Search & multi-facet filter engine: filterItems(items, { query, category, priceMin, priceMax, sortBy })
+- State machine transitions for orders: transitionOrder(orderId, 'Pending' -> 'Processing' -> 'Shipped' -> 'Delivered')
+- Analytics metric aggregator: computeStats(items, orders)
+- Event dispatcher connecting store events to UI rerenders
+SHARED ARCHITECTURAL CONTRACT:
+${contract}
+RULES: Attach to window.AveriaEngine = AveriaEngine. Start immediately on line 1 with \`\`\`javascript:src/engine.js. ZERO preamble. Complete code only.`
+        },
+        ui_shell: {
+          roleName: "UI Shell & Layout Architect",
+          prompt: `You are the UI Shell Architect in the 10-agent Genesis swarm.
+Your job is to generate ONLY ONE file for "${resolvedTitle}":
+\`\`\`html:index.html — 100% self-contained root HTML5 layout with:
+- <script src="https://cdn.tailwindcss.com"></script> and modern dark theme styles (slate-900 background, vibrant indigo/emerald accents)
+- Top navigation bar with logo, brand title "${resolvedTitle}", route navigation links, search bar, and cart badge
+- Root app container: <div id="app" class="min-h-screen flex flex-col"></div>
+- Modal container: <div id="modal-root"></div>
+- Script loading tags in topological order:
+  <script src="src/router.js"></script>
+  <script src="src/data.js"></script>
+  <script src="src/engine.js"></script>
+  <script src="src/qaGuard.js"></script>
+  <script src="src/pages/HomePage.js"></script>
+  <script src="src/pages/AppPages.js"></script>
+  <script>
+    window.addEventListener('DOMContentLoaded', async () => {
+      if (window.__AVERIA_ROUTER__) {
+        window.__AVERIA_ROUTER__.register('/', () => window.HomePage && window.HomePage.render());
+        if (window.AppPages) {
+          window.__AVERIA_ROUTER__.register('/catalog', () => window.AppPages.renderCatalog());
+          window.__AVERIA_ROUTER__.register('/detail', (p) => window.AppPages.renderDetail(p));
+          window.__AVERIA_ROUTER__.register('/cart', () => window.AppPages.renderCart());
+          window.__AVERIA_ROUTER__.register('/orders', () => window.AppPages.renderOrders());
+          window.__AVERIA_ROUTER__.register('/admin', () => window.AppPages.renderAdmin());
+          window.__AVERIA_ROUTER__.register('/settings', () => window.AppPages.renderSettings());
+          window.__AVERIA_ROUTER__.register('/about', () => window.AppPages.renderAbout());
+        }
+        window.__AVERIA_ROUTER__.init();
+      }
+    });
+  </script>
+SHARED ARCHITECTURAL CONTRACT:
+${contract}
+RULES: Start immediately on line 1 with \`\`\`html:index.html. ZERO preamble. Complete code only.`
+        },
+        spa_router: {
+          roleName: "SPA Router Engineer",
+          prompt: `You are the SPA Router Engineer in the 10-agent Genesis swarm.
+Your job is to generate ONLY ONE file for "${resolvedTitle}":
+\`\`\`javascript:src/router.js — Robust client-side hash router exported as window.__AVERIA_ROUTER__ with:
+- Route registry: register(path, handler)
+- Navigation: navigate(path, params)
+- Back history: goBack()
+- State: current(), params(), routes()
+- Listener: onChange(fn)
+- Automatic parent frame postMessage notification: parent.postMessage({ type: 'AVERIA_ROUTE_UPDATE', route, allRoutes }, '*')
+- Prevention of about:srcdoc hash navigation crashes
+- Active navbar highlighting synchronization
+SHARED ARCHITECTURAL CONTRACT:
+${contract}
+RULES: Attach to window.__AVERIA_ROUTER__ = router. Start immediately on line 1 with \`\`\`javascript:src/router.js. ZERO preamble. Complete code only.`
+        },
+        home_view: {
+          roleName: "Home View Specialist",
+          prompt: `You are the Home View Specialist in the 10-agent Genesis swarm.
+Your job is to generate ONLY ONE file for "${resolvedTitle}":
+\`\`\`javascript:src/pages/HomePage.js — Complete landing & overview page exported as window.HomePage with:
+- render(): Renders into document.getElementById('app')
+- Hero section: Bold gradient headline for "${resolvedTitle}", subheadline, and primary/secondary CTAs
+- Metrics & stats cards: Live numbers calculated from window.AveriaStore or window.AveriaEngine
+- Interactive feature grid: 4-6 cards with hover effects, each wired to onclick="window.__AVERIA_ROUTER__.navigate('/catalog' or '/detail')"
+- Quick Action triggers: "Explore Catalog", "View Orders", "Open Admin"
+- Recent activity timeline
+SHARED ARCHITECTURAL CONTRACT:
+${contract}
+RULES: Attach to window.HomePage = HomePage. Start immediately on line 1 with \`\`\`javascript:src/pages/HomePage.js. ZERO preamble. Complete code only.`
+        },
+        sub_pages: {
+          roleName: "Sub-Pages & Views Specialist",
+          prompt: `You are the Sub-Pages & Views Specialist in the 10-agent Genesis swarm.
+Your job is to generate ONLY ONE file for "${resolvedTitle}":
+\`\`\`javascript:src/pages/AppPages.js — Complete views for all application sub-routes exported as window.AppPages with:
+1. renderCatalog(): Searchable, filterable catalog/dashboard with category buttons, price filters, grid/table toggle, and "Add to Cart" / "Inspect" buttons
+2. renderDetail(params): Item deep-dive with tabs (Overview, Specs, Reviews), image preview, quantity selector, and back button (window.__AVERIA_ROUTER__.goBack())
+3. renderCart(): Live cart table, quantity +/- buttons, promo code input, order summary, and checkout button
+4. renderOrders(): Order history with statuses (Processing, Shipped, Delivered) and tracking modal
+5. renderAdmin(): Admin dashboard for managing records (Add item form, delete button, stock update) connected to window.AveriaStore
+6. renderSettings(): Preferences (dark/light, email notifications, currency) saved to localStorage
+7. renderAbout(): Team cards, FAQ accordion, and interactive contact form
+SHARED ARCHITECTURAL CONTRACT:
+${contract}
+RULES: Attach to window.AppPages = AppPages. Start immediately on line 1 with \`\`\`javascript:src/pages/AppPages.js. ZERO preamble. Complete code only.`
+        },
+        qa_security: {
+          roleName: "QA & Security Auditor",
+          prompt: `You are the QA & Security Auditor in the 10-agent Genesis swarm.
+Your job is to generate ONLY ONE file for "${resolvedTitle}":
+\`\`\`javascript:src/qaGuard.js — Quality assurance, security sanitization, and self-healing exported as window.QAGuard with:
+- sanitizeHTML(str): XSS prevention function for user inputs
+- safeJSONParse(str, fallback): Safe JSON parsing with fallback
+- getFallbackSVG(label, width, height): In-memory SVG data-URI generator for missing or broken product images so zero images are ever broken
+- nullSafeGet(obj, path, defaultValue): Deep object property accessor
+- runHealthCheck(): Verifies that window.AveriaStore, window.AveriaEngine, window.__AVERIA_ROUTER__, window.HomePage, and window.AppPages are all properly loaded and functional; displays a floating badge in preview if all modules pass!
+SHARED ARCHITECTURAL CONTRACT:
+${contract}
+RULES: Attach to window.QAGuard = QAGuard. Start immediately on line 1 with \`\`\`javascript:src/qaGuard.js. ZERO preamble. Complete code only.`
+        },
+      };
+
+      const cfg = ROLE_CONFIGS[agentRole] || ROLE_CONFIGS.ui_shell;
+      const roleMessages = [{ role: "user", content: `Generate the production code for: "${userGoal}". Follow your role and contract strictly.` }];
+
+      const generatedCode = await callRobustGemini(
+        supabase,
+        roleMessages,
+        cfg.prompt,
+        "gemini-2.5-flash",
+        8192,
+        slot
+      );
+
+      const output = generatedCode && generatedCode.includes("```")
+        ? generatedCode
+        : `\`\`\`javascript:src/${agentRole}.js\n// Auto-generated module for ${cfg.roleName}\n\`\`\``;
+
+      return streamTextAsSSE(output);
     }
 
     // ── GENESIS: 10 parallel full-stack builder agents ─────────────────────

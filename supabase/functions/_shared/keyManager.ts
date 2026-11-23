@@ -185,7 +185,8 @@ export async function callRobustGemini(
   messages: any[],
   systemPrompt: string,
   preferredModel = "gemini-2.5-flash",
-  maxTokens = 32768
+  maxTokens = 32768,
+  startKeyIndex = 0
 ): Promise<string> {
   const keys = await getGeminiKeys(supabase);
   if (keys.length === 0) return "";
@@ -198,8 +199,9 @@ export async function callRobustGemini(
     "gemini-1.5-flash",
   ].filter((m, i, arr) => arr.indexOf(m) === i);
 
-  // Preserve error_count ASC, last_used_at ASC order for natural rotation
-  const rotated = [...keys];
+  // Rotate starting at startKeyIndex for dedicated per-subagent key slots
+  const offset = Math.abs(startKeyIndex) % keys.length;
+  const rotated = [...keys.slice(offset), ...keys.slice(0, offset)];
 
   for (const model of models) {
     for (let i = 0; i < rotated.length; i++) {
