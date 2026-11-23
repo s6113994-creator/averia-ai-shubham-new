@@ -3009,12 +3009,17 @@ export default function AveriaAI() {
         const incrementallyWritten = new Set<string>();
 
         const workerPromises = GENESIS_SWARM_ROLES.map(async (role) => {
+          // 150ms micro-stagger between workers to prevent concurrency bursts & RPM spikes
+          if (role.keySlot > 0) {
+            await new Promise(r => setTimeout(r, role.keySlot * 150));
+          }
+
           const workerStartTime = Date.now();
           let workerBytes = 0;
           let workerText = '';
 
-          try {
-            const resp = await fetch(CHAT_URL, {
+          const fetchForSlot = async (slot: number) => {
+            return await fetch(CHAT_URL, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -3027,15 +3032,31 @@ export default function AveriaAI() {
                 conversationId: convId,
                 model: 'genesis',
                 agentRole: role.role,
-                keySlot: role.keySlot,
+                keySlot: slot,
                 sharedContract: contract,
                 workspaceContext: activeWorkspace,
               }),
             });
+          };
+
+          try {
+            let resp = await fetchForSlot(role.keySlot);
+
+            // Auto-retry once on next keySlot if transient failure occurs
+            if (!resp.ok) {
+              const retrySlot = (role.keySlot + 1) % 10;
+              console.warn(`[Swarm Worker ${role.role}] Slot ${role.keySlot} failed (HTTP ${resp.status}). Retrying on slot ${retrySlot}...`);
+              setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
+                ...w,
+                currentAction: `Retrying on slot #${retrySlot + 1}...`,
+              } : w));
+              await new Promise(r => setTimeout(r, 600));
+              resp = await fetchForSlot(retrySlot);
+            }
 
             if (!resp.ok) {
               const errJson = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-              throw new Error(errJson.error || `Worker ${role.role} failed with HTTP ${resp.status}`);
+              throw new Error(errJson.error || `HTTP ${resp.status}`);
             }
             if (!resp.body) throw new Error('No stream body');
 
@@ -3192,6 +3213,7 @@ export default function AveriaAI() {
             setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
               ...w,
               status: 'failed',
+              currentAction: err.message ? `Error: ${err.message.slice(0, 45)}` : 'Worker disconnected',
             } : w));
             setCollaborationLogs(prev => [
               ...prev,

@@ -24,18 +24,28 @@ export function getAdminSupabase() {
 }
 
 /** Clean & map model name to standard Gemini / OpenAI compatible names */
+export const OFFICIAL_GEMINI_CASCADE = [
+  "gemini-3.8-flash",
+  "gemini-3.1-pro-preview",
+  "gemini-3.5-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
+  "gemini-2.0-flash",
+  "gemini-1.5-flash",
+];
+
 export function sanitizeAveriaModel(model: string = "gemini-3.8-flash"): string {
-  let clean = model.replace(/^google\//i, "").replace(/-preview$/i, "");
-  if (clean.includes("gemini-3.8-flash") || clean.includes("gemini-3") || clean.includes("gemini-2.5-flash")) {
+  let clean = model.replace(/^google\//i, "").replace(/-preview$/i, "").trim();
+  if (clean.includes("3.8-flash") || clean.includes("3.8") || clean.includes("2.5-flash") || clean.includes("2.0-flash")) {
     return "gemini-3.8-flash";
   }
-  if (clean.includes("gemini-2.5-pro") || clean.includes("gemini-3.5-pro")) {
-    return "gemini-3.8-pro";
+  if (clean.includes("3.1-pro") || clean.includes("2.5-pro")) {
+    return "gemini-3.1-pro-preview";
   }
-  if (!clean.startsWith("gemini-")) {
-    return "gemini-3.8-flash";
+  if (clean.includes("3.5-flash-lite") || clean.includes("2.5-flash-lite") || clean.includes("2.0-flash-lite")) {
+    return "gemini-3.5-flash-lite";
   }
-  return clean;
+  return clean || "gemini-3.8-flash";
 }
 
 // ==========================================
@@ -155,7 +165,8 @@ export async function callSingleGeminiKey(
         if (text && text.trim().length > 0) return text.trim();
       } else {
         const errText = await resp.text().catch(() => "");
-        if (resp.status === 400 || resp.status === 403) {
+        const isKeyAuthError = resp.status === 403 || errText.includes("API_KEY_INVALID") || errText.includes("PERMISSION_DENIED");
+        if (isKeyAuthError) {
           console.error(
             `[Averia AI] callSingleGeminiKey: Key (${actualKey.slice(0, 10)}...) rejected with HTTP ${resp.status}: "${errText.slice(0, 200)}". Deactivating key in database.`
           );
@@ -334,10 +345,10 @@ export async function executeWithGeminiRotation(
   const selectedModel = options.forensicMode ? "gemini-2.5-pro" : (options.model || "gemini-2.5-flash");
   const cleanModel = sanitizeAveriaModel(selectedModel);
 
-  // Model fallback chain: primary -> 3.8-flash
+  // Model fallback chain: primary requested model -> official Google Gemini cascade
   const modelsToTry = [
     cleanModel,
-    "gemini-3.8-flash",
+    ...OFFICIAL_GEMINI_CASCADE,
   ].filter((m, i, arr) => arr.indexOf(m) === i);
 
   const finalMessages = [
@@ -355,7 +366,7 @@ export async function executeWithGeminiRotation(
       const isLovable = keyRec.api_key.startsWith("lovable:") || keyRec.api_key.startsWith("sk_") || keyRec.api_key.startsWith("sk-");
       const actualKey = keyRec.api_key.replace("lovable:", "");
 
-      // Auto-skip any key known to be dead (400/403)
+      // Auto-skip any key known to be dead (403)
       if (deadKeys.has(actualKey)) {
         continue;
       }
@@ -415,6 +426,14 @@ export async function executeWithGeminiRotation(
 
         lastStatus = res.status;
         lastErrorText = await res.text().catch(() => "");
+
+        // ── 0. MODEL NOT FOUND / DEPRECATED (HTTP 404) -> Step down to next model in cascade immediately ──
+        if (res.status === 404 || lastErrorText.includes("not found") || lastErrorText.includes("is no longer available")) {
+          console.warn(
+            `[Averia AI] Model ${currentModel} returned 404 (${lastErrorText.slice(0, 120)}). Cascading to next model...`
+          );
+          break; // Advance to next model in modelsToTry without marking key dead
+        }
 
         // ── 1. DEAD-KEY BYPASS (HTTP 403 Forbidden / Invalid Key / Revoked) ──
         const isKeyAuthError = res.status === 403 || lastErrorText.includes("API_KEY_INVALID") || lastErrorText.includes("PERMISSION_DENIED");
