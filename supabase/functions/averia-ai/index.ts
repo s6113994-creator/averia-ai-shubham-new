@@ -261,19 +261,22 @@ const GENESIS_AGENTS = [
     role: "Preview Assembler",
     systemPrompt: `${AVERIA_SYSTEM_PERSONA}
 You are the Genesis Preview Assembler — the master full-stack software architect.
-Assemble a complete, production-grade, deeply functional multi-file project returned as structured file blocks:
-\`\`\`file:index.html
-\`\`\`file:src/App.jsx (or \`\`\`file:src/gameEngine.js for games)
-\`\`\`file:server/index.js (backend API with Express endpoints)
-\`\`\`file:schema.sql (PostgreSQL database schema)
-\`\`\`file:package.json
-\`\`\`file:README.md
-
-CRITICAL RULES:
-1. index.html MUST be 100% self-contained and immediately runnable in an iframe with <script src="https://cdn.tailwindcss.com"></script>.
-2. For games: index.html MUST contain complete HTML5 Canvas physics, touch + keyboard controls, score loop, collision detection, and particle effects. Never a placeholder.
-3. For full-stack apps: include server/index.js and schema.sql for the complete backend layer.
-4. Output real, working code across all files without truncation.`,
+CRITICAL OUTPUT RULES:
+1. START IMMEDIATELY ON LINE 1 with the very first code block: \`\`\`html:index.html.
+   NEVER write any preamble sentences, greetings, or conversational filler!
+2. Structure the full-stack project into 6–8 dense, modular, high-impact files:
+   \`\`\`html:index.html (Self-contained SPA with window.__AVERIA_ROUTER__, persistent navbar, 5+ views, AveriaDB boot)
+   \`\`\`javascript:src/data.js (Data schemas, mock records, AveriaDB wrapper helpers)
+   \`\`\`javascript:src/engine.js (Core business logic, state machines, math/canvas engines, analytics)
+   \`\`\`javascript:src/pages.js (Sub-page renderers: /dashboard, /detail, /settings, /about, /admin)
+   \`\`\`javascript:server/index.js (Express/Node REST API with CRUD routes & AveriaDB bridge)
+   \`\`\`sql:schema.sql (PostgreSQL tables, indices, RLS policies, initial seed records)
+   \`\`\`json:package.json (Dependencies, scripts, metadata)
+   \`\`\`markdown:README.md (Architecture overview, feature guide, API documentation)
+   (For games: use \`\`\`javascript:src/gameEngine.js and \`\`\`javascript:src/audio.js).
+3. index.html MUST be 100% self-contained and immediately runnable in an iframe with <script src="https://cdn.tailwindcss.com"></script>.
+4. All companion modules must attach to window (e.g. window.GameEngine = GameEngine; window.AppEngine = AppEngine).
+5. Output real, deeply engineered code for every file. ZERO placeholders, ZERO stubs, ZERO 1KB shells.`,
   },
 ];
 
@@ -281,6 +284,38 @@ CRITICAL RULES:
 const GENESIS_SYSTEM_PROMPT = `${AVERIA_SYSTEM_PERSONA}
 
 You are Averia Genesis Engine — the ultimate polyglot multi-file full-stack IDE agent and autonomous deep-coding software engineer.
+
+═══════════════════════════════════════════════════════════
+ FAST STREAMING & CONCISE 6–8 FILE ARCHITECTURE CONTRACT
+═══════════════════════════════════════════════════════════
+
+1. STREAM CODE IMMEDIATELY STARTING ON LINE 1:
+   - Output your first code block on the VERY FIRST LINE of your response.
+   - ZERO introductory text, ZERO greetings, ZERO "Sure! Here is the code:", ZERO architectural commentary before the files.
+   - Any textual documentation MUST go inside \`\`\`markdown:README.md.
+
+2. STRUCTURE EVERY PROJECT INTO 6–8 DENSE, MODULAR, HIGH-IMPACT FILES:
+   Generation must complete rapidly (20–35s) without edge function timeouts by outputting 6–8 focused, deeply implemented files:
+   - \`\`\`html:index.html — 100% runnable self-contained SPA with hash router, persistent header, 5+ views, modal, AveriaDB boot
+   - \`\`\`javascript:src/data.js — Schemas, seed records, AveriaDB CRUD bridge, live state management
+   - \`\`\`javascript:src/engine.js — Core algorithms, calculation engines, business state transitions, event dispatchers
+   - \`\`\`javascript:src/pages.js — Sub-page view renderers (/dashboard, /detail, /settings, /about, /admin)
+   - \`\`\`javascript:server/index.js — Express.js REST API with full CRUD endpoints and database connectivity
+   - \`\`\`sql:schema.sql — PostgreSQL schema with tables, indices, RLS policies, and initial seed records
+   - \`\`\`json:package.json — Clean metadata, scripts ("dev": "vite"), and dependencies
+   - \`\`\`markdown:README.md — Architecture breakdown, feature tour, and API endpoints
+   (For games: replace pages with \`\`\`javascript:src/gameEngine.js and \`\`\`javascript:src/audio.js).
+
+3. STRICT FENCE SYNTAX (EXACT FORMAT REQUIRED):
+   Use standard language + colon format so universal IDE parsers extract files with 100% accuracy:
+   \`\`\`html:index.html
+   \`\`\`javascript:src/data.js
+   \`\`\`javascript:src/engine.js
+   \`\`\`javascript:src/pages.js
+   \`\`\`javascript:server/index.js
+   \`\`\`sql:schema.sql
+   \`\`\`json:package.json
+   \`\`\`markdown:README.md
 
 ═══════════════════════════════════════════════════════════
  MANDATORY MULTI-PAGE SPA ROUTER & NAVIGATION CONTRACT
@@ -1023,27 +1058,30 @@ ${memoryContext}`;
           `5. COMPLETE CODE: Return ALL files (existing modified + new) with 100% complete code. ZERO placeholders.\n` +
           `6. FOR GAMES/CANVAS: Ensure canvas draws initial scene immediately on load.\n` +
           `7. In companion modules: export classes and attach to window.\n` +
-          `Output all files with \`\`\`file:path/to/file.ext blocks.`;
+          `8. START DIRECTLY on line 1 with \`\`\`html:index.html. Zero preamble.\n` +
+          `Output all files with \`\`\`<lang>:<path> blocks.`;
       } else if (isGameRequest) {
         directiveContent = `Original request: ${userGoal}\n\n${workspaceAddon}\n\nAgent insights:\n${assemblerContext}\n\n` +
           `GENESIS GAME BUILDER DIRECTIVE:\n` +
-          `Generate a COMPLETE, 100% PLAYABLE multi-file HTML5 game project with structured file blocks:\n` +
-          `1. \`\`\`file:index.html — 100% playable HTML5 Canvas game with:\n` +
+          `CRITICAL: START IMMEDIATELY ON LINE 1 with \`\`\`html:index.html. ZERO PREAMBLE ESSAYS.\n` +
+          `Generate a COMPLETE, 100% PLAYABLE multi-file HTML5 game project with exactly 5-6 structured file blocks:\n` +
+          `1. \`\`\`html:index.html — 100% playable HTML5 Canvas game with:\n` +
           `   - Immediate visual rendering on load (draw background grid, entities, HUD before pressing start)\n` +
           `   - Start 60fps loop upon Start or Space/WASD/Arrow/Touch D-Pad\n` +
           `   - <script src="https://cdn.tailwindcss.com"></script>\n` +
           `   - window.__AVERIA_ROUTER__ router for multi-screen navigation (menu -> game -> game-over -> high-scores -> settings)\n` +
           `   - At least 3 screens: Main Menu, Game Screen, Game Over / High Scores\n` +
-          `2. \`\`\`file:src/gameEngine.js — Complete game engine class (150-300+ lines) with grid physics, particles, collision, high scores, game state. Export + window attach.\n` +
-          `3. \`\`\`file:src/audio.js — Complete Web Audio API SoundController with AudioContext. Export + window attach.\n` +
-          `4. \`\`\`file:package.json — Project manifest.\n` +
-          `5. \`\`\`file:README.md — Controls guide, gameplay, architecture.\n` +
+          `2. \`\`\`javascript:src/gameEngine.js — Complete game engine class (150-300+ lines) with grid physics, particles, collision, high scores, game state. Export + window attach.\n` +
+          `3. \`\`\`javascript:src/audio.js — Complete Web Audio API SoundController with AudioContext. Export + window attach.\n` +
+          `4. \`\`\`json:package.json — Project manifest.\n` +
+          `5. \`\`\`markdown:README.md — Controls guide, gameplay, architecture.\n` +
           `ZERO placeholders, ZERO stubs, ZERO 1KB empty files. Every file must be fully implemented.`;
       } else {
         directiveContent = `Original request: ${userGoal}\n\n${workspaceAddon}\n\nAgent insights:\n${assemblerContext}\n\n` +
           `GENESIS FULL-STACK MULTI-PAGE BUILDER DIRECTIVE:\n` +
-          `Generate a COMPLETE, deeply functional multi-page full-stack project with structured file blocks:\n` +
-          `1. \`\`\`file:index.html — Production-ready multi-page SPA with:\n` +
+          `CRITICAL: START IMMEDIATELY ON LINE 1 with \`\`\`html:index.html. ZERO PREAMBLE ESSAYS OR GREETINGS.\n` +
+          `Structure the app into EXACTLY 6–8 dense, modular, high-impact files so generation completes in 20-35s without edge function timeout:\n` +
+          `1. \`\`\`html:index.html — Production-ready multi-page SPA with:\n` +
           `   - <script src="https://cdn.tailwindcss.com"></script>\n` +
           `   - window.__AVERIA_ROUTER__ hash router (MANDATORY — paste the full router script from your system prompt)\n` +
           `   - AT LEAST 5 interconnected pages/views registered with the router:\n` +
@@ -1056,13 +1094,16 @@ ${memoryContext}`;
           `   - ZERO dead buttons — every clickable element calls router.navigate() or updates state\n` +
           `   - Realistic pre-populated data (not lorem ipsum)\n` +
           `   - Responsive design with mobile hamburger menu\n` +
+          `   - AveriaDB cloud database boot sequence\n` +
           `   Must run immediately in an iframe.\n` +
-          `2. \`\`\`file:src/App.jsx — React component architecture (if applicable)\n` +
-          `3. \`\`\`file:server/index.js — Express REST API with CRUD endpoints\n` +
-          `4. \`\`\`file:schema.sql — PostgreSQL schema with tables, indices, seed data\n` +
-          `5. \`\`\`file:package.json — Dependencies and run scripts\n` +
-          `6. \`\`\`file:README.md — Architecture overview, setup, API docs\n` +
-          `Generate ALL files with complete, working code. NEVER truncate.`;
+          `2. \`\`\`javascript:src/data.js — Data models, initial seed records, AveriaDB CRUD wrappers, and shared state helpers\n` +
+          `3. \`\`\`javascript:src/engine.js — Core calculation engines, search/filter algorithms, cart & order state machine\n` +
+          `4. \`\`\`javascript:src/pages.js — Modular render functions for sub-views (/dashboard, /detail, /settings, /about)\n` +
+          `5. \`\`\`javascript:server/index.js — Express REST API with full CRUD endpoints and AveriaDB bridge\n` +
+          `6. \`\`\`sql:schema.sql — PostgreSQL schema with tables, indices, RLS policies, and realistic seed records\n` +
+          `7. \`\`\`json:package.json — Clean dependencies and run scripts\n` +
+          `8. \`\`\`markdown:README.md — Architecture overview, setup, API docs\n` +
+          `Generate ALL 6-8 files with complete, working code. NEVER truncate.`;
       }
 
       const assemblerMessages = [{ role: "user", content: directiveContent }];

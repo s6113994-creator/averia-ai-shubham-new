@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Eye, Code, X, FileCode, Globe, Play, Pause, Music, Video, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Smartphone, Tablet, Camera, Paperclip, FileText, Link2, Mic, CheckCircle2, RefreshCw, ChevronDown } from 'lucide-react';
+import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Eye, Code, X, FileCode, Globe, Play, Pause, Music, Video, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Smartphone, Tablet, Camera, Paperclip, FileText, Link2, Mic, CheckCircle2, RefreshCw, ChevronDown, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
@@ -228,39 +228,67 @@ function extractProjectFiles(content: string): ParsedProjectFile[] {
   const files: ParsedProjectFile[] = [];
   const seenPaths = new Set<string>();
 
+  const addFile = (rawPath: string, rawContent: string) => {
+    let cleanPath = rawPath
+      .trim()
+      .replace(/\\/g, '/')
+      .replace(/^[\.\/]+/, '')
+      .replace(/^['"`]|['"`]$/g, '')
+      .trim();
+
+    if (!cleanPath || seenPaths.has(cleanPath)) return;
+    const body = rawContent.trimEnd();
+    if (!body || body.length < 2) return;
+
+    // Must look like a valid filename with extension or standard names (e.g. Dockerfile)
+    if (/\.[a-zA-Z0-9]+$/i.test(cleanPath) || /^Dockerfile$/i.test(cleanPath)) {
+      seenPaths.add(cleanPath);
+      files.push({ path: cleanPath, content: body });
+    }
+  };
+
   // 1. Primary: ```file:path/to/file.ext OR ```lang:path/to/file.ext (closed or unclosed)
-  const fileHeaderRegex = /```(?:file:|[a-zA-Z0-9_\-]+:)\s*([^\n\r]+?)\s*\n([\s\S]*?)(?:```|$)/g;
+  const fileHeaderRegex = /```(?:file:|[a-zA-Z0-9_\-]+:)\s*([^\n\r`"']+?)\s*\n([\s\S]*?)(?:```|$)/g;
   let match: RegExpExecArray | null;
   while ((match = fileHeaderRegex.exec(content)) !== null) {
-    let rawPath = match[1].trim().replace(/^[\/\\]+/, '').replace(/^['"`]|['"`]$/g, '');
-    if (rawPath && (rawPath.includes('.') || rawPath.includes('/'))) {
-      const fileContent = match[2];
-      if (!seenPaths.has(rawPath) && fileContent.trim().length > 0) {
-        seenPaths.add(rawPath);
-        files.push({ path: rawPath, content: fileContent.trimEnd() });
-      }
+    addFile(match[1], match[2]);
+  }
+
+  // 2. Attribute syntax: ```lang file="path/to/file.ext" or filename="path" or filepath="path"
+  const attrHeaderRegex = /```[a-zA-Z0-9_\-]*\s+(?:file|filename|filepath|path)=["']?([^"'\s>\n\r]+)["']?\s*\n([\s\S]*?)(?:```|$)/g;
+  while ((match = attrHeaderRegex.exec(content)) !== null) {
+    addFile(match[1], match[2]);
+  }
+
+  // 3. Direct path header: ```src/data.js or ```index.html without lang tag
+  const directPathRegex = /```([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)\s*\n([\s\S]*?)(?:```|$)/g;
+  while ((match = directPathRegex.exec(content)) !== null) {
+    if (!/^(html|css|js|jsx|ts|tsx|json|sql|python|py|bash|sh|markdown|md|yaml|yml|rust|go|java|cpp|c|php)$/i.test(match[1])) {
+      addFile(match[1], match[2]);
     }
   }
 
-  // 2. Fallback: ```lang \n // file: path or /* file: path */ or <!-- file: path --> or # file: path
-  const commentHeaderRegex = /```[a-zA-Z0-9_\-]*\s*\n\s*(?:\/\/|\/\*|<!--|#)\s*(?:file:\s*)?([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)[\s\S]*?\n([\s\S]*?)(?:```|$)/g;
+  // 4. Preceding markdown headers: ### File: src/data.js\n``` or **src/data.js**\n```
+  const precedingHeaderRegex = /(?:###?\s*(?:File:\s*)?|\*\*(?:File:\s*)?|File:\s*)([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)\*?\*?\s*\n\s*```[a-zA-Z0-9_\-]*\s*\n([\s\S]*?)(?:```|$)/gi;
+  while ((match = precedingHeaderRegex.exec(content)) !== null) {
+    addFile(match[1], match[2]);
+  }
+
+  // 5. In-block comments: ```lang\n// file: src/data.js
+  const commentHeaderRegex = /```[a-zA-Z0-9_\-]*\s*\n\s*(?:\/\/|\/\*|<!--|#)\s*(?:file:\s*|filename:\s*)?([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)[\s\S]*?\n([\s\S]*?)(?:```|$)/g;
   while ((match = commentHeaderRegex.exec(content)) !== null) {
-    const rawPath = match[1].trim().replace(/^[\/\\]+/, '');
-    if (rawPath && !seenPaths.has(rawPath) && match[2].trim().length > 0) {
-      seenPaths.add(rawPath);
-      files.push({ path: rawPath, content: match[2].trimEnd() });
-    }
+    addFile(match[1], match[2]);
   }
 
-  // 3. Fallback: single standalone html or react component if no file: tags found
+  // 6. Fallback: single standalone html or react component if no file tags found
   if (files.length === 0) {
     const singleHtmlMatch = content.match(/```(?:html|htm)\s*\n([\s\S]*?)(?:```|$)/i);
     if (singleHtmlMatch && singleHtmlMatch[1].trim().length > 20) {
-      files.push({ path: 'index.html', content: singleHtmlMatch[1].trimEnd() });
+      addFile('index.html', singleHtmlMatch[1]);
     } else {
       const singleReactMatch = content.match(/```(?:jsx|tsx|react)\s*\n([\s\S]*?)(?:```|$)/i);
       if (singleReactMatch && singleReactMatch[1].trim().length > 20) {
-        files.push({ path: 'src/App.jsx', content: singleReactMatch[1].trimEnd() });
+        addFile('src/App.jsx', singleReactMatch[1]);
       }
     }
   }
@@ -1353,23 +1381,36 @@ function GenesisTelemetryFeed({
   steps,
   files,
   isActive,
+  streamBytes = 0,
+  diskStatus,
+  onRetry,
 }: {
   steps: TelemetryStep[];
   files: TelemetryFile[];
   isActive: boolean;
+  streamBytes?: number;
+  diskStatus?: string | null;
+  onRetry?: () => void;
 }) {
-  if (steps.length === 0) return null;
+  if (steps.length === 0 && files.length === 0 && !isActive) return null;
   const doneCount = steps.filter(s => s.status === 'done').length;
-  const totalCount = steps.length;
+  const totalCount = steps.length || 8;
   const pct = Math.round((doneCount / totalCount) * 100);
+  const kbReceived = (streamBytes / 1024).toFixed(1);
 
   return (
     <div className="mt-2 rounded-xl border border-border/60 bg-secondary/30 overflow-hidden text-xs font-mono">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border/40 bg-secondary/50">
         <span className="font-semibold text-foreground flex items-center gap-1.5">
-          <span className="animate-pulse text-green-400">{isActive ? '●' : '✓'}</span>
-          Genesis Swarm {isActive ? 'Working' : 'Complete'}
+          <span className={`text-[10px] ${isActive ? 'animate-pulse text-green-400' : files.length > 0 ? 'text-green-400' : 'text-amber-400'}`}>
+            {isActive ? '●' : files.length > 0 ? '✓' : '⚠️'}
+          </span>
+          {isActive
+            ? `Genesis Swarm Active · ${kbReceived} KB received`
+            : files.length > 0
+            ? `Genesis Complete · ${files.length} files synthesized`
+            : 'Genesis Incomplete (0 files)'}
         </span>
         <span className="text-muted-foreground">{doneCount}/{totalCount} agents · {pct}%</span>
       </div>
@@ -1394,7 +1435,7 @@ function GenesisTelemetryFeed({
               {step.status !== 'pending' && (
                 <span className="text-muted-foreground/70"> — {step.detail}</span>
               )}
-              {step.status === 'done' && step.lines && (
+              {step.status === 'done' && step.lines && step.lines > 0 && (
                 <span className="text-muted-foreground/50"> ({step.lines} lines)</span>
               )}
             </div>
@@ -1419,6 +1460,31 @@ function GenesisTelemetryFeed({
               <span className="ml-auto text-muted-foreground/50 shrink-0">{f.lines}L</span>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Disk Sync Status */}
+      {diskStatus && (
+        <div className="px-3 py-1.5 border-t border-border/40 bg-secondary/40 flex items-center justify-between text-[11px] text-muted-foreground">
+          <span className="flex items-center gap-1.5 truncate">
+            <span className="text-emerald-400">📁</span> {diskStatus}
+          </span>
+          <span className="text-[10px] text-emerald-400 font-semibold shrink-0">Synced</span>
+        </div>
+      )}
+
+      {/* Incomplete Stream Error & 1-Click Retry */}
+      {!isActive && files.length === 0 && (
+        <div className="p-3 border-t border-border/40 bg-destructive/10 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-destructive">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span className="text-[11px] font-sans">0 files parsed. Generation may have timed out.</span>
+          </div>
+          {onRetry && (
+            <Button size="sm" variant="outline" className="h-6 text-[10px] gap-1 px-2 border-destructive/40 text-destructive hover:bg-destructive/10" onClick={onRetry}>
+              <RefreshCw className="h-3 w-3" /> Retry
+            </Button>
+          )}
         </div>
       )}
     </div>
@@ -1633,6 +1699,8 @@ Please inspect all project files, resolve the root cause (such as class initiali
     name: string;
     lines: number;
   }>>([]);
+  const [streamBytes, setStreamBytes] = useState(0);
+  const [diskStatus, setDiskStatus] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQueryHandled = useRef(false);
   const mirrorPeer = searchParams.get('mirror') === 'peer' && scope.isJoint && !!scope.peerId;
@@ -2025,44 +2093,42 @@ Please inspect all project files, resolve the root cause (such as class initiali
 
 
   const TELEMETRY_AGENTS = [
-    { id: 'architect',  icon: '🧭', agent: 'System Architect',           detail: 'Scanning workspace tree & existing files' },
-    { id: 'database',  icon: '🗄️', agent: 'Database & API Engineer',     detail: 'Designing AveriaDB collections & schema.sql' },
-    { id: 'ui',        icon: '🎨', agent: 'UI/UX & Tailwind Stylist',    detail: 'Building responsive layout & design tokens' },
-    { id: 'frontend',  icon: '⚛️', agent: 'Frontend Component Engineer', detail: 'Writing modular pages & interactive state handlers' },
-    { id: 'router',    icon: '🔀', agent: 'SPA Router Engineer',         detail: 'Wiring __AVERIA_ROUTER__ & multi-page navigation' },
-    { id: 'security',  icon: '🛡️', agent: 'Security & Sandbox Guard',   detail: 'Injecting localStorage polyfill & XSS sanitization' },
-    { id: 'auditor',   icon: '🔍', agent: 'Build & Dependency Auditor',  detail: 'Verifying topological imports & zero dead buttons' },
-    { id: 'assembler', icon: '⚡', agent: 'Preview Assembler',           detail: 'Bundling Zero-CORS runtime & syncing disk files' },
+    { id: 'architect',  icon: '🧭', agent: 'System Architect',           detail: 'Scanning workspace tree & existing files', pattern: /index\.html|README|package/i },
+    { id: 'database',  icon: '🗄️', agent: 'Database & API Engineer',     detail: 'Designing AveriaDB collections & schema.sql', pattern: /schema\.sql|data\.js/i },
+    { id: 'ui',        icon: '🎨', agent: 'UI/UX & Tailwind Stylist',    detail: 'Building responsive layout & design tokens', pattern: /index\.html|\.css/i },
+    { id: 'frontend',  icon: '⚛️', agent: 'Frontend Component Engineer', detail: 'Writing modular pages & interactive state handlers', pattern: /pages\.js|engine\.js|App\./i },
+    { id: 'router',    icon: '🔀', agent: 'SPA Router Engineer',         detail: 'Wiring __AVERIA_ROUTER__ & multi-page navigation', pattern: /index\.html|router/i },
+    { id: 'security',  icon: '🛡️', agent: 'Security & Sandbox Guard',   detail: 'Injecting localStorage polyfill & XSS sanitization', pattern: /server|security|index\.html/i },
+    { id: 'auditor',   icon: '🔍', agent: 'Build & Dependency Auditor',  detail: 'Verifying topological imports & zero dead buttons', pattern: /package\.json/i },
+    { id: 'assembler', icon: '⚡', agent: 'Preview Assembler',           detail: 'Bundling Zero-CORS runtime & syncing disk files', pattern: /index\.html/i },
   ];
 
   const telemetryTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const startTelemetry = useCallback(() => {
-    // Clear any previous
     telemetryTimersRef.current.forEach(clearTimeout);
     telemetryTimersRef.current = [];
     setTelemetryFiles([]);
-    // Set all agents to pending initially
-    setTelemetrySteps(TELEMETRY_AGENTS.map(a => ({ ...a, status: 'pending' as const })));
-
-    // Stagger activation: each agent goes active then done progressively
-    TELEMETRY_AGENTS.forEach((agent, i) => {
-      const activeAt = 300 + i * 800;
-      const doneAt   = activeAt + 1200 + Math.random() * 600;
-      const t1 = setTimeout(() => {
-        setTelemetrySteps(prev => prev.map(s => s.id === agent.id ? { ...s, status: 'active' as const } : s));
-      }, activeAt);
-      const t2 = setTimeout(() => {
-        setTelemetrySteps(prev => prev.map(s => s.id === agent.id ? { ...s, status: 'done' as const, lines: Math.floor(80 + Math.random() * 320) } : s));
-      }, doneAt);
-      telemetryTimersRef.current.push(t1, t2);
-    });
+    setStreamBytes(0);
+    setDiskStatus(null);
+    // Set all agents to pending initially, with System Architect active
+    setTelemetrySteps(TELEMETRY_AGENTS.map((a, i) => ({
+      id: a.id,
+      agent: a.agent,
+      icon: a.icon,
+      status: (i === 0 ? 'active' : 'pending') as const,
+      detail: a.detail,
+      lines: undefined,
+    })));
   }, []);
 
   const stopTelemetry = useCallback(() => {
     telemetryTimersRef.current.forEach(clearTimeout);
-    // Mark all as done
-    setTelemetrySteps(prev => prev.map(s => ({ ...s, status: 'done' as const })));
+    // Finalize agent statuses honestly based on lines / completion
+    setTelemetrySteps(prev => prev.map(s => ({
+      ...s,
+      status: (s.lines && s.lines > 0 ? 'done' : s.status === 'active' ? 'done' : 'pending') as const,
+    })));
   }, []);
 
   const handlePublish = async () => {
@@ -2429,10 +2495,16 @@ Please inspect all project files, resolve the root cause (such as class initiali
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let streamByteCount = 0;
+      const incrementallyWrittenFiles = new Set<string>();
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (value) {
+          streamByteCount += value.byteLength;
+          setStreamBytes(streamByteCount);
+        }
         buffer += decoder.decode(value, { stream: true });
 
         let newlineIdx: number;
@@ -2448,16 +2520,59 @@ Please inspect all project files, resolve the root cause (such as class initiali
             const content = parsed.choices?.[0]?.delta?.content;
             if (content) {
               assistantContent += content;
-              // Track newly completed files for telemetry feed
+              // Track newly completed files for telemetry feed & live incremental preview
               if (effectiveModel === 'genesis') {
                 const newlyParsed = extractProjectFiles(assistantContent);
-                setTelemetryFiles(() =>
-                  newlyParsed.map(f => ({
-                    op: 'Created' as const,
-                    name: f.path,
-                    lines: f.content.split('\n').length,
-                  }))
-                );
+                const fileList = newlyParsed.map(f => ({
+                  op: 'Created' as const,
+                  name: f.path,
+                  lines: f.content.split('\n').length,
+                }));
+                setTelemetryFiles(fileList);
+
+                // Update agent steps honestly based on actual files detected
+                setTelemetrySteps(TELEMETRY_AGENTS.map((agent, i) => {
+                  const matching = fileList.find(f => agent.pattern.test(f.name));
+                  if (matching) return { ...agent, status: 'done' as const, lines: matching.lines };
+                  const prevAgent = i > 0 ? TELEMETRY_AGENTS[i - 1] : null;
+                  const prevDone = prevAgent && fileList.some(f => prevAgent.pattern.test(f.name));
+                  return {
+                    ...agent,
+                    status: (i === 0 || prevDone || fileList.length > 0 ? 'active' : 'pending') as const,
+                    lines: undefined,
+                  };
+                }));
+
+                // Incremental live preview: render index.html immediately as soon as it arrives!
+                const indexFile = newlyParsed.find(f => /^(?:public\/|src\/)?index\.html$/i.test(f.path) || f.path.endsWith('.html'));
+                if (indexFile && indexFile.content.length > 50) {
+                  setCanvasContent(indexFile.content);
+                  setCanvasMode('preview');
+                }
+
+                // Incremental disk write: write each closed file to local folder
+                if (localFolderHandle && folderPermissionGranted) {
+                  for (const f of newlyParsed) {
+                    const isClosed = assistantContent.includes(f.content + '\n```') || assistantContent.includes(f.content + '```');
+                    if (isClosed && !incrementallyWrittenFiles.has(f.path)) {
+                      incrementallyWrittenFiles.add(f.path);
+                      (async () => {
+                        try {
+                          if (f.path === 'index.html' || f.path.endsWith('/index.html')) {
+                            const bundled = bundleZeroCORSHtml(f.content, newlyParsed);
+                            await writeFileToHandle(localFolderHandle, f.path, bundled);
+                          } else {
+                            await writeFileToHandle(localFolderHandle, f.path, f.content);
+                          }
+                          setWrittenFiles(prev => Array.from(new Set([...prev, f.path])));
+                          setDiskStatus(`Saved ${incrementallyWrittenFiles.size} files to ${localFolderName || 'folder'}`);
+                        } catch (wErr) {
+                          console.warn('Incremental file write error:', f.path, wErr);
+                        }
+                      })();
+                    }
+                  }
+                }
               }
               setMessages(prev => {
                 const last = prev[prev.length - 1];
@@ -2468,6 +2583,39 @@ Please inspect all project files, resolve the root cause (such as class initiali
               });
             }
           } catch { /* partial JSON */ }
+        }
+      }
+
+      // Stream completed — final disk sync and file validation
+      if (effectiveModel === 'genesis') {
+        const finalFiles = extractProjectFiles(assistantContent);
+        if (finalFiles.length === 0) {
+          setPreviewError("No project files could be parsed from the generation stream. The response may have timed out or truncated.");
+        } else {
+          setPreviewError(null);
+          const indexFile = finalFiles.find(f => /^(?:public\/|src\/)?index\.html$/i.test(f.path) || f.path.endsWith('.html'));
+          if (indexFile) {
+            setCanvasContent(indexFile.content);
+            setCanvasMode('preview');
+            setPreviewKey(k => k + 1);
+          }
+          if (localFolderHandle && folderPermissionGranted) {
+            try {
+              for (const f of finalFiles) {
+                if (f.path === 'index.html' || f.path.endsWith('/index.html')) {
+                  const bundled = bundleZeroCORSHtml(f.content, finalFiles);
+                  await writeFileToHandle(localFolderHandle, f.path, bundled);
+                } else {
+                  await writeFileToHandle(localFolderHandle, f.path, f.content);
+                }
+              }
+              setWrittenFiles(finalFiles.map(f => f.path));
+              setDiskStatus(`All ${finalFiles.length} files saved to ${localFolderName || 'folder'}`);
+              toast.success(`📁 Saved ${finalFiles.length} files to ${localFolderName || 'folder'}`);
+            } catch (wErr) {
+              console.error('Final disk sync error:', wErr);
+            }
+          }
         }
       }
 
@@ -2492,6 +2640,7 @@ Please inspect all project files, resolve the root cause (such as class initiali
 
     } catch (err: any) {
       toast.error(err.message || 'Failed to get response');
+      setPreviewError(err.message || 'Generation failed');
       setMessages(prev => prev.filter(m => m.role !== 'assistant' || m.content));
     } finally {
       setIsLoading(false);
@@ -2510,7 +2659,7 @@ Please inspect all project files, resolve the root cause (such as class initiali
 
   if (!user) return null;
 
-  const hasCanvas = Boolean(canvasContent || canvasImageUrl || isGeneratingApp);
+  const hasCanvas = Boolean(canvasContent || canvasImageUrl || isGeneratingApp || previewError);
   const userName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || '';
   const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
   const fileTree = generateFileTree(canvasContent, lastAssistant?.content, selectedFileName || undefined);
@@ -2732,11 +2881,18 @@ Please inspect all project files, resolve the root cause (such as class initiali
                                 </div>
                               )}
                               {cleanedProse ? <MessageResponse>{cleanedProse}</MessageResponse> : null}
-                              {isGeneratingApp && telemetrySteps.length > 0 && i === messages.length - 1 && (
+                              {telemetrySteps.length > 0 && i === messages.length - 1 && (
                                 <GenesisTelemetryFeed
                                   steps={telemetrySteps}
                                   files={telemetryFiles}
                                   isActive={isGeneratingApp}
+                                  streamBytes={streamBytes}
+                                  diskStatus={diskStatus}
+                                  onRetry={() => {
+                                    const lastUser = [...messages].reverse().find(m => m.role === 'user');
+                                    if (lastUser?.content) sendMessage(lastUser.content);
+                                    else sendMessage('Build the application');
+                                  }}
                                 />
                               )}
                               {msg.imageUrl && (
@@ -2802,6 +2958,13 @@ Please inspect all project files, resolve the root cause (such as class initiali
                             steps={telemetrySteps}
                             files={telemetryFiles}
                             isActive={isGeneratingApp}
+                            streamBytes={streamBytes}
+                            diskStatus={diskStatus}
+                            onRetry={() => {
+                              const lastUser = [...messages].reverse().find(m => m.role === 'user');
+                              if (lastUser?.content) sendMessage(lastUser.content);
+                              else sendMessage('Build the application');
+                            }}
                           />
                         )}
                       </div>
@@ -3435,6 +3598,34 @@ Please inspect all project files, resolve the root cause (such as class initiali
                             <span className="w-2 h-2 rounded-full bg-green-400 animate-ping" />
                             10 Parallel Swarm Agents Synthesizing Project
                           </div>
+                        </div>
+                      )}
+                      {!canvasContent && !canvasImageUrl && !isGeneratingApp && (
+                        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4 my-auto">
+                          <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+                            <AlertTriangle className="h-7 w-7" />
+                          </div>
+                          <div className="max-w-sm">
+                            <h3 className="text-sm font-semibold text-foreground">
+                              {previewError ? "Generation Incomplete (0 files parsed)" : "No Preview Available"}
+                            </h3>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {previewError || "The model response ended without valid project code blocks or may have timed out. Click below to retry."}
+                            </p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="default"
+                            className="gap-2 text-xs bg-primary hover:bg-primary/90"
+                            onClick={() => {
+                              const lastUser = [...messages].reverse().find(m => m.role === 'user');
+                              if (lastUser?.content) sendMessage(lastUser.content);
+                              else sendMessage('Build the application');
+                            }}
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                            Retry Generation
+                          </Button>
                         </div>
                       )}
                     </div>
