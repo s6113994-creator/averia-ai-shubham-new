@@ -1197,9 +1197,108 @@ RULES: Attach to window.QAGuard = QAGuard. Start immediately on line 1 with \`\`
         slot
       );
 
-      const output = generatedCode && generatedCode.includes("```")
-        ? generatedCode
-        : `\`\`\`javascript:src/${agentRole}.js\n// Auto-generated module for ${cfg.roleName}\n\`\`\``;
+            let output = generatedCode || "";
+      if (agentRole === "ui_shell") {
+        if (!output.includes("```html:index.html")) {
+          if (output.includes("```html")) {
+            output = output.replace(/```html(?::[^\n]*)?/i, "```html:index.html");
+          } else if (output.includes("<!DOCTYPE") || output.includes("<html")) {
+            const rawHtml = output.replace(/```[a-z0-9_-]*\n?/gi, "").trim();
+            output = "```html:index.html\n" + rawHtml + "\n```";
+          } else {
+            output = "```html:index.html\n" +
+`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${resolvedTitle}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+  <!-- Top Navigation Bar -->
+  <header class="sticky top-0 z-50 backdrop-blur-md bg-slate-900/90 border-b border-slate-800">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3 cursor-pointer" onclick="window.__AVERIA_ROUTER__.navigate('/')">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-emerald-400 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+          <i class="fa-solid fa-bolt text-white text-lg"></i>
+        </div>
+        <span class="font-bold text-lg tracking-tight bg-gradient-to-r from-white via-slate-100 to-slate-400 bg-clip-text text-transparent">
+          ${resolvedTitle}
+        </span>
+      </div>
+
+      <nav class="hidden md:flex items-center gap-1 bg-slate-800/50 p-1 rounded-xl border border-slate-700/50 text-sm">
+        <button onclick="window.__AVERIA_ROUTER__.navigate('/')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Home</button>
+        <button onclick="window.__AVERIA_ROUTER__.navigate('/catalog')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Catalog</button>
+        <button onclick="window.__AVERIA_ROUTER__.navigate('/cart')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Cart</button>
+        <button onclick="window.__AVERIA_ROUTER__.navigate('/orders')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Orders</button>
+        <button onclick="window.__AVERIA_ROUTER__.navigate('/admin')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Admin</button>
+        <button onclick="window.__AVERIA_ROUTER__.navigate('/settings')" class="px-3.5 py-1.5 rounded-lg font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 transition-colors">Settings</button>
+      </nav>
+
+      <div class="flex items-center gap-3">
+        <button onclick="window.__AVERIA_ROUTER__.navigate('/cart')" class="relative p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-colors">
+          <i class="fa-solid fa-cart-shopping text-sm"></i>
+          <span id="cart-badge" class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-indigo-500 text-[10px] font-bold flex items-center justify-center text-white ring-2 ring-slate-950">0</span>
+        </button>
+        <button onclick="window.__AVERIA_ROUTER__.navigate('/catalog')" class="hidden sm:inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm transition-all shadow-md shadow-indigo-600/30">
+          <span>Explore</span>
+          <i class="fa-solid fa-arrow-right text-xs"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Root Application Container -->
+  <main id="app" class="flex-1 flex flex-col"></main>
+
+  <!-- Dynamic Modal & Toast Mounts -->
+  <div id="modal-root"></div>
+  <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2"></div>
+
+  <!-- Companion Module Script Tags -->
+  <script src="src/data.js"></script>
+  <script src="src/engine.js"></script>
+  <script src="src/router.js"></script>
+  <script src="src/qaGuard.js"></script>
+  <script src="src/pages/HomePage.js"></script>
+  <script src="src/pages/AppPages.js"></script>
+
+  <!-- Router Initialization -->
+  <script>
+    window.addEventListener('DOMContentLoaded', function() {
+      if (window.__AVERIA_ROUTER__) {
+        window.__AVERIA_ROUTER__.register('/', function() {
+          if (window.HomePage && typeof window.HomePage.render === 'function') window.HomePage.render();
+        });
+        if (window.AppPages) {
+          window.__AVERIA_ROUTER__.register('/catalog', function() { window.AppPages.renderCatalog(); });
+          window.__AVERIA_ROUTER__.register('/detail', function(p) { window.AppPages.renderDetail(p); });
+          window.__AVERIA_ROUTER__.register('/cart', function() { window.AppPages.renderCart(); });
+          window.__AVERIA_ROUTER__.register('/checkout', function() { window.AppPages.renderCheckout ? window.AppPages.renderCheckout() : window.AppPages.renderCart(); });
+          window.__AVERIA_ROUTER__.register('/orders', function() { window.AppPages.renderOrders(); });
+          window.__AVERIA_ROUTER__.register('/admin', function() { window.AppPages.renderAdmin(); });
+          window.__AVERIA_ROUTER__.register('/admin-analytics', function() { window.AppPages.renderAnalytics ? window.AppPages.renderAnalytics() : window.AppPages.renderAdmin(); });
+          window.__AVERIA_ROUTER__.register('/settings', function() { window.AppPages.renderSettings(); });
+          window.__AVERIA_ROUTER__.register('/about', function() { window.AppPages.renderAbout ? window.AppPages.renderAbout() : window.AppPages.renderCatalog(); });
+        }
+        window.__AVERIA_ROUTER__.navigate('/');
+      }
+    });
+  </script>
+</body>
+</html>` + "\n```";
+          }
+        }
+      } else {
+        const targetFilename = cfg.targetFile || `src/${agentRole}.js`;
+        const targetExt = targetFilename.endsWith('.sql') ? 'sql' : targetFilename.endsWith('.json') ? 'json' : 'javascript';
+        if (!output.includes("```")) {
+          output = "```" + targetExt + ":" + targetFilename + "\n// Auto-generated module for " + cfg.roleName + "\n```";
+        }
+      }
 
       return streamTextAsSSE(output);
     }
