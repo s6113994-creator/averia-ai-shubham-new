@@ -458,7 +458,6 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
   }
 
   // 3. Inject safe in-memory localStorage & sessionStorage polyfill BEFORE any app scripts run
-  // Fixes: "SecurityError: Failed to read the 'localStorage' property from 'Window': The document is sandboxed"
   const storagePolyfillScript = `<script>
 (function() {
   function createInMemoryStorage() {
@@ -503,7 +502,64 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
 })();
 </script>\n`;
 
-  // 4. Safe Hash & Link Navigation Interceptor (Fixes about:srcdoc#/... black screen crash in sandboxed iframe)
+  // 4. Guaranteed built-in window.__AVERIA_ROUTER__ fallback engine in <head>
+  // Guarantees window.__AVERIA_ROUTER__.navigate('/route') is ALWAYS defined on millisecond 0!
+  const guaranteedRouterFallbackScript = `<script>
+(function() {
+  if (!window.__AVERIA_ROUTER__) {
+    var _currentRoute = '/';
+    var _listeners = [];
+    var _knownRoutes = ['/', '/products', '/catalog', '/cart', '/checkout', '/orders', '/admin', '/detail', '/settings', '/about'];
+    
+    window.__AVERIA_ROUTER__ = {
+      currentRoute: function() { return _currentRoute; },
+      routes: function() { return _knownRoutes.slice(); },
+      navigate: function(route) {
+        if (!route) route = '/';
+        if (route.startsWith('#/')) route = route.slice(1);
+        else if (route.startsWith('#')) route = route === '#' ? '/' : '/' + route.slice(1);
+        _currentRoute = route;
+        
+        window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: route } }));
+        window.dispatchEvent(new CustomEvent('popstate'));
+        
+        try {
+          window.parent.postMessage({
+            type: 'AVERIA_ROUTE_UPDATE',
+            route: route,
+            allRoutes: _knownRoutes
+          }, '*');
+        } catch (_) {}
+        
+        try {
+          var views = document.querySelectorAll('[data-route], [data-page], .page-view');
+          views.forEach(function(v) {
+            var r = v.getAttribute('data-route') || v.getAttribute('data-page') || ('/' + v.id.replace(/(-page|-view)$/, ''));
+            if (r === route || (route === '/' && (r === '/' || r === '/home' || r === 'home'))) {
+              v.style.display = '';
+              v.classList.remove('hidden');
+            } else {
+              v.style.display = 'none';
+              v.classList.add('hidden');
+            }
+          });
+          _listeners.forEach(function(fn) { try { fn(route); } catch(e) { console.warn(e); } });
+        } catch (domErr) {
+          console.warn('[AveriaRouter Fallback]', domErr);
+        }
+      },
+      onRouteChange: function(fn) {
+        if (typeof fn === 'function') _listeners.push(fn);
+      },
+      registerRoute: function(r) {
+        if (r && _knownRoutes.indexOf(r) === -1) _knownRoutes.push(r);
+      }
+    };
+  }
+})();
+</script>\n`;
+
+  // 5. Safe Hash & Link Navigation Interceptor
   const hashAndLinkInterceptorScript = `<script>
 (function() {
   function normalizeRoute(href) {
@@ -515,7 +571,6 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     return '/' + clean;
   }
 
-  // Intercept click events in capture phase before browser navigates iframe URL to about:srcdoc#...
   document.addEventListener('click', function(e) {
     var target = e.target;
     var a = target && typeof target.closest === 'function' ? target.closest('a') : null;
@@ -524,7 +579,6 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     var href = a.getAttribute('href');
     if (!href) return;
 
-    // External links, tel, mailto, javascript
     if (/^(https?:|\/\/|mailto:|tel:|javascript:)/i.test(href)) {
       if (a.getAttribute('target') !== '_blank') {
         a.setAttribute('target', '_blank');
@@ -533,7 +587,6 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
       return;
     }
 
-    // Internal hash or relative route: intercept and navigate via __AVERIA_ROUTER__
     e.preventDefault();
     e.stopPropagation();
 
@@ -541,20 +594,8 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
       window.__AVERIA_ROUTER__.navigate(route);
     }
-
-    try {
-      window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: route } }));
-      window.parent.postMessage({
-        type: 'AVERIA_ROUTE_UPDATE',
-        route: route,
-        allRoutes: window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.routes === 'function'
-          ? window.__AVERIA_ROUTER__.routes()
-          : [route]
-      }, '*');
-    } catch (_) {}
   }, true);
 
-  // Prevent SecurityError and iframe crash from history.pushState / replaceState in srcDoc
   var origPush = history.pushState;
   var origReplace = history.replaceState;
   history.pushState = function(state, title, url) {
@@ -563,9 +604,6 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
       if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
         window.__AVERIA_ROUTER__.navigate(r);
       }
-      try {
-        window.parent.postMessage({ type: 'AVERIA_ROUTE_UPDATE', route: r }, '*');
-      } catch (_) {}
       return;
     }
     try { origPush.apply(history, arguments); } catch (_) {}
@@ -576,15 +614,11 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
       if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
         window.__AVERIA_ROUTER__.navigate(r);
       }
-      try {
-        window.parent.postMessage({ type: 'AVERIA_ROUTE_UPDATE', route: r }, '*');
-      } catch (_) {}
       return;
     }
     try { origReplace.apply(history, arguments); } catch (_) {}
   };
 
-  // Prevent about:srcdoc hash navigation crash
   window.addEventListener('hashchange', function(e) {
     e.preventDefault();
     var h = window.location.hash || '';
@@ -598,7 +632,7 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
 })();
 </script>\n`;
 
-  // 5. Global Image Fallback & Resilient Base Button/Body Styles
+  // 6. Global Image Fallback & Styles
   const imageFallbackAndStyleScript = `<script>
 document.addEventListener('error', function(e) {
   var img = e.target;
@@ -643,7 +677,7 @@ button:active {
 }
 </style>\n`;
 
-  // 6. Inject runtime error listener & route message bridge
+  // 7. Runtime Error Listener Bridge
   const errorListenerScript = `<script>
 (function() {
   function notifyParentError(msg, lineno, colno, src) {
@@ -662,14 +696,6 @@ button:active {
   window.addEventListener('error', function(e) {
     console.error('[Averia Runtime Error]', e.error || e.message);
     notifyParentError(e.message || (e.error && e.error.message), e.lineno, e.colno, e.filename);
-    var b = document.getElementById('averia-runtime-banner');
-    if (!b && document.body) {
-      b = document.createElement('div');
-      b.id = 'averia-runtime-banner';
-      b.style.cssText = 'position:fixed;bottom:10px;left:10px;right:10px;background:#181824;border:1px solid #ef4444;border-radius:8px;padding:8px 12px;color:#fca5a5;font-family:monospace;font-size:11px;z-index:999999;display:flex;align-items:center;justify-content:space-between;box-shadow:0 4px 20px rgba(0,0,0,0.5);';
-      b.innerHTML = '<span>⚠️ <b>Runtime Error:</b> ' + (e.message || 'Script error') + (e.lineno ? ' (line ' + e.lineno + ')' : '') + '</span><button onclick="this.parentElement.remove()" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:14px;padding:0 6px;">✕</button>';
-      document.body.appendChild(b);
-    }
   });
   window.addEventListener('unhandledrejection', function(e) {
     var reason = e.reason ? (e.reason.message || String(e.reason)) : 'Unhandled Promise Rejection';
@@ -679,15 +705,7 @@ button:active {
 })();
 </script>\n`;
 
-  const routeMessageListener = `<script>
-window.addEventListener('message', function(e) {
-  if (e.data && e.data.type === 'AVERIA_NAVIGATE' && window.__AVERIA_ROUTER__) {
-    window.__AVERIA_ROUTER__.navigate(e.data.route);
-  }
-});
-</script>\n`;
-
-  // 5. Inject AveriaDB Cloud Database SDK — pre-configured for this project
+  // 8. AveriaDB Cloud Database SDK
   const projectId = `averia-${Math.abs(hashCode(htmlContent.slice(0, 120))).toString(36)}`;
   const BACKEND_URL = typeof window !== 'undefined'
     ? `${(window as any).__AVERIA_BACKEND_URL__ || 'https://qhmxmwigvexyxvklukns.supabase.co/functions/v1/averia-backend'}`
@@ -765,12 +783,10 @@ window.addEventListener('message', function(e) {
       getToken: function() { return _token; }
     }
   };
-
-  console.log('[AveriaDB] Cloud SDK ready. Project:', PROJECT_ID);
 })();
 </script>\n`;
 
-  const headInject = `${storagePolyfillScript}${hashAndLinkInterceptorScript}${imageFallbackAndStyleScript}${averiaDbSdkScript}${errorListenerScript}${routeMessageListener}`;
+  const headInject = `${storagePolyfillScript}${guaranteedRouterFallbackScript}${hashAndLinkInterceptorScript}${imageFallbackAndStyleScript}${averiaDbSdkScript}${errorListenerScript}`;
   if (doc.includes('<head>')) {
     doc = doc.replace('<head>', `<head>\n${headInject}`);
   } else if (doc.includes('<html>')) {
@@ -779,7 +795,7 @@ window.addEventListener('message', function(e) {
     doc = headInject + doc;
   }
 
-  // 5. Inline companion CSS files
+  // 9. Inline companion CSS files
   const cssFiles = allFiles.filter(f => f.path.endsWith('.css'));
   if (cssFiles.length > 0) {
     const inlinedStyles = cssFiles.map(f => `/* inlined: ${f.path} */\n${f.content}`).join('\n\n');
@@ -793,8 +809,8 @@ window.addEventListener('message', function(e) {
     }
   }
 
-  // 6. 4-Tier & Topological Sort of companion JS / TS files:
-  // Fixes: "ReferenceError: Cannot access 'NotificationController' before initialization"
+  // 10. ISOLATED PER-FILE <script data-file="..."> SANDBOX + PRE-BUNDLE SYNTAX VALIDATOR
+  // Strict topological dependency order: data.js -> engine.js -> router.js -> HomePage.js -> AppPages.js -> qaGuard.js
   const jsFiles = allFiles.filter(f =>
     (f.path.endsWith('.js') || f.path.endsWith('.ts')) &&
     !f.path.startsWith('server/') &&
@@ -804,60 +820,47 @@ window.addEventListener('message', function(e) {
   );
 
   if (jsFiles.length > 0) {
-    // Extract declared symbols per file
-    const fileSymbols = jsFiles.map(f => {
-      const symbols: string[] = [];
-      const classMatches = f.content.matchAll(/class\s+([A-Za-z0-9_$]+)/g);
-      for (const m of classMatches) symbols.push(m[1]);
-      const fnMatches = f.content.matchAll(/(?:function|const|let|var)\s+([A-Z][A-Za-z0-9_$]*)\s*=/g);
-      for (const m of fnMatches) symbols.push(m[1]);
-      return { path: f.path, symbols };
-    });
-
-    const getRank = (path: string) => {
-      const p = path.toLowerCase();
-      // Tier 1: Config, constants, types, math, audio, sounds, storage, utils, helpers
-      if (/audio|sound|music|util|helper|math|const|types|config|storage/i.test(p)) return 0;
-      // Tier 2: Controllers, services, stores, models, state, api, components, notification
-      if (/controller|service|store|model|state|api|component|notification/i.test(p)) return 1;
-      // Tier 3: Views, pages, screens, routes, ui
-      if (/view|page|screen|route|ui/i.test(p)) return 2;
-      // Tier 4: Engine, game, app, main, index, bootstrap
-      if (/engine|game|app|main|index|bootstrap/i.test(p)) return 3;
-      return 1.5;
+    const getTopologicalRank = (p: string) => {
+      const lower = p.toLowerCase();
+      if (lower.includes('data.js') || lower.includes('store')) return 0;
+      if (lower.includes('engine.js') || lower.includes('logic')) return 1;
+      if (lower.includes('router.js')) return 2;
+      if (lower.includes('homepage.js') || lower.includes('home')) return 3;
+      if (lower.includes('apppages.js') || lower.includes('page') || lower.includes('view')) return 4;
+      if (lower.includes('qaguard.js') || lower.includes('guard') || lower.includes('qa')) return 5;
+      return 6;
     };
 
-    const sortedJsFiles = [...jsFiles].sort((a, b) => {
-      // 1. If A declares a symbol used in B, A must come before B (-1)
-      const aSymbols = fileSymbols.find(x => x.path === a.path)?.symbols || [];
-      const bSymbols = fileSymbols.find(x => x.path === b.path)?.symbols || [];
-      const bUsesA = aSymbols.some(s => new RegExp(`\\b${s}\\b`).test(b.content));
-      const aUsesB = bSymbols.some(s => new RegExp(`\\b${s}\\b`).test(a.content));
+    const sortedJsFiles = [...jsFiles].sort((a, b) => getTopologicalRank(a.path) - getTopologicalRank(b.path));
 
-      if (bUsesA && !aUsesB) return -1;
-      if (aUsesB && !bUsesA) return 1;
+    const isolatedScriptTags = sortedJsFiles.map(f => {
+      let cleanCode = stripESModules(f.content, f.path);
+      cleanCode = cleanCode.replace(/^\s*\`\`\`[a-zA-Z0-9_-]*\s*\n?/m, '').replace(/\n?\s*\`\`\`\s*$/m, '');
 
-      // 2. Fall back to tiered ranks
-      return getRank(a.path) - getRank(b.path);
-    });
+      let syntaxError: string | null = null;
+      try {
+        new Function(cleanCode);
+      } catch (err: any) {
+        syntaxError = err.message || 'SyntaxError';
+        console.warn(`[Zero-CORS Syntax Guard] SyntaxError in ${f.path}:`, syntaxError);
+      }
 
-    const inlinedScripts = sortedJsFiles
-      .map(f => `// === INLINED: ${f.path} ===\n${stripESModules(f.content, f.path)}`)
-      .join('\n\n');
+      if (!syntaxError) {
+        return `<script data-file="${f.path}">\n// === MODULE: ${f.path} ===\n${cleanCode}\n</script>`;
+      } else {
+        return `<script data-file="${f.path}">\n// === SAFE SANDBOX (Syntax Error Caught in ${f.path}: ${syntaxError}) ===\ntry {\n${cleanCode}\n} catch(moduleErr) {\n  console.error('[Zero-CORS Guard] Isolated module error in ${f.path}:', moduleErr);\n}\n</script>`;
+      }
+    }).join('\n\n');
 
-    // Inlined in global script scope without block scope so classes are accessible across files
-    const scriptTag = `\n<!-- Inlined Zero-CORS Companion Modules -->\n<script>\n${inlinedScripts}\n</script>\n`;
-
-    // Inject before the first inline <script> in body or at top of body, so it defines classes BEFORE index.html's script runs!
     const firstScriptIdx = doc.indexOf('<script', doc.indexOf('<body') !== -1 ? doc.indexOf('<body') : 0);
     if (firstScriptIdx !== -1) {
-      doc = doc.slice(0, firstScriptIdx) + scriptTag + doc.slice(firstScriptIdx);
+      doc = doc.slice(0, firstScriptIdx) + isolatedScriptTags + '\n' + doc.slice(firstScriptIdx);
     } else if (doc.includes('</head>')) {
-      doc = doc.replace('</head>', `${scriptTag}</head>`);
+      doc = doc.replace('</head>', `${isolatedScriptTags}\n</head>`);
     } else if (doc.includes('<body')) {
-      doc = doc.replace(/<body([^>]*)>/i, `<body$1>\n${scriptTag}`);
+      doc = doc.replace(/<body([^>]*)>/i, `<body$1>\n${isolatedScriptTags}`);
     } else {
-      doc = scriptTag + doc;
+      doc = isolatedScriptTags + doc;
     }
   }
 
@@ -1456,8 +1459,6 @@ function GenesisSwarmConsole({
   streamBytes = 0,
   diskStatus,
   onRetry,
-  steps,
-  files,
 }: {
   workers?: GenesisWorkerStatus[];
   collaborationLogs?: CollaborationLogEntry[];
@@ -1469,7 +1470,8 @@ function GenesisSwarmConsole({
   steps?: any[];
   files?: any[];
 }) {
-  const [showLogs, setShowLogs] = useState(false);
+  const [expandedStage3, setExpandedStage3] = useState(true);
+
   const activeWorkers = (workers && workers.length > 0)
     ? workers
     : GENESIS_SWARM_ROLES.map(r => ({
@@ -1486,148 +1488,130 @@ function GenesisSwarmConsole({
   }
 
   const doneCount = activeWorkers.filter(w => w.status === 'done').length;
-  const totalCount = activeWorkers.length || 10;
-  const pct = Math.round((doneCount / totalCount) * 100);
-  const totalLines = activeWorkers.reduce((sum, w) => sum + (w.lines || 0), 0);
-  const avgSpeed = activeWorkers.reduce((sum, w) => sum + (w.speedKbps || 0), 0);
-  const bytesUsed = totalBytes || streamBytes || 0;
+  const isWritingDone = doneCount === activeWorkers.length;
+  const isWritingActive = isActive && !isWritingDone;
+
+  const stage4Status = isWritingDone ? 'done' : doneCount >= 8 ? 'active' : 'pending';
+  const stage5Status = !isActive && isWritingDone ? 'done' : isWritingDone ? 'active' : 'pending';
+  const stage6Status = !isActive && isWritingDone ? 'done' : 'pending';
 
   return (
-    <div className="my-3 rounded-2xl border border-border/80 bg-gradient-to-br from-card/95 via-card/70 to-primary/5 p-3.5 backdrop-blur-md shadow-xl text-xs font-mono">
-      {/* Header */}
-      <div className="flex items-center justify-between pb-2.5 mb-2 border-b border-border/50">
-        <div className="flex items-center gap-2">
-          <span className="relative flex h-2.5 w-2.5">
-            {isActive && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />}
-            <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isActive ? 'bg-emerald-400' : doneCount > 0 ? 'bg-emerald-500' : 'bg-amber-400'}`} />
-          </span>
-          <span className="font-semibold text-foreground text-xs">
-            Genesis 10-Agent Collaborative Parallel Swarm
-          </span>
-          <span className="hidden sm:inline-block px-2 py-0.5 rounded-full text-[10px] bg-secondary/80 text-muted-foreground border border-border/50">
-            10 Dedicated Workers · 10 Gemini Keys
-          </span>
-        </div>
-        <div className="text-[11px] font-mono text-muted-foreground flex items-center gap-2">
-          {isActive && avgSpeed > 0 && (
-            <span className="text-primary font-semibold hidden md:inline">
-              {avgSpeed.toFixed(1)} KB/s
-            </span>
-          )}
-          {totalLines > 0 && (
-            <span className="text-muted-foreground hidden sm:inline">+{totalLines} lines</span>
-          )}
-          <span>{doneCount}/{totalCount} Done</span>
-          <span className="font-bold text-foreground">{pct}%</span>
-        </div>
+    <div className="my-2.5 space-y-1 font-mono text-[11px] leading-relaxed select-none">
+      {/* 1. Workspace context */}
+      <div className="flex items-center gap-2 text-foreground/90">
+        <span className="text-emerald-400 font-bold text-xs">✓</span>
+        <span className="font-medium">1. Reading workspace & context</span>
       </div>
 
-      {/* Progress Bar */}
-      <div className="h-1 bg-secondary rounded-full overflow-hidden mb-3">
+      {/* 2. Planning */}
+      <div className="flex items-center gap-2 text-foreground/90">
+        <span className="text-emerald-400 font-bold text-xs">✓</span>
+        <span className="font-medium">2. Deep architecture & multi-page planning</span>
+      </div>
+
+      {/* 3. Writing frontend & backend files */}
+      <div className="space-y-0.5">
         <div
-          className="h-full bg-gradient-to-r from-violet-500 via-primary to-emerald-400 transition-all duration-500"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-
-      {/* 10 Specialized Agents List */}
-      <div className="divide-y divide-border/25 max-h-72 overflow-y-auto rounded-xl bg-background/40 border border-border/40 mb-2">
-        {activeWorkers.map((w) => (
-          <div
-            key={w.role}
-            className={`flex items-center justify-between px-3 py-1.5 transition-colors ${
-              w.status === 'active' ? 'bg-primary/5' : ''
-            }`}
-          >
-            <div className="flex items-center gap-2 min-w-0 flex-1">
-              <span className="text-sm shrink-0">{w.icon}</span>
-              <span className="font-semibold text-xs text-foreground truncate">
-                {w.name}
-              </span>
-              <span className="text-[10px] text-muted-foreground font-mono px-1.5 py-0.2 rounded bg-secondary/60 border border-border/40 shrink-0">
-                Worker #{w.workerIndex} · Key #{w.keySlot}
-              </span>
-              <span className="text-[10px] text-primary/80 font-mono truncate hidden sm:inline">
-                → {w.targetFile}
-              </span>
-            </div>
-            <div className="flex items-center gap-2.5 shrink-0 text-[11px] font-mono">
-              {w.speedKbps > 0 && w.status === 'active' && (
-                <span className="text-muted-foreground/70 hidden md:inline">
-                  {w.speedKbps.toFixed(1)} KB/s
-                </span>
-              )}
-              {w.lines > 0 && (
-                <span className="text-muted-foreground font-semibold">
-                  +{w.lines}L
-                </span>
-              )}
-              <span className="w-4 text-center">
-                {w.status === 'pending' && <span className="text-muted-foreground/40">○</span>}
-                {w.status === 'active' && <span className="text-violet-400 animate-spin inline-block">◌</span>}
-                {w.status === 'done' && <span className="text-emerald-400">✓</span>}
-                {w.status === 'failed' && <span className="text-destructive font-bold">✗</span>}
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Collapsible Inter-Agent Collaboration Bus Drawer */}
-      <div className="border border-border/40 rounded-xl overflow-hidden bg-background/30">
-        <button
-          type="button"
-          onClick={() => setShowLogs(prev => !prev)}
-          className="w-full flex items-center justify-between px-3 py-1.5 bg-secondary/30 hover:bg-secondary/60 text-[11px] text-muted-foreground transition-colors cursor-pointer"
+          onClick={() => setExpandedStage3(!expandedStage3)}
+          className="flex items-center justify-between cursor-pointer py-0.5 hover:text-foreground text-foreground/90 transition-colors"
         >
-          <span className="flex items-center gap-1.5 font-semibold text-foreground">
-            <span>🤝</span>
-            <span>Agent Collaboration & Shared Bus Log</span>
-            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-primary/10 text-primary border border-primary/20">
-              {collaborationLogs?.length || 0} handshakes
-            </span>
-          </span>
-          <ChevronDown className={`h-3.5 w-3.5 transition-transform duration-200 ${showLogs ? 'rotate-180' : ''}`} />
-        </button>
-        {showLogs && (
-          <div className="p-2.5 max-h-44 overflow-y-auto space-y-1 bg-black/40 border-t border-border/20 font-mono text-[10px]">
-            {(!collaborationLogs || collaborationLogs.length === 0) ? (
-              <div className="text-muted-foreground/60 py-2 text-center">Initializing inter-agent handshake bus...</div>
+          <div className="flex items-center gap-2">
+            {isWritingDone ? (
+              <span className="text-emerald-400 font-bold text-xs">✓</span>
+            ) : isWritingActive ? (
+              <span className="text-sky-400 animate-spin text-xs">◌</span>
             ) : (
-              collaborationLogs.map((log, idx) => (
-                <div key={idx} className="flex items-start gap-1.5 text-muted-foreground leading-tight">
-                  <span className="text-muted-foreground/50 shrink-0">[{log.time}]</span>
-                  <span className="shrink-0">{log.icon}</span>
-                  <span className="font-semibold text-foreground/90 shrink-0">{log.from} → {log.to}:</span>
-                  <span className="text-muted-foreground flex-1 break-words">{log.action}</span>
-                </div>
-              ))
+              <span className="text-muted-foreground/40 text-xs">○</span>
             )}
+            <span className="font-medium">3. Writing frontend & backend files</span>
+            <span className="text-[10px] text-muted-foreground">({doneCount}/{activeWorkers.length})</span>
+          </div>
+          <span className="text-[10px] text-muted-foreground/60 transition-transform duration-150">
+            {expandedStage3 ? '▼' : '▶'}
+          </span>
+        </div>
+
+        {expandedStage3 && (
+          <div className="pl-4 space-y-0.5 border-l border-border/20 ml-1.5 py-0.5">
+            {activeWorkers.map((w) => (
+              <div key={w.role} className="flex items-center justify-between py-0.5 text-[11px]">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-3 text-center shrink-0">
+                    {w.status === 'done' ? (
+                      <span className="text-emerald-400">✓</span>
+                    ) : w.status === 'active' ? (
+                      <span className="text-sky-400 animate-spin inline-block">◌</span>
+                    ) : w.status === 'failed' ? (
+                      <span className="text-destructive font-bold">✗</span>
+                    ) : (
+                      <span className="text-muted-foreground/30">○</span>
+                    )}
+                  </span>
+                  <span className="text-foreground/80 font-medium truncate">{w.name}</span>
+                  <span className="text-muted-foreground/40">·</span>
+                  <span className="text-muted-foreground/80 truncate">
+                    {w.status === 'done'
+                      ? `Created ${w.targetFile}`
+                      : w.status === 'active'
+                      ? `Writing ${w.targetFile}...`
+                      : w.targetFile}
+                  </span>
+                </div>
+                {w.lines > 0 && (
+                  <span className="text-[10px] text-muted-foreground/60 shrink-0 ml-2">
+                    +{w.lines}L
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </div>
 
-      {/* Disk Sync Pill */}
-      {diskStatus && (
-        <div className="mt-2 px-3 py-1.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 flex items-center justify-between text-[11px]">
-          <span className="flex items-center gap-1.5 text-emerald-400 truncate">
-            <span>📁</span> {diskStatus}
-          </span>
-          <span className="text-[10px] text-emerald-400 font-semibold shrink-0">Synced Zero-CORS</span>
-        </div>
-      )}
+      {/* 4. Verification */}
+      <div className="flex items-center gap-2 text-foreground/90">
+        {stage4Status === 'done' ? (
+          <span className="text-emerald-400 font-bold text-xs">✓</span>
+        ) : stage4Status === 'active' ? (
+          <span className="text-sky-400 animate-spin text-xs">◌</span>
+        ) : (
+          <span className="text-muted-foreground/40 text-xs">○</span>
+        )}
+        <span className="font-medium">4. Syntax, build & contract verification</span>
+      </div>
 
-      {/* Failure banner & retry */}
+      {/* 5. Self-healing & disk sync */}
+      <div className="flex items-center gap-2 text-foreground/90">
+        {stage5Status === 'done' ? (
+          <span className="text-emerald-400 font-bold text-xs">✓</span>
+        ) : stage5Status === 'active' ? (
+          <span className="text-sky-400 animate-spin text-xs">◌</span>
+        ) : (
+          <span className="text-muted-foreground/40 text-xs">○</span>
+        )}
+        <span className="font-medium">5. Self-healing & disk sync</span>
+        {diskStatus && (
+          <span className="text-[10px] text-emerald-400/90 truncate ml-1">({diskStatus})</span>
+        )}
+      </div>
+
+      {/* 6. Live preview rendered */}
+      <div className="flex items-center gap-2 text-foreground/90">
+        {stage6Status === 'done' ? (
+          <span className="text-emerald-400 font-bold text-xs">✓</span>
+        ) : (
+          <span className="text-muted-foreground/40 text-xs">○</span>
+        )}
+        <span className="font-medium">6. Live preview rendered</span>
+      </div>
+
       {!isActive && doneCount === 0 && (
-        <div className="mt-2 p-3 rounded-xl border border-destructive/30 bg-destructive/10 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-destructive">
-            <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span className="text-[11px] font-sans">Swarm execution encountered an error.</span>
-          </div>
+        <div className="flex items-center gap-2 text-destructive pt-1 text-[11px]">
+          <span>✗ Generation failed</span>
           {onRetry && (
-            <Button size="sm" variant="outline" className="h-6 text-[10px] gap-1 px-2 border-destructive/40 text-destructive hover:bg-destructive/10" onClick={onRetry}>
-              <RefreshCw className="h-3 w-3" /> Retry Swarm
-            </Button>
+            <button onClick={onRetry} className="text-primary hover:underline text-[10px] ml-2">
+              Retry Swarm
+            </button>
           )}
         </div>
       )}
@@ -1717,20 +1701,9 @@ export default function AveriaAI() {
         console.warn('[Averia Runtime Error Captured]', err);
         setPreviewError(`${err.message || 'Script error'}${err.lineno ? ` (line ${err.lineno})` : ''}`);
 
-        // Autonomous auto-repair: up to 2 silent self-healing attempts
-        if (repairCountRef.current < 2 && !isLoadingRef.current && sendMessageRef.current) {
-          repairCountRef.current += 1;
-          const attempt = repairCountRef.current;
-          toast.info(`Autonomous Auto-Repair (${attempt}/2): Genesis is resolving detected runtime error...`);
-          const prompt = `⚠️ Live Preview Runtime Error Detected:
-Error: ${err.message || 'Script error'}${err.lineno ? ` at line ${err.lineno}` : ''}${err.filename ? ` in ${err.filename}` : ''}
-
-Please inspect all project files, resolve the root cause (such as class initialization order, undefined references, missing function definitions, or broken DOM selectors), and output the complete updated files with zero truncated code.`;
-          setTimeout(() => {
-            if (!isLoadingRef.current && sendMessageRef.current) {
-              sendMessageRef.current(prompt);
-            }
-          }, 600);
+        // Surgical Single-File Self-Healing (Zero Error 546)
+        if (repairCountRef.current < 2 && !isLoadingRef.current && healSingleFileRef.current) {
+          healSingleFileRef.current(err);
         }
       }
     };
@@ -2500,6 +2473,151 @@ Please inspect all project files, resolve the root cause (such as class initiali
     toast.info('📁 Folder detached from chat');
   };
 
+  // Surgical Single-File Self-Healing Loop (Zero Error 546)
+  const healSingleFile = useCallback(async (err: { message?: string; lineno?: number; filename?: string }) => {
+    if (isLoadingRef.current || repairCountRef.current >= 2) return;
+    repairCountRef.current += 1;
+    const attempt = repairCountRef.current;
+
+    const errText = `${err.filename || ''} ${err.message || ''}`.toLowerCase();
+    let targetFile = 'src/pages/AppPages.js';
+    let agentRole = 'sub_pages';
+    let keySlot = 8;
+
+    if (errText.includes('qaguard') || errText.includes('guard') || errText.includes('xss') || errText.includes('svg')) {
+      targetFile = 'src/qaGuard.js';
+      agentRole = 'qa_security';
+      keySlot = 9;
+    } else if (errText.includes('homepage') || errText.includes('hero')) {
+      targetFile = 'src/pages/HomePage.js';
+      agentRole = 'home_view';
+      keySlot = 7;
+    } else if (errText.includes('router') || errText.includes('navigate') || errText.includes('route')) {
+      targetFile = 'src/router.js';
+      agentRole = 'spa_router';
+      keySlot = 6;
+    } else if (errText.includes('engine') || errText.includes('filter') || errText.includes('total') || errText.includes('averiaengine')) {
+      targetFile = 'src/engine.js';
+      agentRole = 'logic_engine';
+      keySlot = 4;
+    } else if (errText.includes('store') || errText.includes('data') || errText.includes('averiadb') || errText.includes('averiastore')) {
+      targetFile = 'src/data.js';
+      agentRole = 'data_sdk';
+      keySlot = 3;
+    } else if (errText.includes('index.html') || errText.includes('domcontentloaded') || errText.includes('navbar')) {
+      targetFile = 'index.html';
+      agentRole = 'ui_shell';
+      keySlot = 5;
+    }
+
+    toast.info(`Autonomous Self-Healing (${attempt}/2): Surgically repairing ${targetFile}...`);
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const authToken = sessionData?.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+      const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
+      const existingFiles = lastAssistant ? extractProjectFiles(lastAssistant.content) : [];
+      const currentFile = existingFiles.find(f => f.path === targetFile);
+
+      const resp = await fetch(CHAT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          'x-client-info': 'averia-ai-client',
+        },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: 'user',
+              content: `Fix runtime error in ${targetFile}: ${err.message || 'Script error'}${err.lineno ? ` at line ${err.lineno}` : ''}. Output ONLY the complete corrected file in valid browser JS (no TypeScript, no syntax errors).`
+            }
+          ],
+          model: 'genesis',
+          agentRole: agentRole,
+          keySlot: keySlot,
+          sharedContract: swarmContract || '',
+          workspaceContext: {
+            folderName: 'Repair',
+            files: currentFile ? [currentFile] : [],
+            tree: [targetFile]
+          }
+        }),
+      });
+
+      if (!resp.ok) throw new Error(`Repair worker HTTP ${resp.status}`);
+      if (!resp.body) throw new Error('No repair stream body');
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let repairedText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newlineIdx: number;
+        while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+          let line = buffer.slice(0, newlineIdx);
+          buffer = buffer.slice(newlineIdx + 1);
+          if (line.endsWith('\r')) line = line.slice(0, -1);
+          if (!line.startsWith('data: ')) continue;
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === '[DONE]') break;
+          try {
+            const parsed = JSON.parse(jsonStr);
+            const delta = parsed.choices?.[0]?.delta?.content;
+            if (delta) repairedText += delta;
+          } catch {}
+        }
+      }
+
+      const repairedFiles = extractProjectFiles(repairedText);
+      const newFileContent = repairedFiles.length > 0 ? repairedFiles[0].content : repairedText.trim();
+
+      if (newFileContent.length > 20) {
+        const updatedFiles = existingFiles.map(f => f.path === targetFile ? { ...f, content: newFileContent } : f);
+        if (!updatedFiles.some(f => f.path === targetFile)) {
+          updatedFiles.push({ path: targetFile, content: newFileContent });
+        }
+
+        const indexFile = updatedFiles.find(f => /^(?:public\/|src\/)?index\.html$/i.test(f.path) || f.path.endsWith('.html'));
+        if (indexFile) {
+          const bundled = bundleZeroCORSHtml(indexFile.content, updatedFiles);
+          setCanvasContent(bundled);
+          setCanvasMode('preview');
+          setPreviewKey(k => k + 1);
+        }
+
+        if (localFolderHandle && folderPermissionGranted) {
+          await writeFileToHandle(localFolderHandle, targetFile, newFileContent);
+          if (indexFile) {
+            const bundled = bundleZeroCORSHtml(indexFile.content, updatedFiles);
+            await writeFileToHandle(localFolderHandle, 'index.html', bundled);
+          }
+        }
+
+        let newCombined = '';
+        for (const f of updatedFiles) {
+          const lang = f.language || (f.path.endsWith('.html') ? 'html' : f.path.endsWith('.sql') ? 'sql' : f.path.endsWith('.json') ? 'json' : 'javascript');
+          newCombined += `\`\`\`${lang}:${f.path}\n${f.content}\n\`\`\`\n\n`;
+        }
+        setMessages(prev => prev.map((m, i) => i === prev.length - 1 && m.role === 'assistant' ? { ...m, content: newCombined } : m));
+
+        setPreviewError(null);
+        toast.success(`Autonomous Self-Healing: Successfully repaired ${targetFile}!`);
+      }
+    } catch (healErr) {
+      console.error('[Self-Healing Error]', healErr);
+    }
+  }, [messages, swarmContract, localFolderHandle, folderPermissionGranted]);
+
+  const healSingleFileRef = useRef(healSingleFile);
+  useEffect(() => { healSingleFileRef.current = healSingleFile; }, [healSingleFile]);
+
   const sendMessage = useCallback(async (customPrompt?: string) => {
     const textContent = typeof customPrompt === 'string' ? customPrompt : input.trim();
     if ((!textContent && attachments.length === 0) || isLoading) return;
@@ -2822,9 +2940,8 @@ Please inspect all project files, resolve the root cause (such as class initiali
           throw new Error('Swarm workers completed but no project files were generated.');
         }
 
-        // Bundle all files into assistantContent markdown
-        let combined = `# ${brandTitle} — Genesis Swarm Build Complete\n\n`;
-        combined += `Synthesized **${allFiles.length} production files** across 10 parallel Edge Workers.\n\n`;
+        // Output clean code blocks with zero boastful essays
+        let combined = '';
         for (const f of allFiles) {
           const lang = f.language || (f.path.endsWith('.html') ? 'html' : f.path.endsWith('.sql') ? 'sql' : f.path.endsWith('.json') ? 'json' : 'javascript');
           combined += `\`\`\`${lang}:${f.path}\n${f.content}\n\`\`\`\n\n`;

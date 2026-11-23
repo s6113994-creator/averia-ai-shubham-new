@@ -1151,14 +1151,20 @@ RULES: Attach to window.HomePage = HomePage. Start immediately on line 1 with \`
           roleName: "Sub-Pages & Views Specialist",
           prompt: `You are the Sub-Pages & Views Specialist in the 10-agent Genesis swarm.
 Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`javascript:src/pages/AppPages.js — Complete views for all application sub-routes exported as window.AppPages with:
-1. renderCatalog(): Searchable, filterable catalog/dashboard with category buttons, price filters, grid/table toggle, and "Add to Cart" / "Inspect" buttons
-2. renderDetail(params): Item deep-dive with tabs (Overview, Specs, Reviews), image preview, quantity selector, and back button (window.__AVERIA_ROUTER__.goBack())
-3. renderCart(): Live cart table, quantity +/- buttons, promo code input, order summary, and checkout button
-4. renderOrders(): Order history with statuses (Processing, Shipped, Delivered) and tracking modal
-5. renderAdmin(): Admin dashboard for managing records (Add item form, delete button, stock update) connected to window.AveriaStore
-6. renderSettings(): Preferences (dark/light, email notifications, currency) saved to localStorage
-7. renderAbout(): Team cards, FAQ accordion, and interactive contact form
+\`\`\`javascript:src/pages/AppPages.js — Deep hierarchical multi-page views exported as window.AppPages with:
+1. renderCatalog(): Searchable, filterable catalog/dashboard with category pills, price range slider, grid/table view toggle, live search filter, and "Inspect" / "Add to Cart" actions
+2. renderDetail(params): Deep drill-down detail view with multi-tab panels (Overview, Technical Specs, Verified Customer Reviews, Delivery ETA), interactive image gallery, quantity incrementer, and back button (window.__AVERIA_ROUTER__.goBack())
+3. renderCart(): Live responsive cart drawer & table, line-item quantity modifiers, promo-code applicator with instant calculation, order breakdown (Subtotal, Tax, Shipping, Total), and Checkout CTA
+4. renderCheckout(): Multi-step checkout wizard (Shipping Address, Payment Method, Order Review), form validation, and "Confirm Order" button that records to window.AveriaDB
+5. renderOrders(): Detailed order history with lifecycle tracking badges (Pending -> Processing -> Shipped -> Delivered), order search, and drill-down tracking modal (/order-tracking)
+6. renderAdmin(): Complete administration portal (/admin) with live stats cards, Add/Edit/Delete record modal dialogs, status toggles, and live AveriaDB table sync
+7. renderAnalytics(): Nested admin drill-down (/admin-analytics) with revenue charts, order volume metrics, and export data buttons
+8. renderSettings(): User preferences (theme mode, currency selector, notifications toggle) with localStorage persistence
+9. renderAbout(): Mission statement, team bios, interactive FAQ accordion, and inquiry contact form
+MANDATORY CODE QUALITY RULES:
+- STRICT VALID BROWSER JAVASCRIPT (ES5/ES2020): ZERO TypeScript types/interfaces (NO ': string', NO ': void', NO '<T>').
+- SAFE STRING ESCAPING: Use valid template literals, do not introduce unclosed syntax or unescaped nested backticks.
+- ZERO DEAD BUTTONS: Wire EVERY navigation link/button to onclick="window.__AVERIA_ROUTER__.navigate('/route')".
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
 RULES: Attach to window.AppPages = AppPages. Start immediately on line 1 with \`\`\`javascript:src/pages/AppPages.js. ZERO preamble. Complete code only.`
