@@ -383,7 +383,7 @@ export async function executeWithGeminiRotation(
         model: isLovable ? `google/${currentModel}` : currentModel,
         messages: finalMessages,
         stream: options.stream ?? false,
-        max_tokens: Math.min(options.maxTokens ?? 8192, 8192),
+        max_tokens: Math.min(options.maxTokens ?? 16384, 16384),
       };
 
       if (options.jsonMode && !isLovable) {

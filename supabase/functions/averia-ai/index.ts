@@ -1012,53 +1012,60 @@ ${memoryContext}`;
       const ROLE_CONFIGS: Record<string, { roleName: string; prompt: string }> = {
         architect: {
           roleName: "System Architect",
-          prompt: `You are the System Architect in the 10-agent Genesis swarm.
-Your job is to generate ONLY TWO files for "${resolvedTitle}":
-1. \`\`\`json:package.json — Complete manifest with name "${resolvedTitle.toLowerCase().replace(/[^a-z0-9]/g, '-')}", scripts ("dev", "build"), and dependencies (express, cors, tailwindcss, lucide-react).
-2. \`\`\`markdown:README.md — Comprehensive architecture specification, list of modules, route table, database schema overview, and setup instructions.
+          prompt: `You are the Principal System Architect in the Genesis full-stack compiler swarm.
+Your job is to generate THREE essential project manifest files for "${resolvedTitle}" (${userGoal}):
+1. \`\`\`json:package.json — Production manifest with name "${resolvedTitle.toLowerCase().replace(/[^a-z0-9]/g, '-')}", scripts ("dev", "build", "start", "preview"), and full dependencies (express, cors, dotenv, pg, lucide-react, tailwindcss).
+2. \`\`\`markdown:README.md — Comprehensive engineering documentation detailing: system architecture, multi-page route table, database schema, state management contract, Web Audio sound engine, and deployment guide.
+3. \`\`\`bash:.env.example — Environment variable template with PORT, DATABASE_URL, SUPABASE_URL, SUPABASE_ANON_KEY, and API keys.
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
-RULES: Start immediately on line 1 with \`\`\`json:package.json. ZERO conversational prose. Every file must be complete.`
+RULES: Start immediately on line 1 with \`\`\`json:package.json. ZERO conversational prose. Every file must be complete and production ready.`
         },
         db_engineer: {
           roleName: "Database & API Engineer",
-          prompt: `You are the Database Engineer in the 10-agent Genesis swarm.
-Your job is to generate ONLY ONE file for "${resolvedTitle}":
+          prompt: `You are the Lead Database Architect in the Genesis full-stack compiler swarm.
+Your job is to generate a comprehensive, production-grade PostgreSQL database schema for "${resolvedTitle}" (${userGoal}):
 \`\`\`sql:schema.sql — Complete PostgreSQL DDL with:
-- CREATE TABLE IF NOT EXISTS statements for all domain collections matching the application goal: "${userGoal}"
-- UUID primary keys, foreign key relations, indices on search columns, CHECK constraints, and timestamps
-- Row-Level Security (RLS) policies
-- Pre-populated realistic seed data (at least 8-10 authentic records with realistic names, metadata, and statuses)
+- Enable extensions: "uuid-ossp", "pgcrypto"
+- CREATE TABLE IF NOT EXISTS statements for all domain entities (users, items/products/games, orders/sessions, activities, settings, leaderboard/stats)
+- Primary keys (UUID default uuid_generate_v4()), foreign key constraints with ON DELETE CASCADE, NOT NULL checks, and CHECK constraints
+- B-tree indices on high-cardinality foreign keys, search fields, and created_at timestamps
+- Row-Level Security (RLS) enabled on all tables with permissive development policies
+- Automatic updated_at trigger function
+- Rich, authentic seed data: At least 10-15 realistic, fully populated domain records with authentic text, prices, categories, tags, and status fields
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
-RULES: Start immediately on line 1 with \`\`\`sql:schema.sql. ZERO conversational prose. Complete SQL only.`
+RULES: Start immediately on line 1 with \`\`\`sql:schema.sql. ZERO conversational prose. Deep, complete SQL only.`
         },
         backend_api: {
           roleName: "Backend REST API Engineer",
-          prompt: `You are the Backend API Engineer in the 10-agent Genesis swarm.
-Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`javascript:server/index.js — Complete Express.js REST API server with:
-- express, cors, express.json() middleware
-- REST CRUD routes matching domain entities: GET /api/items, POST /api/items, GET /api/items/:id, PATCH /api/items/:id, DELETE /api/items/:id
-- Domain action endpoints (e.g. /api/action, /api/process, /api/auth)
-- Health check: GET /api/health
-- AveriaDB cloud database integration fallback
-- app.listen(port) with graceful startup log
+          prompt: `You are the Senior Backend Engineer in the Genesis full-stack compiler swarm.
+Your job is to generate TWO production backend server files for "${resolvedTitle}" (${userGoal}):
+1. \`\`\`javascript:server/index.js — Complete Node.js / Express.js REST API with:
+   - express, cors, express.json()
+   - Domain CRUD endpoints: GET /api/items, GET /api/items/:id, POST /api/items, PATCH /api/items/:id, DELETE /api/items/:id
+   - Domain actions (e.g., /api/checkout, /api/action, /api/stats, /api/leaderboard)
+   - Health check: GET /api/health
+   - In-memory mock fallback synchronized with window.AveriaDB
+   - Port binding: process.env.PORT || 3001
+2. \`\`\`typescript:supabase/functions/api/index.ts — Supabase Edge Function API handler (Deno) serving the same domain endpoints with CORS headers.
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
-RULES: Start immediately on line 1 with \`\`\`javascript:server/index.js. ZERO conversational prose. Complete code only.`
+RULES: Start immediately on line 1 with \`\`\`javascript:server/index.js. ZERO conversational prose. Complete backend code only.`
         },
         data_sdk: {
           roleName: "Data SDK & State Engineer",
-          prompt: `You are the Data SDK Engineer in the 10-agent Genesis swarm.
-Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`javascript:src/data.js — Complete data management layer wired to window.__AVERIA_APP__ with:
-- Initial pre-seeded mock records tailored authentically to: "${userGoal}"
-- AveriaDB cloud bridge: methods to list, create, update, remove items using window.AveriaDB
-- In-memory & LocalStorage state fallback when cloud DB is unavailable
-- Reactive event bus: subscribe(event, callback), notify(event, payload)
-- Domain state methods (CRUD operations, filtering, active selection, persistence)
-- REGISTRATION: Must register on the app bus:
+          prompt: `You are the Principal Client Data Architect in the Genesis full-stack compiler swarm.
+Your job is to generate the robust client-side data management layer for "${resolvedTitle}" (${userGoal}):
+\`\`\`javascript:src/data.js — Complete state & data SDK wired to window.__AVERIA_APP__ with:
+- Deep authentic initial dataset (12-16 realistic domain items with id, name, category, status, metrics, tags, image placeholder)
+- window.AveriaStore reactive state manager with:
+  * list(col, query), get(col, id), create(col, item), update(col, id, patch), remove(col, id), clear(col)
+  * search(col, term), filter(col, predicate), sort(col, key, asc)
+  * subscribe(event, cb), notify(event, data)
+- Seamless dual persistence: Calls window.AveriaDB cloud database when available, with instant in-memory & localStorage fallback
+- Synchronized cart/inventory/session state management
+- REGISTRATION:
   if (window.__AVERIA_APP__) window.__AVERIA_APP__.register('data', AveriaStore);
   window.AveriaStore = AveriaStore;
 SHARED ARCHITECTURAL CONTRACT:
@@ -1067,12 +1074,22 @@ RULES: Start immediately on line 1 with \`\`\`javascript:src/data.js. ZERO conve
         },
         logic_engine: {
           roleName: "Core Logic Engine",
-          prompt: `You are the Core Logic Engine Engineer in the 10-agent Genesis swarm.
-Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`javascript:src/engine.js — Core calculations, business logic, or game loop/physics for: "${userGoal}"
-- If the user prompt is a game: implement full 60FPS physics, loop updates, collision detection, score calculation, particle effects
-- If the user prompt is SaaS/E-Commerce/Tool: implement calculation algorithms, multi-facet filtering, sorting, state transitions, metric aggregators
-- REGISTRATION: Must register on the app bus:
+          prompt: `You are the Lead Interactive Engine Architect in the Genesis full-stack compiler swarm.
+Your job is to generate the core interactive engine and calculation algorithms for "${resolvedTitle}" (${userGoal}):
+\`\`\`javascript:src/engine.js — Core calculations, business logic, or 60FPS game loop:
+- IF THE PROMPT IS A GAME:
+  * Full 60FPS requestAnimationFrame canvas loop with delta-time smoothing
+  * Player physics: velocity, acceleration, friction, jumping/movement, boundaries
+  * Multiple intelligent AI opponents or dynamic obstacle spawners with difficulty scaling
+  * Particle explosion & collision effect systems (visual feedback on hits/scores)
+  * PROCEDURAL WEB AUDIO API SYNTHESIZER: window.AveriaSound with zero external audio assets! Generates real-time sound effects for jump, laser/fire, hit/damage, coin/score collect, powerup, game over, and victory fanfare!
+  * Combo counter, power-up timers, and high-score cloud leaderboard sync via AveriaStore
+- IF THE PROMPT IS SAAS / E-COMMERCE / TOOL:
+  * Multi-metric statistical aggregators, tax/discount/shipping calculation engines
+  * Multi-dimensional data filtering & sorting matrix
+  * Interactive SVG chart generation (area charts, bar graphs, trendlines with tooltips)
+  * Audit logging & workflow state machine transitions
+- REGISTRATION:
   if (window.__AVERIA_APP__) window.__AVERIA_APP__.register('engine', AveriaEngine);
   window.AveriaEngine = AveriaEngine;
 SHARED ARCHITECTURAL CONTRACT:
@@ -1081,15 +1098,15 @@ RULES: Start immediately on line 1 with \`\`\`javascript:src/engine.js. ZERO con
         },
         ui_shell: {
           roleName: "UI Shell & Layout Architect",
-          prompt: `You are the UI Shell Architect in the 10-agent Genesis swarm.
-Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`html:index.html — Complete, authentic root HTML5 layout specifically tailored to "${userGoal}":
-- <script src="https://cdn.tailwindcss.com"></script> and modern styling matching the domain (Game HUD/Theme for games, Storefront for e-commerce, Dashboard/Sidebar for SaaS, Creative Canvas for tools)
-- Navigation bar / Top bar with brand "${resolvedTitle}", domain-specific controls/tabs, and status indicators
-- Main app viewport: <main id="app" class="flex-1 min-h-[calc(100vh-4rem)]"></main>
-- Modal container: <div id="modal-root"></div>
-- Toast container: <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2"></div>
-- Script tags in topological order:
+          prompt: `You are the UI Shell Architect in the Genesis full-stack compiler swarm.
+Your job is to generate the complete root HTML5 shell for "${resolvedTitle}" (${userGoal}):
+\`\`\`html:index.html — Full modern responsive HTML5 shell matching world-class Lovable / Claude Code quality:
+- <script src="https://cdn.tailwindcss.com"></script> and modern styling matching the domain (Dark Glassmorphism for Games, Clean High-End Slate for SaaS/Dashboard, Vivid Modern for E-Commerce)
+- Responsive Header/Navbar with brand icon & title "${resolvedTitle}", search bar, category navigation tabs, active view indicator, and action badges (cart count, player health/level, user profile)
+- Main app viewport: <main id="app" class="flex-1 w-full min-h-[calc(100vh-4rem)] p-4 md:p-6"></main>
+- Modal root container: <div id="modal-root"></div>
+- Toast notification container: <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2"></div>
+- Script tags in strict topological order:
   <script src="src/data.js"></script>
   <script src="src/engine.js"></script>
   <script src="src/router.js"></script>
@@ -1110,14 +1127,25 @@ RULES: Start immediately on line 1 with \`\`\`html:index.html. ZERO conversation
         },
         spa_router: {
           roleName: "SPA Router Engineer",
-          prompt: `You are the SPA Router Engineer in the 10-agent Genesis swarm.
-Your job is to generate ONLY ONE file for "${resolvedTitle}":
+          prompt: `You are the SPA Router Engineer in the Genesis full-stack compiler swarm.
+Your job is to generate the robust client-side nested router for "${resolvedTitle}" (${userGoal}):
 \`\`\`javascript:src/router.js — Robust client-side hash router wired to window.__AVERIA_APP__:
 - Route registry: window.__AVERIA_APP__.route(path, renderFn)
-- Navigation: window.__AVERIA_APP__.navigate(path, params)
-- Back history: goBack()
-- Notification: window.parent.postMessage({ type: 'AVERIA_ROUTE_UPDATE', route, allRoutes }, '*')
-- Prevention of about:srcdoc hash navigation crashes
+- Deep nested route support:
+  * '/' -> HomePage.render()
+  * '/explore' or '/catalog'
+  * '/detail' or '/detail/:id' (with automatic URL parameter extraction)
+  * '/workspace' or '/play'
+  * '/analytics' or '/leaderboard'
+  * '/admin' or '/inventory'
+  * '/settings' or '/profile'
+- Navigation methods:
+  * window.__AVERIA_APP__.navigate(path, params)
+  * window.__AVERIA_APP__.goBack()
+  * window.__AVERIA_APP__.currentRoute
+- Breadcrumb tracking and active tab highlight synchronization
+- Post-message route telemetry to parent preview pane:
+  window.parent.postMessage({ type: 'AVERIA_ROUTE_UPDATE', route, allRoutes }, '*')
 - Dual registration:
   if (window.__AVERIA_APP__) window.__AVERIA_APP__.register('router', router);
   window.__AVERIA_ROUTER__ = window.__AVERIA_ROUTER__ || router;
@@ -1127,13 +1155,20 @@ RULES: Start immediately on line 1 with \`\`\`javascript:src/router.js. ZERO con
         },
         home_view: {
           roleName: "Home View Specialist",
-          prompt: `You are the Home View Specialist in the 10-agent Genesis swarm.
-Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`javascript:src/pages/HomePage.js — Primary view implementation for: "${userGoal}":
-- If the application is a GAME: Render a responsive HTML5 <canvas id="game-canvas"> and launch full interactive 60FPS gameplay loop with keyboard/touch controls, HUD, restart button, and high score display!
-- If the application is a SAAS / TOOL / DASHBOARD / E-COMMERCE: Render rich domain-specific hero, live metrics/stats cards, interactive item grid/list with filters, quick actions, and detail drilldowns!
-- Renders directly into: document.getElementById('app')
-- REGISTRATION: Must register route and export:
+          prompt: `You are the Lead Frontend View Architect in the Genesis full-stack compiler swarm.
+Your job is to generate the primary interactive Home / Main view for "${resolvedTitle}" (${userGoal}):
+\`\`\`javascript:src/pages/HomePage.js — Primary view implementation rendering into document.getElementById('app'):
+- IF THE APPLICATION IS A GAME:
+  * Full-screen responsive HTML5 <canvas id="game-canvas" class="w-full max-w-4xl mx-auto rounded-xl shadow-2xl border border-slate-700 bg-slate-900"></canvas>
+  * Controls HUD (Score, Level, Health bar, Sound toggle, Pause/Play, Restart)
+  * Touch on-screen buttons for mobile + Keyboard arrow/WASD listeners
+  * Launch game engine loop via window.AveriaEngine.start()
+- IF THE APPLICATION IS SAAS / E-COMMERCE / TOOL:
+  * High-impact Hero section with primary CTA and search/filter bar
+  * Live KPI / Metric summary cards (Total Revenue, Active Users, Performance, Conversion)
+  * Interactive Card Grid / Data Table with real-time category filtering, sorting, and search
+  * Quick-action buttons wired to window.__AVERIA_APP__.navigate('/detail', { id }) and modals
+- REGISTRATION:
   if (window.__AVERIA_APP__) {
     window.__AVERIA_APP__.route('/', function() { HomePage.render(); });
     window.__AVERIA_APP__.register('home', HomePage);
@@ -1145,32 +1180,36 @@ RULES: Start immediately on line 1 with \`\`\`javascript:src/pages/HomePage.js. 
         },
         sub_pages: {
           roleName: "Sub-Pages & Views Specialist",
-          prompt: `You are the Sub-Pages & Views Specialist in the 10-agent Genesis swarm.
-Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`javascript:src/pages/AppPages.js — Deep domain-specific secondary views, modals, and detail panels for: "${userGoal}":
-- Implement views tailored to the domain (e.g. /detail, /settings, /history, /admin, /analytics, /levels, /leaderboard, /inventory depending on the app)
-- Each view renders into document.getElementById('app') with full interactive buttons, back buttons, and state updates
-- REGISTRATION: Must register secondary routes:
+          prompt: `You are the Senior Application Views Engineer in the Genesis full-stack compiler swarm.
+Your job is to generate the deep secondary views, detail pages, and modals for "${resolvedTitle}" (${userGoal}):
+\`\`\`javascript:src/pages/AppPages.js — Complete multi-page views implementation rendering into document.getElementById('app'):
+- Must implement all secondary routes defined in contract:
+  1. renderExplore(params) or renderCatalog(params) — Rich searchable and filterable catalog with grid/list toggles
+  2. renderDetail(params) — In-depth view for a selected item/entity with image gallery, specs, action buttons, and review/activity log
+  3. renderAnalytics(params) or renderLeaderboard(params) — Interactive data charts, metrics breakdown, or top player leaderboard
+  4. renderAdmin(params) or renderWorkspace(params) — Full management view: Create new entity form with validation, edit/delete actions, and status toggles
+  5. renderSettings(params) — User preferences, theme toggle, notifications, and cloud sync status
+- ZERO DEAD BUTTONS: Every navigation link or button MUST call window.__AVERIA_APP__.navigate(...)
+- REGISTRATION:
   if (window.__AVERIA_APP__) {
     window.__AVERIA_APP__.register('pages', AppPages);
   }
   window.AppPages = AppPages;
-MANDATORY QUALITY RULES:
-- STRICT VALID BROWSER JAVASCRIPT: ZERO TypeScript types/interfaces (NO ': string', NO ': void', NO '<T>').
-- ZERO DEAD BUTTONS: Wire EVERY navigation link/button to window.__AVERIA_APP__.navigate('/route') or window.__AVERIA_ROUTER__.navigate('/route').
+MANDATORY: STRICT VALID BROWSER JAVASCRIPT. ZERO TypeScript syntax errors.
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
 RULES: Start immediately on line 1 with \`\`\`javascript:src/pages/AppPages.js. ZERO conversational prose. Complete browser JS only.`
         },
         qa_security: {
           roleName: "QA & Security Auditor",
-          prompt: `You are the QA & Security Auditor in the 10-agent Genesis swarm.
-Your job is to generate ONLY ONE file for "${resolvedTitle}":
-\`\`\`javascript:src/qaGuard.js — Quality assurance, security sanitization, and self-healing:
-- sanitizeHTML(str): XSS prevention
-- safeJSONParse(str, fallback): Safe JSON parsing
-- getFallbackSVG(label, width, height): In-memory SVG data-URI generator
-- runHealthCheck(): Verifies that window.__AVERIA_APP__, data, engine, and views are mounted properly
+          prompt: `You are the Lead QA & Security Engineer in the Genesis full-stack compiler swarm.
+Your job is to generate the quality assurance, security, and self-healing guard for "${resolvedTitle}" (${userGoal}):
+\`\`\`javascript:src/qaGuard.js — Client-side security and self-healing runtime:
+- sanitizeHTML(str): Robust XSS protection against script injection
+- safeJSONParse(str, fallback): Bulletproof JSON parsing
+- getFallbackSVG(label, width, height): High-quality dynamic SVG data-URI generator for missing images
+- showToast(message, type): Toast alert notification manager
+- runHealthCheck(): Verifies that window.__AVERIA_APP__, AveriaStore, AveriaEngine, HomePage, and AppPages are properly mounted and functional
 - REGISTRATION:
   if (window.__AVERIA_APP__) window.__AVERIA_APP__.register('qa', QAGuard);
   window.QAGuard = QAGuard;
@@ -1189,6 +1228,7 @@ RULES: Start immediately on line 1 with \`\`\`javascript:src/qaGuard.js. ZERO co
         stream: true,
         model: "gemini-2.5-flash",
         keySlot: slot,
+        maxTokens: 16384,
       });
     }
 

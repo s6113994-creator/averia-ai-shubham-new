@@ -495,22 +495,45 @@ function detectComponentName(code: string): string {
   return 'App';
 }
 
-function stripESModules(code: string, fileName?: string): string {
+export function transpileToVanillaJS(code: string, fileName?: string): { code: string; isJSX: boolean } {
   let cleaned = code;
 
-  // 1. Remove multiline or single-line import statements
-  // Handles: import { a, b } from '...'; import * as x from '...'; import x from '...'; import x, { y } from '...';
+  // 1. Strip markdown fences if present
+  cleaned = cleaned.replace(/^\s*```[a-zA-Z0-9_-]*(?::[^\n\r]*)?\s*\n?/m, '').replace(/\n?\s*```\s*$/m, '');
+
+  // 2. Detect JSX syntax
+  const isExplicitJSX = !!(fileName?.endsWith('.jsx') || fileName?.endsWith('.tsx'));
+  const hasJSXTags = /<[A-Z][A-Za-z0-9_]*[\s\/>]/.test(cleaned) ||
+    (/<div[\s>]|<span[\s>]|<button[\s>]|<header[\s>]|<main[\s>]|<footer[\s>]/.test(cleaned) &&
+     (cleaned.includes('return <') || cleaned.includes('render()') || cleaned.includes('React.') || cleaned.includes('useState')));
+  const isJSX = isExplicitJSX || hasJSXTags;
+
+  // 3. Strip TypeScript Interfaces and Type Aliases
+  cleaned = cleaned.replace(/^\s*(?:export\s+)?interface\s+[A-Za-z0-9_$]+(?:\s*<[^>]+>)?(?:\s+extends\s+[^{]+)?\s*\{[\s\S]*?\}/gm, '');
+  cleaned = cleaned.replace(/^\s*(?:export\s+)?type\s+[A-Za-z0-9_$]+(?:\s*<[^>]+>)?\s*=[\s\S]*?;/gm, '');
+
+  // 4. Strip TypeScript Function parameter and return types
+  cleaned = cleaned.replace(/\):\s*[A-Za-z0-9_$<>\[\]|, ]+\s*=>/g, ') =>');
+  cleaned = cleaned.replace(/\):\s*[A-Za-z0-9_$<>\[\]|, ]+\s*\{/g, ') {');
+  cleaned = cleaned.replace(/:\s*(?:string|number|boolean|any|void|unknown|never|object|Function|Record<[^>]+>|[A-Z][A-Za-z0-9_$]*)(?:\[\])?(?=[,\)=;])/g, '');
+
+  // 5. Strip "as <Type>" and "as const"
+  cleaned = cleaned.replace(/\s+as\s+[A-Za-z0-9_$<>\[\]]+/g, '');
+
+  // 6. Strip class access modifiers (public, private, protected, readonly)
+  cleaned = cleaned.replace(/^\s*(?:public|private|protected|readonly)\s+/gm, '');
+
+  // 7. Strip imports and exports (ES module shims)
   cleaned = cleaned.replace(/import\s+(?:(?:\*\s+as\s+[\w$]+)|(?:[\w$]+(?:\s*,\s*\{[\s\S]*?\})?)|(?:\{[\s\S]*?\}))\s+from\s*['"][^'"]+['"];?/g, '');
   cleaned = cleaned.replace(/^\s*import\s+['"][^'"]+['"];?\s*$/gm, '');
   cleaned = cleaned.replace(/import\s*\([^)]+\)/g, 'undefined');
 
-  // 2. Remove multiline or single-line export statements
   cleaned = cleaned.replace(/^\s*export\s+default\s+(function|class|async\s+function)\s+/gm, '$1 ');
   cleaned = cleaned.replace(/^\s*export\s+default\s+/gm, '');
   cleaned = cleaned.replace(/^\s*export\s+(const|let|var|function|class|async\s+function)\s+/gm, '$1 ');
   cleaned = cleaned.replace(/export\s*\{[\s\S]*?\}\s*;?/g, '');
 
-  // 3. Expose classes and functions on window so index.html inline scripts can find them immediately!
+  // 8. Auto-expose functions and classes on window
   const exposed: string[] = [];
   const classMatches = cleaned.matchAll(/class\s+([A-Za-z0-9_$]+)/g);
   for (const m of classMatches) {
@@ -522,14 +545,18 @@ function stripESModules(code: string, fileName?: string): string {
   }
 
   const exportShim = exposed.length > 0 ? `\n// Window exports for ${fileName || 'module'}\n${exposed.join('\n')}\n` : '';
-  return cleaned + exportShim;
+  return { code: cleaned + exportShim, isJSX };
+}
+
+function stripESModules(code: string, fileName?: string): string {
+  return transpileToVanillaJS(code, fileName).code;
 }
 
 function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] = []): string {
   let doc = htmlContent;
 
   // 1. Remove local script tags referencing companion files that we will inline
-  doc = doc.replace(/<script[^>]*src=["'](?:\.\/|\.\.\/|src\/|js\/)?[^"']+\.(?:js|ts)["'][^>]*>\s*<\/script>/gi, '');
+  doc = doc.replace(/<script[^>]*src=["'](?:\.\/|\.\.\/|src\/|js\/)?[^"']+\.(?:js|jsx|ts|tsx)["'][^>]*>\s*<\/script>/gi, '');
 
   // 2. Ensure Tailwind CDN is present in <head>
   if (!doc.includes('cdn.tailwindcss.com')) {
@@ -1020,10 +1047,11 @@ button:active {
     }
   }
 
-  // 10. ISOLATED PER-FILE <script data-file="..."> SANDBOX + PRE-BUNDLE SYNTAX VALIDATOR
+  // 10. UNIVERSAL IN-BROWSER TRANSPILER & ISOLATED <script> SANDBOX
+  // Supports .js, .jsx, .ts, .tsx with automated TypeScript stripping & Babel JSX compilation
   // Strict topological dependency order: data.js -> engine.js -> router.js -> HomePage.js -> AppPages.js -> qaGuard.js
   const jsFiles = allFiles.filter(f =>
-    (f.path.endsWith('.js') || f.path.endsWith('.ts')) &&
+    /\.(js|jsx|ts|tsx)$/i.test(f.path) &&
     !f.path.startsWith('server/') &&
     !f.path.includes('server.js') &&
     !f.path.includes('vite.config') &&
@@ -1033,35 +1061,49 @@ button:active {
   if (jsFiles.length > 0) {
     const getTopologicalRank = (p: string) => {
       const lower = p.toLowerCase();
-      if (lower.includes('data.js') || lower.includes('store')) return 0;
-      if (lower.includes('engine.js') || lower.includes('logic')) return 1;
-      if (lower.includes('router.js')) return 2;
-      if (lower.includes('homepage.js') || lower.includes('home')) return 3;
-      if (lower.includes('apppages.js') || lower.includes('page') || lower.includes('view')) return 4;
-      if (lower.includes('qaguard.js') || lower.includes('guard') || lower.includes('qa')) return 5;
+      if (lower.includes('data') || lower.includes('store')) return 0;
+      if (lower.includes('engine') || lower.includes('logic')) return 1;
+      if (lower.includes('router')) return 2;
+      if (lower.includes('homepage') || lower.includes('home')) return 3;
+      if (lower.includes('apppages') || lower.includes('page') || lower.includes('view')) return 4;
+      if (lower.includes('qaguard') || lower.includes('guard') || lower.includes('qa')) return 5;
       return 6;
     };
 
     const sortedJsFiles = [...jsFiles].sort((a, b) => getTopologicalRank(a.path) - getTopologicalRank(b.path));
 
+    let containsAnyJSX = false;
     const isolatedScriptTags = sortedJsFiles.map(f => {
-      let cleanCode = stripESModules(f.content, f.path);
-      cleanCode = cleanCode.replace(/^\s*\`\`\`[a-zA-Z0-9_-]*\s*\n?/m, '').replace(/\n?\s*\`\`\`\s*$/m, '');
+      const { code: cleanCode, isJSX } = transpileToVanillaJS(f.content, f.path);
+      if (isJSX) containsAnyJSX = true;
 
       let syntaxError: string | null = null;
-      try {
-        new Function(cleanCode);
-      } catch (err: any) {
-        syntaxError = err.message || 'SyntaxError';
-        console.warn(`[Zero-CORS Syntax Guard] SyntaxError in ${f.path}:`, syntaxError);
+      if (!isJSX) {
+        try {
+          new Function(cleanCode);
+        } catch (err: any) {
+          syntaxError = err.message || 'SyntaxError';
+          console.warn(`[Zero-CORS Syntax Guard] SyntaxError in ${f.path}:`, syntaxError);
+        }
       }
 
+      const scriptType = isJSX ? ' type="text/babel"' : '';
       if (!syntaxError) {
-        return `<script data-file="${f.path}">\n// === MODULE: ${f.path} ===\n${cleanCode}\n</script>`;
+        return `<script${scriptType} data-file="${f.path}">\n// === MODULE: ${f.path} ===\n${cleanCode}\n</script>`;
       } else {
-        return `<script data-file="${f.path}">\n// === SAFE SANDBOX (Syntax Error Caught in ${f.path}: ${syntaxError}) ===\ntry {\n${cleanCode}\n} catch(moduleErr) {\n  console.error('[Zero-CORS Guard] Isolated module error in ${f.path}:', moduleErr);\n}\n</script>`;
+        return `<script${scriptType} data-file="${f.path}">\n// === SAFE SANDBOX (Syntax Error Caught in ${f.path}: ${syntaxError}) ===\ntry {\n${cleanCode}\n} catch(moduleErr) {\n  console.error('[Zero-CORS Guard] Isolated module error in ${f.path}:', moduleErr);\n}\n</script>`;
       }
     }).join('\n\n');
+
+    // If JSX was detected, inject Babel Standalone CDN and React runtime
+    if (containsAnyJSX && !doc.includes('@babel/standalone')) {
+      const babelCdn = `\n<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>\n<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>\n<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>\n`;
+      if (doc.includes('<head>')) {
+        doc = doc.replace('<head>', `<head>${babelCdn}`);
+      } else {
+        doc = babelCdn + doc;
+      }
+    }
 
     const firstScriptIdx = doc.indexOf('<script', doc.indexOf('<body') !== -1 ? doc.indexOf('<body') : 0);
     if (firstScriptIdx !== -1) {
@@ -3006,12 +3048,20 @@ export default function AveriaAI() {
           },
         ]);
 
-        const incrementallyWritten = new Set<string>();
+        // ── 2-WAVE COLLISION-FREE PARALLEL EXECUTION ──
+        // Wave 1: Core UI, Engine & Multi-Page Views (4 Workers)
+        const WAVE_1_ROLES = GENESIS_SWARM_ROLES.filter(r =>
+          ['ui_shell', 'home_view', 'logic_engine', 'sub_pages'].includes(r.role)
+        );
+        // Wave 2: Data SDK, Deep Router, Backend API, SQL DB & QA (6 Workers)
+        const WAVE_2_ROLES = GENESIS_SWARM_ROLES.filter(r =>
+          ['data_sdk', 'spa_router', 'db_engineer', 'backend_api', 'architect', 'qa_security'].includes(r.role)
+        );
 
-        const workerPromises = GENESIS_SWARM_ROLES.map(async (role) => {
-          // 150ms micro-stagger between workers to prevent concurrency bursts & RPM spikes
-          if (role.keySlot > 0) {
-            await new Promise(r => setTimeout(r, role.keySlot * 150));
+        const runWorker = async (role: typeof GENESIS_SWARM_ROLES[number], waveIdx: number) => {
+          // 120ms micro-stagger inside each wave to prevent concurrent burst spikes
+          if (waveIdx > 0) {
+            await new Promise(r => setTimeout(r, waveIdx * 120));
           }
 
           const workerStartTime = Date.now();
@@ -3188,27 +3238,6 @@ export default function AveriaAI() {
               }
             }
 
-            // Incremental disk write
-            if (localFolderHandle && folderPermissionGranted) {
-              for (const f of parsedFiles) {
-                try {
-                  await writeFileToHandle(localFolderHandle, f.path, f.content);
-                  incrementallyWritten.add(f.path);
-                  setWrittenFiles(Array.from(incrementallyWritten));
-                  setDiskStatus(`Saved ${incrementallyWritten.size} files to ${localFolderName || 'workspace'}`);
-                } catch (wErr) {
-                  console.warn('[Swarm Incremental Write Error]', f.path, wErr);
-                }
-              }
-            }
-
-            // Live preview if index.html was emitted
-            const indexFile = parsedFiles.find(f => /^(?:public\/|src\/)?index\.html$/i.test(f.path) || f.path.endsWith('.html'));
-            if (indexFile && indexFile.content.length > 50) {
-              setCanvasContent(indexFile.content);
-              setCanvasMode('preview');
-            }
-
             // Collaboration handshake log
             setCollaborationLogs(prev => [
               ...prev,
@@ -3241,9 +3270,43 @@ export default function AveriaAI() {
             ]);
             return { role: role.role, files: [], content: '', error: err.message };
           }
-        });
+        };
 
-        const results = await Promise.allSettled(workerPromises);
+        // Dispatch Wave 1: Core UI, Engine & Multi-Page Views (4 Workers)
+        setCollaborationLogs(prev => [
+          ...prev,
+          {
+            time: now(),
+            from: 'Wave 1 Orchestrator',
+            to: 'UI & Engine Cluster',
+            action: 'Dispatched Wave 1: Core UI Shell, Interactive Engine, Home & Sub-Pages',
+            icon: '🎨',
+          },
+        ]);
+
+        const wave1Results = await Promise.allSettled(
+          WAVE_1_ROLES.map((role, idx) => runWorker(role, idx))
+        );
+
+        // Dispatch Wave 2: Data SDK, Deep Router, Backend API, SQL DB & QA (6 Workers)
+        setCollaborationLogs(prev => [
+          ...prev,
+          {
+            time: now(),
+            from: 'Wave 2 Orchestrator',
+            to: 'Backend & Data Cluster',
+            action: 'Dispatched Wave 2: Data SDK, Deep Router, Backend REST API, PostgreSQL Schema & QA Auditor',
+            icon: '🗄️',
+          },
+        ]);
+
+        const wave2Results = await Promise.allSettled(
+          WAVE_2_ROLES.map((role, idx) => runWorker(role, idx))
+        );
+
+        // ── STRICT 10/10 COMPLETION GATE ──
+        // Only after ALL 10 workers across Wave 1 & Wave 2 have resolved do we collect files, save to disk, and mount preview
+        const results = [...wave1Results, ...wave2Results];
 
         // Collect all files across 10 workers
         const filesMap = new Map<string, ProjectFile>();
