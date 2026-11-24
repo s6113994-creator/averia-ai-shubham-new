@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-goog-api-key",
 };
 
@@ -30,8 +30,30 @@ serve(async (req: Request) => {
       });
     }
 
-    const { model = "gemini-2.5-flash", contents, systemInstruction, generationConfig } = await req.json();
+    const body = await req.json().catch(() => ({}));
 
+    // Action 1: Dynamic Live Model Discovery (GET /v1beta/models)
+    if (body.action === "list_models") {
+      const listResp = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
+        method: "GET",
+        headers: {
+          "x-goog-api-key": apiKey,
+        },
+      });
+
+      const listData = await listResp.text();
+      return new Response(listData, {
+        status: listResp.status,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+        },
+      });
+    }
+
+    // Action 2: SSE Generation Stream
+    const { model = "gemini-2.5-flash", contents, systemInstruction, generationConfig } = body;
     const upstreamUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
 
     const upstream = await fetch(upstreamUrl, {
@@ -46,6 +68,18 @@ serve(async (req: Request) => {
         generationConfig,
       }),
     });
+
+    // Forward exact Google error status and details on failure
+    if (!upstream.ok) {
+      const errText = await upstream.text().catch(() => "");
+      return new Response(errText, {
+        status: upstream.status,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+        },
+      });
+    }
 
     return new Response(upstream.body, {
       status: upstream.status,
@@ -63,3 +97,4 @@ serve(async (req: Request) => {
     });
   }
 });
+

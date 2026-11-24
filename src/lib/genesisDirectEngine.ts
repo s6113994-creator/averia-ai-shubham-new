@@ -26,13 +26,141 @@ export interface GenesisWorkerResult {
 }
 
 export const GEMINI_CASCADE_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.5-flash',
   'gemini-2.5-flash',
   'gemini-2.5-pro',
+  'gemini-3.5-pro',
   'gemini-2.5-flash-lite',
   'gemini-2.0-flash',
   'gemini-1.5-pro',
   'gemini-1.5-flash',
 ];
+
+// Session cache for live discovered Gemini models
+let discoveredModelsCache: string[] | null = null;
+
+export function clearDiscoveredModelsCache(): void {
+  discoveredModelsCache = null;
+}
+
+/**
+ * Dynamically queries Google API (via proxy or direct) for live models supporting generateContent.
+ * Caches live models in memory so workers only call confirmed live models.
+ */
+export async function discoverSupportedGeminiModels(apiKey: string): Promise<string[]> {
+  if (discoveredModelsCache && discoveredModelsCache.length > 0) {
+    return discoveredModelsCache;
+  }
+
+  try {
+    let rawModels: any[] = [];
+
+    // 1. Try Vercel Edge Same-Origin Proxy (/api/gemini-stream)
+    try {
+      const resp = await fetch('/api/gemini-stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
+        body: JSON.stringify({ action: 'list_models' }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (Array.isArray(data.models)) rawModels = data.models;
+      }
+    } catch {}
+
+    // 2. Try Supabase Edge Proxy
+    if (rawModels.length === 0) {
+      try {
+        const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://qhmxmwigvexyxvklukns.supabase.co').replace(/\/+$/, '');
+        const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+        const sbHeaders: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        };
+        if (supabaseKey) {
+          sbHeaders['apikey'] = supabaseKey;
+          sbHeaders['authorization'] = `Bearer ${supabaseKey}`;
+        }
+        const resp = await fetch(`${supabaseUrl}/functions/v1/gemini-stream`, {
+          method: 'POST',
+          headers: sbHeaders,
+          body: JSON.stringify({ action: 'list_models' }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (Array.isArray(data.models)) rawModels = data.models;
+        }
+      } catch {}
+    }
+
+    // 3. Fallback: Direct Google API
+    if (rawModels.length === 0) {
+      try {
+        const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+          method: 'GET',
+          headers: { 'x-goog-api-key': apiKey },
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (Array.isArray(data.models)) rawModels = data.models;
+        }
+      } catch {}
+    }
+
+    // Filter models that support generateContent, strip 'models/' prefix, and exclude non-coding/media models
+    const validModels = rawModels
+      .filter((m: any) => {
+        const name = (m.name || '').replace(/^models\//, '').toLowerCase();
+        const methods = Array.isArray(m.supportedGenerationMethods) ? m.supportedGenerationMethods : [];
+        const supportsGenerate = methods.includes('generateContent');
+        const isExcluded = name.includes('embedding') ||
+                           name.includes('imagen') ||
+                           name.includes('aqa') ||
+                           name.includes('tts') ||
+                           name.includes('robotics') ||
+                           name.includes('audio');
+        return supportsGenerate && !isExcluded && name.startsWith('gemini');
+      })
+      .map((m: any) => (m.name || '').replace(/^models\//, ''));
+
+    if (validModels.length > 0) {
+      const PRIORITY_ORDER = [
+        'gemini-3.8-flash',
+        'gemini-3.5-flash-lite',
+        'gemini-3.5-flash',
+        'gemini-2.5-flash',
+        'gemini-2.5-pro',
+        'gemini-3.5-pro',
+        'gemini-2.5-flash-lite',
+        'gemini-2.0-flash',
+        'gemini-1.5-pro',
+        'gemini-1.5-flash',
+      ];
+
+      validModels.sort((a, b) => {
+        const idxA = PRIORITY_ORDER.indexOf(a);
+        const idxB = PRIORITY_ORDER.indexOf(b);
+        if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+        if (idxA !== -1) return -1;
+        if (idxB !== -1) return 1;
+        return a.localeCompare(b);
+      });
+
+      console.log(`[Genesis Live Models] Auto-discovered ${validModels.length} active Gemini models:`, validModels);
+      discoveredModelsCache = validModels;
+      return validModels;
+    }
+  } catch (err) {
+    console.warn('[Genesis Models] Dynamic discovery warning:', err);
+  }
+
+  return GEMINI_CASCADE_MODELS;
+}
 
 const LOCAL_STORAGE_KEY_GEMINI = 'averia_gemini_api_keys';
 
@@ -606,7 +734,12 @@ export async function streamGeminiRoleDirect({
   let currentSlot = keySlot % healthy.length;
   let keyAttempts = 0;
   let rateLimitRetries = 0;
+  let lastErrorMsg = '';
   const maxKeyAttempts = Math.max(availableKeys.length * 4, 20);
+
+  // Discover supported models live from Google API for this key
+  const liveModels = await discoverSupportedGeminiModels(healthy[currentSlot % healthy.length]);
+  const modelsToTry = liveModels.length > 0 ? liveModels : GEMINI_CASCADE_MODELS;
 
   while (keyAttempts < maxKeyAttempts) {
     healthy = getHealthyKeys();
@@ -614,9 +747,9 @@ export async function streamGeminiRoleDirect({
     keyAttempts++;
     let hit429 = false;
 
-    // Try cascading through models for this key
-    for (let mIdx = 0; mIdx < GEMINI_CASCADE_MODELS.length; mIdx++) {
-      const model = GEMINI_CASCADE_MODELS[mIdx];
+    // Try cascading through models confirmed live for this key
+    for (let mIdx = 0; mIdx < modelsToTry.length; mIdx++) {
+      const model = modelsToTry[mIdx];
       if (onModelCascade) onModelCascade(model);
 
       const requestPayload = {
@@ -645,6 +778,7 @@ export async function streamGeminiRoleDirect({
 
         // 404 Model Not Found -> Cascade to next model on same key
         if (response.status === 404) {
+          lastErrorMsg = `HTTP 404: Model ${model} not available on this API key`;
           console.warn(`[Genesis Direct] Model ${model} returned 404 on key #${currentSlot + 1}. Cascading...`);
           continue;
         }
@@ -652,6 +786,7 @@ export async function streamGeminiRoleDirect({
         // 400 / 403 API Key Invalid or Permission Denied -> Quarantine key immediately & re-route
         if (response.status === 400 || response.status === 403) {
           const errBody = await response.text().catch(() => '');
+          lastErrorMsg = `HTTP ${response.status}: ${errBody.slice(0, 100)}`;
           const isKeyError = response.status === 403 ||
             errBody.includes('API_KEY_INVALID') ||
             errBody.includes('PERMISSION_DENIED') ||
@@ -673,12 +808,13 @@ export async function streamGeminiRoleDirect({
           }
         }
 
-        // 429 Rate Limit / Quota -> Exponential backoff retry (1500ms * attempt, up to 4 retries) and rotate key slot
+        // 429 Rate Limit / Quota -> Exponential backoff retry (2000ms * attempt, up to 4 retries) and rotate key slot
         if (response.status === 429) {
           hit429 = true;
           rateLimitRetries++;
           const attempt = Math.min(rateLimitRetries, 4);
-          const backoffMs = 1500 * attempt;
+          const backoffMs = 2000 * attempt;
+          lastErrorMsg = `HTTP 429: Rate limit reached (attempt ${rateLimitRetries}/4)`;
           console.warn(`[Genesis Direct] Key #${currentSlot + 1} hit 429 rate limit (attempt ${rateLimitRetries}/4). Backing off for ${backoffMs}ms and rotating to next healthy key slot...`);
           healthy = getHealthyKeys();
           currentSlot = (currentSlot + 1) % healthy.length;
@@ -689,6 +825,7 @@ export async function streamGeminiRoleDirect({
 
         if (!response.ok || !response.body) {
           const errText = await response.text().catch(() => `HTTP ${response.status}`);
+          lastErrorMsg = `HTTP ${response.status}: ${errText.slice(0, 100)}`;
           throw new Error(`Google Gemini direct error (HTTP ${response.status}): ${errText.slice(0, 100)}`);
         }
 
@@ -797,6 +934,7 @@ export async function streamGeminiRoleDirect({
         };
 
       } catch (reqErr: any) {
+        lastErrorMsg = reqErr.message || String(reqErr);
         console.warn(`[Genesis Direct] Model ${model} on key #${currentSlot + 1} fetch error:`, reqErr.message);
       }
     }
@@ -810,19 +948,19 @@ export async function streamGeminiRoleDirect({
     }
   }
 
-  throw new Error(`Worker for ${role} failed across all Gemini models and available keys.`);
+  throw new Error(`Worker for ${role} failed (${lastErrorMsg || 'Google API error'}). Check key quota & model permissions.`);
 }
 
 /**
  * Run swarm roles through a Smart Rate-Limit-Safe Concurrency Pool
- * - maxConcurrent: 3 parallel streams at a time
- * - launchStaggerMs: 900ms launch stagger between new stream starts
+ * - maxConcurrent: 2 parallel streams at a time
+ * - launchStaggerMs: 1500ms launch stagger between new stream starts
  * - As soon as 1 stream finishes, next queued worker starts immediately
  */
 export async function runSwarmConcurrencyPool<T, R>(
   items: T[],
-  maxConcurrent = 3,
-  launchStaggerMs = 900,
+  maxConcurrent = 2,
+  launchStaggerMs = 1500,
   workerFn: (item: T, index: number) => Promise<R>
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);

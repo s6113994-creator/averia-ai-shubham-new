@@ -3079,9 +3079,21 @@ export default function AveriaAI() {
       return { role: m.role, content: m.content };
     });
 
-    // Auto-switch to genesis for build/create prompts and open workspace
-    const isBuildPrompt = /\b(build|create|make|design|generate|code|develop|write)\b.*\b(website|app|page|portfolio|dashboard|landing|component|site)\b/i.test(userMsg.content);
-    const effectiveModel = isBuildPrompt ? 'genesis' : selectedModel;
+    // Differentiate app/game building from normal conversational chatting
+    const isBuildPrompt = /\b(build|create|make|design|generate|code|develop|write|clone|program)\b.*\b(website|app|page|portfolio|dashboard|landing|component|site|game|saas|tool|platform|store|shop)\b/i.test(userMsg.content);
+    const isConversationalGreeting = /^(hi|hello|hey|namaste|salaam|good\s+(morning|afternoon|evening)|kya\s+kar\s+rahe\s+ho|what\s+are\s+you\s+doing|who\s+are\s+you|how\s+are\s+you|help|kaise\s+ho|kya\s+haal\s+hai|thanks|thank\s+you|ok|okay)[?!.,\s]*$/i.test(userMsg.content.trim());
+    const isCodingInstruction = /\b(html|css|javascript|typescript|react|tailwind|node|express|sql|postgres|drizzle|fix bug|add page|modify code)\b/i.test(userMsg.content);
+
+    const isAppBuildInstruction = isBuildPrompt || isCodingInstruction || (
+      selectedModel === 'genesis' &&
+      !isConversationalGreeting &&
+      userMsg.content.trim().split(/\s+/).length > 3
+    );
+
+    const effectiveModel = isAppBuildInstruction
+      ? 'genesis'
+      : (selectedModel === 'genesis' ? 'gemini-2.5-flash' : selectedModel);
+
     if (isBuildPrompt && selectedModel !== 'genesis') {
       setSelectedModel('genesis');
     }
@@ -3279,11 +3291,11 @@ export default function AveriaAI() {
           }
         };
 
-        // Dispatch 10 workers in Smart Rate-Limit-Safe Concurrency Pool (max 3 concurrent, 900ms stagger)
+        // Dispatch 10 workers in Smart Rate-Limit-Safe Concurrency Pool (max 2 concurrent, 1500ms stagger)
         const poolResults = await runSwarmConcurrencyPool(
           GENESIS_SWARM_ROLES as any,
-          3, // maxConcurrent = 3
-          900, // 900ms launch stagger
+          2, // maxConcurrent = 2
+          1500, // 1500ms launch stagger
           (role, idx) => runWorker(role, idx)
         );
 
@@ -3293,25 +3305,44 @@ export default function AveriaAI() {
 
         // Collect all files across 10 workers
         const filesMap = new Map<string, ProjectFile>();
+        let completedWorkersCount = 0;
+        const workerErrors: string[] = [];
+
         for (const res of results) {
-          if (res.status === 'fulfilled' && res.value.files) {
-            for (const f of res.value.files) {
-              if (f.content.length < 60 && f.content.includes('Auto-generated module for')) continue;
-              if (f.path === 'src/architect.js' || f.path === 'src/ui_shell.js' || f.path === 'src/db_engineer.js') continue;
-              const normalizedPath = (f.path.includes('ui_shell') || (res.value.role === 'ui_shell' && f.path.endsWith('.html'))) ? 'index.html' : f.path;
-              filesMap.set(normalizedPath, { ...f, path: normalizedPath });
+          if (res.status === 'fulfilled' && res.value) {
+            if (res.value.files && res.value.files.length > 0) {
+              completedWorkersCount++;
+              for (const f of res.value.files) {
+                if (f.content.length < 60 && f.content.includes('Auto-generated module for')) continue;
+                if (f.path === 'src/architect.js' || f.path === 'src/ui_shell.js' || f.path === 'src/db_engineer.js') continue;
+                const normalizedPath = (f.path.includes('ui_shell') || (res.value.role === 'ui_shell' && f.path.endsWith('.html'))) ? 'index.html' : f.path;
+                filesMap.set(normalizedPath, { ...f, path: normalizedPath });
+              }
+            }
+            if (res.value.error) {
+              workerErrors.push(`[${res.value.role}]: ${res.value.error}`);
             }
           }
         }
         let allFiles = Array.from(filesMap.values());
 
+        // STRICT GATE: If 0 workers completed or 0 files generated, NEVER generate fake placeholder HTML!
+        // Display the exact Google API error status/message with 100% transparency.
+        if (completedWorkersCount === 0 || allFiles.length === 0) {
+          const detailedErr = workerErrors.length > 0
+            ? workerErrors.join('\n')
+            : 'All 10 subagents failed to return files. Please verify Gemini API key permissions, live models, and quota.';
+          setPreviewError(detailedErr);
+          throw new Error(`Genesis generation failed (0 subagents completed):\n${detailedErr}`);
+        }
+
         // Deterministic SPA Shell Auto-Synthesizer
-        // If index.html is missing or < 30 lines while pages exist, auto-synthesize complete layout
+        // ONLY synthesize index.html if real companion files exist and index.html is missing or < 30 lines
         let indexFile = allFiles.find(f => f.path === 'index.html' || f.path.endsWith('/index.html') || f.path.endsWith('.html'));
         const indexLines = indexFile ? indexFile.content.split('\n').length : 0;
 
         if (!indexFile || indexLines < 30) {
-          console.log('[SPA Shell Auto-Synthesizer] Missing or thin index.html detected! Synthesizing deterministic SPA shell...');
+          console.log('[SPA Shell Auto-Synthesizer] Synthesizing index.html wrapper for genuine companion modules...');
           const synthesizedHtml = generateDeterministicSpaHtml(brandTitle, allFiles);
           if (indexFile) {
             indexFile.content = synthesizedHtml;
@@ -3320,10 +3351,6 @@ export default function AveriaAI() {
             indexFile = { path: 'index.html', content: synthesizedHtml, language: 'html' };
             allFiles.push(indexFile);
           }
-        }
-
-        if (allFiles.length === 0) {
-          throw new Error('Swarm workers completed but no project files were generated.');
         }
 
         // Output clean code blocks with zero boastful essays
