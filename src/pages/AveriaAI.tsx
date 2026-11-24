@@ -338,6 +338,9 @@ function generateDeterministicSpaHtml(brandTitle: string, allFiles: { path: stri
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${safeTitle}</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     body { background-color: #0b0f19; color: #f8fafc; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
@@ -366,13 +369,14 @@ function generateDeterministicSpaHtml(brandTitle: string, allFiles: { path: stri
   <div id="modal-root"></div>
   <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2"></div>
 
-  <!-- Companion Modules -->
-  <script src="src/data.js"></script>
-  <script src="src/engine.js"></script>
-  <script src="src/router.js"></script>
-  <script src="src/pages/HomePage.js"></script>
-  <script src="src/pages/AppPages.js"></script>
-  <script src="src/qaGuard.js"></script>
+  <!-- Companion Modules (TypeScript + React) -->
+  <script type="text/babel" data-presets="react,typescript" src="src/lib/dataSdk.ts"></script>
+  <script type="text/babel" data-presets="react,typescript" src="src/components/ui.tsx"></script>
+  <script type="text/babel" data-presets="react,typescript" src="src/lib/engine.ts"></script>
+  <script type="text/babel" data-presets="react,typescript" src="src/router.tsx"></script>
+  <script type="text/babel" data-presets="react,typescript" src="src/pages/HomePage.tsx"></script>
+  <script type="text/babel" data-presets="react,typescript" src="src/pages/AppPages.tsx"></script>
+  <script type="text/babel" data-presets="react,typescript" src="src/lib/qaGuard.ts"></script>
 
   <!-- Automatic App Bus Mount -->
   <script>
@@ -746,6 +750,16 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
 
       if (typeof renderFn === 'function') {
         try {
+          if (typeof window.ReactDOM !== 'undefined' && typeof window.React !== 'undefined' && window.ReactDOM.createRoot) {
+            try {
+              var reactElem = window.React.createElement(renderFn, params || {});
+              if (!window.__averia_react_root__) {
+                window.__averia_react_root__ = window.ReactDOM.createRoot(container);
+              }
+              window.__averia_react_root__.render(reactElem);
+              return;
+            } catch (_) {}
+          }
           renderFn(params);
         } catch (renderErr) {
           console.error('[AveriaApp Render Error on ' + r + ']:', renderErr);
@@ -759,17 +773,29 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
 
       // Auto-register any modules attached to window
       if (window.HomePage && !_routes['/']) {
-        app.route('/', function() { window.HomePage.render(); });
+        if (typeof window.HomePage.render === 'function') {
+          app.route('/', function(p) { window.HomePage.render(p); });
+        } else if (typeof window.HomePage === 'function') {
+          app.route('/', window.HomePage);
+        }
       }
       if (window.AppPages) {
-        if (typeof window.AppPages.renderCatalog === 'function' && !_routes['/catalog']) app.route('/catalog', function(p) { window.AppPages.renderCatalog(p); });
-        if (typeof window.AppPages.renderDetail === 'function' && !_routes['/detail']) app.route('/detail', function(p) { window.AppPages.renderDetail(p); });
-        if (typeof window.AppPages.renderCart === 'function' && !_routes['/cart']) app.route('/cart', function(p) { window.AppPages.renderCart(p); });
-        if (typeof window.AppPages.renderOrders === 'function' && !_routes['/orders']) app.route('/orders', function(p) { window.AppPages.renderOrders(p); });
-        if (typeof window.AppPages.renderCheckout === 'function' && !_routes['/checkout']) app.route('/checkout', function(p) { window.AppPages.renderCheckout(p); });
-        if (typeof window.AppPages.renderAdmin === 'function' && !_routes['/admin']) app.route('/admin', function(p) { window.AppPages.renderAdmin(p); });
-        if (typeof window.AppPages.renderSettings === 'function' && !_routes['/settings']) app.route('/settings', function(p) { window.AppPages.renderSettings(p); });
-        if (typeof window.AppPages.renderAbout === 'function' && !_routes['/about']) app.route('/about', function(p) { window.AppPages.renderAbout(p); });
+        var ap = window.AppPages;
+        if (ap.ShopPage && !_routes['/shop']) app.route('/shop', ap.ShopPage);
+        if (ap.ProductDetailPage && !_routes['/product']) app.route('/product', ap.ProductDetailPage);
+        if (ap.CartPage && !_routes['/cart']) app.route('/cart', ap.CartPage);
+        if (ap.CheckoutPage && !_routes['/checkout']) app.route('/checkout', ap.CheckoutPage);
+        if (ap.OrdersPage && !_routes['/orders']) app.route('/orders', ap.OrdersPage);
+        if (ap.WishlistPage && !_routes['/wishlist']) app.route('/wishlist', ap.WishlistPage);
+        if (ap.AdminDashboard && !_routes['/admin']) app.route('/admin', ap.AdminDashboard);
+        if (typeof ap.renderCatalog === 'function' && !_routes['/catalog']) app.route('/catalog', function(p) { ap.renderCatalog(p); });
+        if (typeof ap.renderDetail === 'function' && !_routes['/detail']) app.route('/detail', function(p) { ap.renderDetail(p); });
+        if (typeof ap.renderCart === 'function' && !_routes['/cart']) app.route('/cart', function(p) { ap.renderCart(p); });
+        if (typeof ap.renderOrders === 'function' && !_routes['/orders']) app.route('/orders', function(p) { ap.renderOrders(p); });
+        if (typeof ap.renderCheckout === 'function' && !_routes['/checkout']) app.route('/checkout', function(p) { ap.renderCheckout(p); });
+        if (typeof ap.renderAdmin === 'function' && !_routes['/admin']) app.route('/admin', function(p) { ap.renderAdmin(p); });
+        if (typeof ap.renderSettings === 'function' && !_routes['/settings']) app.route('/settings', function(p) { ap.renderSettings(p); });
+        if (typeof ap.renderAbout === 'function' && !_routes['/about']) app.route('/about', function(p) { ap.renderAbout(p); });
       }
 
       var initial = (window.location.hash ? normalizeRoute(window.location.hash) : '/');
@@ -1089,22 +1115,25 @@ button:active {
   }
 
   // 10. UNIVERSAL IN-BROWSER TRANSPILER & ISOLATED <script> SANDBOX
-  // Supports .js, .jsx, .ts, .tsx with automated TypeScript stripping & Babel JSX compilation
-  // Strict topological dependency order: data.js -> UI.js -> engine.js -> router.js -> HomePage.js -> AppPages.js -> qaGuard.js
+  // Supports modern TypeScript (.ts, .tsx) and React with Babel Standalone ('react', 'typescript' presets)
+  // Strict topological dependency order: dataSdk.ts -> ui.tsx -> engine.ts -> router.tsx -> HomePage.tsx -> AppPages.tsx -> qaGuard.ts
   const jsFiles = allFiles.filter(f =>
     /\.(js|jsx|ts|tsx)$/i.test(f.path) &&
     !f.path.startsWith('server/') &&
+    !f.path.includes('server.ts') &&
     !f.path.includes('server.js') &&
+    !f.path.includes('api/handler') &&
     !f.path.includes('vite.config') &&
-    !f.path.includes('tailwind.config')
+    !f.path.includes('tailwind.config') &&
+    !f.path.includes('drizzle.config')
   );
 
   if (jsFiles.length > 0) {
     const getTopologicalRank = (p: string) => {
       const lower = p.toLowerCase();
-      if (lower.includes('data') || lower.includes('store')) return 0;
+      if (lower.includes('datasdk') || lower.includes('data') || lower.includes('store') || lower.includes('sdk')) return 0;
       if (lower.includes('ui.') || lower.includes('components/ui') || lower.includes('/ui/') || lower.includes('components')) return 1;
-      if (lower.includes('engine') || lower.includes('logic')) return 2;
+      if (lower.includes('engine') || lower.includes('calculator') || lower.includes('analytics') || lower.includes('logic')) return 2;
       if (lower.includes('router')) return 3;
       if (lower.includes('homepage') || lower.includes('home')) return 4;
       if (lower.includes('apppages') || lower.includes('page') || lower.includes('view')) return 5;
@@ -1114,32 +1143,16 @@ button:active {
 
     const sortedJsFiles = [...jsFiles].sort((a, b) => getTopologicalRank(a.path) - getTopologicalRank(b.path));
 
-    let containsAnyJSX = false;
     const isolatedScriptTags = sortedJsFiles.map(f => {
-      const { code: cleanCode, isJSX } = transpileToVanillaJS(f.content, f.path);
-      if (isJSX) containsAnyJSX = true;
-
-      let syntaxError: string | null = null;
-      if (!isJSX) {
-        try {
-          new Function(cleanCode);
-        } catch (err: any) {
-          syntaxError = err.message || 'SyntaxError';
-          console.warn(`[Zero-CORS Syntax Guard] SyntaxError in ${f.path}:`, syntaxError);
-        }
-      }
-
-      const scriptType = isJSX ? ' type="text/babel"' : '';
-      if (!syntaxError) {
-        return `<script${scriptType} data-file="${f.path}">\n// === MODULE: ${f.path} ===\n${cleanCode}\n</script>`;
-      } else {
-        return `<script${scriptType} data-file="${f.path}">\n// === SAFE SANDBOX (Syntax Error Caught in ${f.path}: ${syntaxError}) ===\ntry {\n${cleanCode}\n} catch(moduleErr) {\n  console.error('[Zero-CORS Guard] Isolated module error in ${f.path}:', moduleErr);\n}\n</script>`;
-      }
+      const { code: cleanCode } = transpileToVanillaJS(f.content, f.path);
+      // All TS, TSX, JS, JSX files compile via Babel Standalone with react and typescript presets!
+      const scriptType = ' type="text/babel" data-presets="react,typescript"';
+      return `<script${scriptType} data-file="${f.path}">\n// === MODULE: ${f.path} ===\n${cleanCode}\n</script>`;
     }).join('\n\n');
 
-    // If JSX was detected, inject Babel Standalone CDN and React runtime
-    if (containsAnyJSX && !doc.includes('@babel/standalone')) {
-      const babelCdn = `\n<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>\n<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>\n<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>\n`;
+    // Ensure React 18, ReactDOM 18, and Babel Standalone are injected into <head>
+    if (!doc.includes('@babel/standalone')) {
+      const babelCdn = `\n<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>\n<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>\n<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>\n`;
       if (doc.includes('<head>')) {
         doc = doc.replace('<head>', `<head>${babelCdn}`);
       } else {
@@ -1699,51 +1712,56 @@ export interface CollaborationLogEntry {
 }
 
 export const GENESIS_SWARM_ROLES = [
-  { role: 'architect',    workerIndex: 1,  keySlot: 0, name: 'System Architect',         icon: '🧭', targetFile: 'package.json, .env.example, README.md' },
-  { role: 'db_engineer',  workerIndex: 2,  keySlot: 1, name: 'Database Architect',        icon: '🗄️', targetFile: 'schema.sql' },
-  { role: 'backend_api',  workerIndex: 3,  keySlot: 2, name: 'Backend REST API Engineer', icon: '🌐', targetFile: 'server/index.js' },
-  { role: 'data_sdk',     workerIndex: 4,  keySlot: 3, name: 'Data & Persistence SDK',    icon: '💾', targetFile: 'src/data.js' },
-  { role: 'logic_engine', workerIndex: 5,  keySlot: 4, name: 'Core Logic / 60FPS Engine', icon: '⚙️', targetFile: 'src/engine.js' },
-  { role: 'ui_shell',     workerIndex: 6,  keySlot: 5, name: 'UI Shell & Design System',  icon: '🎨', targetFile: 'index.html, src/styles.css, src/components/UI.js' },
-  { role: 'spa_router',   workerIndex: 7,  keySlot: 6, name: 'Deep SPA Router Engineer',  icon: '🔀', targetFile: 'src/router.js' },
-  { role: 'home_view',    workerIndex: 8,  keySlot: 7, name: 'Home View Specialist',      icon: '🏠', targetFile: 'src/pages/HomePage.js' },
-  { role: 'sub_pages',    workerIndex: 9,  keySlot: 8, name: 'Sub-Pages Specialist',      icon: '📑', targetFile: 'src/pages/AppPages.js' },
-  { role: 'qa_security',  workerIndex: 10, keySlot: 9, name: 'QA & Runtime Integrator',   icon: '🛡️', targetFile: 'src/qaGuard.js' },
+  { role: 'architect',    workerIndex: 1,  keySlot: 0, name: 'System & Tooling Architect', icon: '🧭', targetFile: 'package.json, tsconfig.json, vite.config.ts, tailwind.config.ts, components.json' },
+  { role: 'db_engineer',  workerIndex: 2,  keySlot: 1, name: 'Database & Drizzle Architect', icon: '🗄️', targetFile: 'schema.sql, drizzle.config.ts, src/db/schema.ts' },
+  { role: 'backend_api',  workerIndex: 3,  keySlot: 2, name: 'Backend API Engineer',        icon: '🌐', targetFile: 'server/index.ts, api/handler.ts' },
+  { role: 'data_sdk',     workerIndex: 4,  keySlot: 3, name: 'Data & State SDK Engineer',   icon: '💾', targetFile: 'src/lib/dataSdk.ts' },
+  { role: 'logic_engine', workerIndex: 5,  keySlot: 4, name: 'Core Logic & Analytics',      icon: '⚙️', targetFile: 'src/lib/engine.ts' },
+  { role: 'ui_shell',     workerIndex: 6,  keySlot: 5, name: 'UI Shell & Design System',    icon: '🎨', targetFile: 'index.html, src/styles.css, src/components/ui.tsx' },
+  { role: 'spa_router',   workerIndex: 7,  keySlot: 6, name: 'Multi-Page SPA Router',       icon: '🔀', targetFile: 'src/router.tsx' },
+  { role: 'home_view',    workerIndex: 8,  keySlot: 7, name: 'Home View Specialist',        icon: '🏠', targetFile: 'src/pages/HomePage.tsx' },
+  { role: 'sub_pages',    workerIndex: 9,  keySlot: 8, name: 'Sub-Pages Specialist',        icon: '📑', targetFile: 'src/pages/AppPages.tsx' },
+  { role: 'qa_security',  workerIndex: 10, keySlot: 9, name: 'QA & Runtime Guard',          icon: '🛡️', targetFile: 'src/lib/qaGuard.ts' },
 ] as const;
 
 function generateSharedContract(userGoal: string, brandTitle: string) {
   const safeTitle = brandTitle || 'Averia App';
   const slug = safeTitle.toLowerCase().replace(/[^a-z0-9]/g, '-');
-  return `=== AVERIA ARCHITECTURAL CONTRACT (STRICT CONSENSUS) ===
+  return `=== AVERIA TYPESCRIPT + REACT ARCHITECTURAL CONTRACT (STRICT CONSENSUS) ===
 App Title: "${safeTitle}" (${slug})
 Primary Purpose: ${userGoal}
+Stack: TypeScript, React 18, Tailwind CSS, Vite, Drizzle ORM, Express.js
 
-GLOBAL NAMESPACES & INTERFACES:
-1. window.AveriaStore — State & Persistence:
-   - methods: list(col), get(col, id), create(col, data), update(col, id, delta), remove(col, id), clear(col)
-   - events: subscribe(evt, cb), notify(evt, payload)
-   - collections: 'products', 'orders', 'cart', 'users', 'activity', 'settings'
-   - backend: calls window.AveriaDB with localStorage fallback
-2. window.AveriaEngine — Core Logic & Calculations:
-   - methods: calculateTotals(cart, promoCode, taxRate), filterItems(items, filters), transitionOrder(orderId, nextStatus), computeStats(items, orders)
-3. window.__AVERIA_ROUTER__ — SPA Router:
-   - methods: register(path, handler), navigate(path, params), goBack(), current(), params(), onChange(fn)
-   - routes: '/', '/catalog', '/detail', '/cart', '/orders', '/admin', '/settings', '/about'
-4. window.HomePage — Landing view:
-   - methods: render()
-5. window.AppPages — Sub-views:
-   - methods: renderCatalog(), renderDetail(params), renderCart(), renderOrders(), renderAdmin(), renderSettings(), renderAbout()
-6. window.QAGuard — Security & Fallbacks:
-   - methods: sanitizeHTML(str), safeJSONParse(str, fallback), getFallbackSVG(label, w, h), nullSafeGet(obj, path, def), runHealthCheck()
+MODULE ARCHITECTURE & GLOBAL NAMESPACES:
+1. src/lib/dataSdk.ts — window.AveriaStore & window.DataSDK:
+   - methods: list(col, opts), get(col, id), create(col, data), update(col, id, delta), remove(col, id), clear(col), subscribe(evt, cb)
+   - collections: 'products', 'orders', 'cart', 'users', 'reviews', 'settings'
+   - backend: calls window.LocalDB (with localStorage offline persistence)
+2. src/lib/engine.ts — window.AveriaEngine & window.CoreEngine:
+   - methods: calculateTotals(cart, promoCode, taxRate, shipping), filterAndRankItems(items, query, filters, sortBy), validateStock(cart, inventory), computeStoreAnalytics(orders, products)
+3. src/components/ui.tsx — window.UI:
+   - React components: Button, Badge, Card, Modal, SlideOverDrawer, Tabs, Input, Navbar, Footer
+4. src/router.tsx — window.__AVERIA_APP__ & window.__AVERIA_ROUTER__:
+   - routes: '/', '/shop', '/product/:id', '/cart', '/checkout', '/orders', '/wishlist', '/admin', '/settings'
+   - methods: route(path, handler), navigate(path, params), goBack(), currentRoute
+5. src/pages/HomePage.tsx — window.HomePage:
+   - React component & mount method: render(params)
+6. src/pages/AppPages.tsx — window.AppPages:
+   - React components: ShopPage, ProductDetailPage, CartPage, CheckoutPage, OrdersPage, WishlistPage, AdminDashboard
+7. src/lib/qaGuard.ts — window.QAGuard:
+   - methods: sanitizeHTML(str), safeJSONParse(str, fallback), getFallbackSVG(label, w, h), showToast(msg, type), runHealthCheck()
 
 TOPOLOGICAL LOAD ORDER IN index.html:
 1. Tailwind CDN (<script src="https://cdn.tailwindcss.com"></script>)
-2. src/router.js
-3. src/data.js
-4. src/engine.js
-5. src/qaGuard.js
-6. src/pages/HomePage.js
-7. src/pages/AppPages.js
+2. React & ReactDOM (<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>)
+3. Babel Standalone (<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>)
+4. src/lib/dataSdk.ts
+5. src/components/ui.tsx
+6. src/lib/engine.ts
+7. src/router.tsx
+8. src/pages/HomePage.tsx
+9. src/pages/AppPages.tsx
+10. src/lib/qaGuard.ts
 ==========================================================`;
 }
 
