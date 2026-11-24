@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Eye, Code, X, FileCode, Globe, Play, Pause, Music, Video, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Smartphone, Tablet, Camera, Paperclip, FileText, Link2, Mic, CheckCircle2, RefreshCw, ChevronDown, AlertTriangle } from 'lucide-react';
+import { Send, Plus, Brain, Trash2, MessageSquare, ChevronLeft, ChevronRight, Eye, Code, X, FileCode, Globe, Play, Pause, Music, Video, Image as ImageIcon, Rocket, FolderOpen, File, Settings, Monitor, Smartphone, Tablet, Camera, Paperclip, FileText, Link2, Mic, CheckCircle2, RefreshCw, ChevronDown, AlertTriangle, Key } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
@@ -12,6 +12,13 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { AveriaLogo } from '@/components/AveriaLogo';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { MessageResponse } from '@/components/ai-elements/message';
+import {
+  getAllAvailableGeminiKeys,
+  streamGeminiRoleDirect,
+  saveCustomGeminiKeys,
+  getCustomGeminiKeys,
+  GEMINI_CASCADE_MODELS,
+} from '@/lib/genesisDirectEngine';
 
 const SUPABASE_BASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://qhmxmwigvexyxvklukns.supabase.co';
 const CHAT_URL = `${SUPABASE_BASE_URL.replace(/\/+$/, '')}/functions/v1/averia-ai`;
@@ -943,88 +950,122 @@ button:active {
 })();
 </script>\n`;
 
-  // 8. AveriaDB Cloud Database SDK
-  const projectId = `averia-${Math.abs(hashCode(htmlContent.slice(0, 120))).toString(36)}`;
-  const BACKEND_URL = typeof window !== 'undefined'
-    ? `${(window as any).__AVERIA_BACKEND_URL__ || 'https://qhmxmwigvexyxvklukns.supabase.co/functions/v1/averia-backend'}`
-    : 'https://qhmxmwigvexyxvklukns.supabase.co/functions/v1/averia-backend';
-
-  const averiaDbSdkScript = `<script>
+  // 8. In-Browser Local Database SDK (window.LocalDB & window.AveriaDB)
+  // 100% offline in-browser persistence backed by localStorage & IndexedDB
+  const localDbSdkScript = `<script>
 (function() {
-  var PROJECT_ID = ${JSON.stringify(projectId)};
-  var BACKEND = ${JSON.stringify(BACKEND_URL)};
-  var _token = null;
-  try { _token = localStorage.getItem('averia_auth_token'); } catch(_) {}
+  var PREFIX = '__averia_localdb__';
+  var _listeners = {};
 
-  async function req(method, path, body) {
-    var headers = { 'Content-Type': 'application/json', 'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFobXhtd2lndmV4eXh2a2x1a25zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzE1Nzk0NjMsImV4cCI6MjA0NzE1NTQ2M30.yCEbULQAbTVKVhaSRnL9B3XE2CjmTK58r3SvIPGxqIY' };
-    if (_token) headers['Authorization'] = 'Bearer ' + _token;
-    var opts = { method: method, headers: headers };
-    if (body !== undefined) opts.body = JSON.stringify(body);
-    var res = await fetch(BACKEND + path, opts);
-    if (!res.ok) {
-      var e = await res.json().catch(function() { return { error: 'Request failed' }; });
-      throw new Error(e.error || ('HTTP ' + res.status));
+  function getStore(col) {
+    try {
+      var raw = localStorage.getItem(PREFIX + col);
+      return raw ? JSON.parse(raw) : [];
+    } catch (_) {
+      return [];
     }
-    return res.json();
   }
 
-  window.AveriaDB = {
-    projectId: PROJECT_ID,
-    list: function(collection, opts) {
-      var qs = '';
-      if (opts && opts.search) qs = '?search=' + encodeURIComponent(opts.search);
-      if (opts && opts.limit) qs += (qs ? '&' : '?') + 'limit=' + opts.limit;
-      return req('GET', '/projects/' + PROJECT_ID + '/' + collection + qs)
-        .then(function(r) { return r.records || []; })
-        .catch(function(err) { console.warn('[AveriaDB] list failed:', err); return []; });
+  function saveStore(col, items) {
+    try {
+      localStorage.setItem(PREFIX + col, JSON.stringify(items));
+    } catch (_) {}
+    if (_listeners[col]) {
+      _listeners[col].forEach(function(cb) { try { cb(items); } catch(e){} });
+    }
+  }
+
+  var localDb = {
+    list: async function(col, opts) {
+      var items = getStore(col);
+      if (opts && opts.search) {
+        var s = String(opts.search).toLowerCase();
+        items = items.filter(function(x) { return JSON.stringify(x).toLowerCase().indexOf(s) !== -1; });
+      }
+      if (opts && opts.filter && typeof opts.filter === 'function') {
+        items = items.filter(opts.filter);
+      }
+      if (opts && opts.limit) {
+        items = items.slice(0, opts.limit);
+      }
+      return items;
     },
-    create: function(collection, item) {
-      return req('POST', '/projects/' + PROJECT_ID + '/' + collection, item)
-        .catch(function(err) { console.warn('[AveriaDB] create failed:', err); return null; });
+    get: async function(col, id) {
+      var items = getStore(col);
+      return items.find(function(x) { return x.id == id || x._id == id; }) || null;
     },
-    update: function(collection, id, patch) {
-      return req('PATCH', '/projects/' + PROJECT_ID + '/' + collection + '/' + id, patch)
-        .catch(function(err) { console.warn('[AveriaDB] update failed:', err); return null; });
+    create: async function(col, item) {
+      var items = getStore(col);
+      var record = Object.assign({}, item);
+      if (!record.id && !record._id) record.id = 'rec_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+      if (!record.createdAt) record.createdAt = new Date().toISOString();
+      items.push(record);
+      saveStore(col, items);
+      return record;
     },
-    remove: function(collection, id) {
-      return req('DELETE', '/projects/' + PROJECT_ID + '/' + collection + '/' + id)
-        .catch(function(err) { console.warn('[AveriaDB] remove failed:', err); return null; });
+    update: async function(col, id, patch) {
+      var items = getStore(col);
+      var idx = items.findIndex(function(x) { return x.id == id || x._id == id; });
+      if (idx !== -1) {
+        items[idx] = Object.assign({}, items[idx], patch, { updatedAt: new Date().toISOString() });
+        saveStore(col, items);
+        return items[idx];
+      }
+      return null;
     },
-    clear: function(collection) {
-      return req('DELETE', '/projects/' + PROJECT_ID + '/clear/' + collection)
-        .catch(function(err) { console.warn('[AveriaDB] clear failed:', err); return null; });
+    remove: async function(col, id) {
+      var items = getStore(col);
+      var next = items.filter(function(x) { return x.id != id && x._id != id; });
+      saveStore(col, next);
+      return { success: true };
+    },
+    clear: async function(col) {
+      saveStore(col, []);
+      return { success: true };
+    },
+    subscribe: function(col, cb) {
+      if (!_listeners[col]) _listeners[col] = [];
+      _listeners[col].push(cb);
+      return function() {
+        _listeners[col] = _listeners[col].filter(function(fn) { return fn !== cb; });
+      };
     },
     auth: {
-      signup: function(email, password, name, role) {
-        return req('POST', '/auth/signup', { email: email, password: password, name: name, role: role || 'Customer' })
-          .then(function(r) {
-            if (r.success && r.token) { _token = r.token; try { localStorage.setItem('averia_auth_token', _token); } catch(_) {} }
-            return r;
-          });
+      signup: async function(email, password, name, role) {
+        var user = { id: 'usr_' + Date.now(), email: email, name: name || (email ? email.split('@')[0] : 'User'), role: role || 'User' };
+        try { localStorage.setItem(PREFIX + 'current_user', JSON.stringify(user)); } catch(_) {}
+        return { success: true, user: user, token: 'local_jwt_' + user.id };
       },
-      login: function(email, password) {
-        return req('POST', '/auth/login', { email: email, password: password })
-          .then(function(r) {
-            if (r.success && r.token) { _token = r.token; try { localStorage.setItem('averia_auth_token', _token); } catch(_) {} }
-            return r;
-          });
+      login: async function(email, password) {
+        var user = { id: 'usr_' + Date.now(), email: email, name: (email ? email.split('@')[0] : 'User'), role: 'User' };
+        try { localStorage.setItem(PREFIX + 'current_user', JSON.stringify(user)); } catch(_) {}
+        return { success: true, user: user, token: 'local_jwt_' + user.id };
       },
-      logout: function() {
-        _token = null;
-        try { localStorage.removeItem('averia_auth_token'); } catch(_) {}
+      logout: async function() {
+        try { localStorage.removeItem(PREFIX + 'current_user'); } catch(_) {}
+        return { success: true };
       },
-      me: function() {
-        return req('GET', '/auth/me').catch(function() { return null; });
+      me: async function() {
+        try {
+          var u = localStorage.getItem(PREFIX + 'current_user');
+          return u ? JSON.parse(u) : null;
+        } catch (_) { return null; }
       },
-      isLoggedIn: function() { return !!_token; },
-      getToken: function() { return _token; }
+      isLoggedIn: function() {
+        return !!localStorage.getItem(PREFIX + 'current_user');
+      },
+      getToken: function() {
+        return localStorage.getItem(PREFIX + 'current_user') ? 'local_jwt' : null;
+      }
     }
   };
+
+  window.LocalDB = localDb;
+  window.AveriaDB = localDb;
 })();
 </script>\n`;
 
-  const headInject = `${storagePolyfillScript}${averiaAppRuntimeBusScript}${hashAndLinkInterceptorScript}${imageFallbackAndStyleScript}${averiaDbSdkScript}${errorListenerScript}`;
+  const headInject = `${storagePolyfillScript}${averiaAppRuntimeBusScript}${hashAndLinkInterceptorScript}${imageFallbackAndStyleScript}${localDbSdkScript}${errorListenerScript}`;
   if (doc.includes('<head>')) {
     doc = doc.replace('<head>', `<head>\n${headInject}`);
   } else if (doc.includes('<html>')) {
@@ -1049,7 +1090,7 @@ button:active {
 
   // 10. UNIVERSAL IN-BROWSER TRANSPILER & ISOLATED <script> SANDBOX
   // Supports .js, .jsx, .ts, .tsx with automated TypeScript stripping & Babel JSX compilation
-  // Strict topological dependency order: data.js -> engine.js -> router.js -> HomePage.js -> AppPages.js -> qaGuard.js
+  // Strict topological dependency order: data.js -> UI.js -> engine.js -> router.js -> HomePage.js -> AppPages.js -> qaGuard.js
   const jsFiles = allFiles.filter(f =>
     /\.(js|jsx|ts|tsx)$/i.test(f.path) &&
     !f.path.startsWith('server/') &&
@@ -1062,12 +1103,13 @@ button:active {
     const getTopologicalRank = (p: string) => {
       const lower = p.toLowerCase();
       if (lower.includes('data') || lower.includes('store')) return 0;
-      if (lower.includes('engine') || lower.includes('logic')) return 1;
-      if (lower.includes('router')) return 2;
-      if (lower.includes('homepage') || lower.includes('home')) return 3;
-      if (lower.includes('apppages') || lower.includes('page') || lower.includes('view')) return 4;
-      if (lower.includes('qaguard') || lower.includes('guard') || lower.includes('qa')) return 5;
-      return 6;
+      if (lower.includes('ui.') || lower.includes('components/ui') || lower.includes('/ui/') || lower.includes('components')) return 1;
+      if (lower.includes('engine') || lower.includes('logic')) return 2;
+      if (lower.includes('router')) return 3;
+      if (lower.includes('homepage') || lower.includes('home')) return 4;
+      if (lower.includes('apppages') || lower.includes('page') || lower.includes('view')) return 5;
+      if (lower.includes('qaguard') || lower.includes('guard') || lower.includes('qa')) return 6;
+      return 7;
     };
 
     const sortedJsFiles = [...jsFiles].sort((a, b) => getTopologicalRank(a.path) - getTopologicalRank(b.path));
@@ -1657,16 +1699,16 @@ export interface CollaborationLogEntry {
 }
 
 export const GENESIS_SWARM_ROLES = [
-  { role: 'architect',    workerIndex: 1,  keySlot: 0, name: 'System Architect',         icon: '🧭', targetFile: 'package.json, README.md' },
-  { role: 'db_engineer',  workerIndex: 2,  keySlot: 1, name: 'Database & API Engineer',   icon: '🗄️', targetFile: 'schema.sql' },
+  { role: 'architect',    workerIndex: 1,  keySlot: 0, name: 'System Architect',         icon: '🧭', targetFile: 'package.json, .env.example, README.md' },
+  { role: 'db_engineer',  workerIndex: 2,  keySlot: 1, name: 'Database Architect',        icon: '🗄️', targetFile: 'schema.sql' },
   { role: 'backend_api',  workerIndex: 3,  keySlot: 2, name: 'Backend REST API Engineer', icon: '🌐', targetFile: 'server/index.js' },
-  { role: 'data_sdk',     workerIndex: 4,  keySlot: 3, name: 'Data SDK & State Engineer', icon: '💾', targetFile: 'src/data.js' },
-  { role: 'logic_engine', workerIndex: 5,  keySlot: 4, name: 'Core Logic Engine',         icon: '⚙️', targetFile: 'src/engine.js' },
-  { role: 'ui_shell',     workerIndex: 6,  keySlot: 5, name: 'UI Shell Architect',        icon: '🎨', targetFile: 'index.html' },
-  { role: 'spa_router',   workerIndex: 7,  keySlot: 6, name: 'SPA Router Engineer',       icon: '🔀', targetFile: 'src/router.js' },
+  { role: 'data_sdk',     workerIndex: 4,  keySlot: 3, name: 'Data & Persistence SDK',    icon: '💾', targetFile: 'src/data.js' },
+  { role: 'logic_engine', workerIndex: 5,  keySlot: 4, name: 'Core Logic / 60FPS Engine', icon: '⚙️', targetFile: 'src/engine.js' },
+  { role: 'ui_shell',     workerIndex: 6,  keySlot: 5, name: 'UI Shell & Design System',  icon: '🎨', targetFile: 'index.html, src/styles.css, src/components/UI.js' },
+  { role: 'spa_router',   workerIndex: 7,  keySlot: 6, name: 'Deep SPA Router Engineer',  icon: '🔀', targetFile: 'src/router.js' },
   { role: 'home_view',    workerIndex: 8,  keySlot: 7, name: 'Home View Specialist',      icon: '🏠', targetFile: 'src/pages/HomePage.js' },
   { role: 'sub_pages',    workerIndex: 9,  keySlot: 8, name: 'Sub-Pages Specialist',      icon: '📑', targetFile: 'src/pages/AppPages.js' },
-  { role: 'qa_security',  workerIndex: 10, keySlot: 9, name: 'QA & Security Auditor',     icon: '🛡️', targetFile: 'src/qaGuard.js' },
+  { role: 'qa_security',  workerIndex: 10, keySlot: 9, name: 'QA & Runtime Integrator',   icon: '🛡️', targetFile: 'src/qaGuard.js' },
 ] as const;
 
 function generateSharedContract(userGoal: string, brandTitle: string) {
@@ -2023,6 +2065,22 @@ export default function AveriaAI() {
   const [folderPermissionGranted, setFolderPermissionGranted] = useState(true);
   const [writtenFiles, setWrittenFiles] = useState<string[]>([]);
   const [workspaceContext, setWorkspaceContext] = useState<WorkspaceContext | null>(null);
+
+  // Gemini 10-Key Swarm API Key Manager
+  const [showApiKeysModal, setShowApiKeysModal] = useState(false);
+  const [customKeysInput, setCustomKeysInput] = useState('');
+  const [detectedKeysCount, setDetectedKeysCount] = useState(0);
+
+  const refreshDetectedKeys = useCallback(async () => {
+    try {
+      const keys = await getAllAvailableGeminiKeys(supabase);
+      setDetectedKeysCount(keys.length);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    refreshDetectedKeys();
+  }, [refreshDetectedKeys]);
 
   // Restore folder handle from IndexedDB on conversation select or mount
   useEffect(() => {
@@ -3013,11 +3071,18 @@ export default function AveriaAI() {
         messages.length > 2
       );
 
-      // ── GENESIS: 10-Agent Collaborative Parallel Swarm across 10 Edge Workers & 10 Keys ──
-      if (effectiveModel === 'genesis' && !isIterativeRepair) {
+      // ── GENESIS: 10-Agent Collaborative Parallel Swarm across 10 Direct Gemini Keys ──
+      if (effectiveModel === 'genesis') {
         const brandTitle = textContent.replace(/^(build|create|make|design)\s+(a|an|the)?/i, '').trim().slice(0, 30) || 'AveriaApp';
         const contract = generateSharedContract(textContent, brandTitle);
         setSwarmContract(contract);
+
+        const availableKeys = await getAllAvailableGeminiKeys(supabase);
+        if (availableKeys.length === 0) {
+          setShowApiKeysModal(true);
+          toast.error('No Google Gemini API keys detected. Please add your key to proceed.');
+          throw new Error('No Google Gemini API keys detected. Please add at least 1 Gemini key in the API Keys Manager.');
+        }
 
         const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const initialWorkers: GenesisWorkerStatus[] = GENESIS_SWARM_ROLES.map(r => ({
@@ -3035,15 +3100,15 @@ export default function AveriaAI() {
           {
             time: now(),
             from: 'System Architect',
-            to: '10 Parallel Edge Workers',
-            action: `Phase A Contract published for "${brandTitle}" with AveriaDB & Zero-CORS contracts`,
+            to: '10 Parallel Direct Workers',
+            action: `Contract published for "${brandTitle}" — Direct Browser-to-Gemini swarm across ${availableKeys.length} keys`,
             icon: '📜',
           },
           {
             time: now(),
-            from: 'Swarm Orchestrator',
+            from: 'Direct Swarm Orchestrator',
             to: '10 Workers',
-            action: 'Fired 10 dedicated edge workers across 10 Gemini API keys in parallel',
+            action: `Dispatched 10 direct parallel subagents (zero Edge Function proxy bottlenecks)`,
             icon: '🚀',
           },
         ]);
@@ -3068,175 +3133,53 @@ export default function AveriaAI() {
           let workerBytes = 0;
           let workerText = '';
 
-          const fetchForSlot = async (slot: number) => {
-            return await fetch(CHAT_URL, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${authToken}`,
-                apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-                'x-client-info': 'averia-ai-client',
-              },
-              body: JSON.stringify({
-                messages: payloadMessages,
-                conversationId: convId,
-                model: 'genesis',
-                agentRole: role.role,
-                keySlot: slot,
-                sharedContract: contract,
-                workspaceContext: activeWorkspace,
-              }),
-            });
-          };
-
-          let resp: Response | null = null;
-          let currentSlot = role.keySlot;
-          let attempts = 0;
-          const maxAttempts = 3;
-
-          while (attempts < maxAttempts) {
-            attempts++;
-            try {
-              resp = await fetchForSlot(currentSlot);
-              if (resp.ok && resp.body) {
-                break; // Succeeded!
-              }
-              const errJson = await resp.json().catch(() => ({ error: `HTTP ${resp?.status}` }));
-              console.warn(`[Swarm Worker ${role.role}] Attempt ${attempts} on slot ${currentSlot} returned ${resp?.status}: ${errJson?.error}`);
-            } catch (fetchErr: any) {
-              console.warn(`[Swarm Worker ${role.role}] Attempt ${attempts} on slot ${currentSlot} error: ${fetchErr?.message}`);
-            }
-
-            if (attempts < maxAttempts) {
-              currentSlot = (currentSlot + 3) % 10;
-              setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
-                ...w,
-                currentAction: `Auto-retrying on keySlot #${currentSlot + 1}...`,
-              } : w));
-              await new Promise(r => setTimeout(r, 800));
-            }
-          }
-
-          if (!resp || !resp.ok || !resp.body) {
-            const errStatus = resp ? resp.status : 'Network Error';
-            throw new Error(`Worker ${role.role} failed after ${maxAttempts} attempts (HTTP ${errStatus})`);
-          }
-
           try {
+            const workerResult = await streamGeminiRoleDirect({
+              role: role.role,
+              userGoal: textContent,
+              resolvedTitle: brandTitle,
+              sharedContract: contract,
+              availableKeys,
+              keySlot: role.keySlot,
+              onChunk: (delta, bytes) => {
+                if (bytes) {
+                  workerBytes += bytes;
+                  setStreamBytes(prev => prev + bytes);
+                }
+                if (delta) {
+                  workerText += delta;
+                  const elapsedSec = Math.max(0.1, (Date.now() - workerStartTime) / 1000);
+                  const speed = Math.round((workerBytes / 1024) / elapsedSec * 10) / 10;
+                  const lineCount = workerText.split('\n').length;
+                  setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
+                    ...w,
+                    bytes: workerBytes,
+                    lines: lineCount,
+                    speedKbps: speed,
+                  } : w));
+                }
+              },
+              onModelCascade: (model) => {
+                setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
+                  ...w,
+                  currentAction: `Model: ${model}`,
+                } : w));
+              },
+              onKeyRotate: (newSlot) => {
+                setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
+                  ...w,
+                  currentAction: `Key rotation: slot #${newSlot + 1}...`,
+                } : w));
+              },
+            });
 
-            const reader = resp.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              if (value) {
-                workerBytes += value.byteLength;
-                setStreamBytes(prev => prev + value.byteLength);
-              }
-              buffer += decoder.decode(value, { stream: true });
-              let newlineIdx: number;
-              while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
-                let line = buffer.slice(0, newlineIdx);
-                buffer = buffer.slice(newlineIdx + 1);
-                if (line.endsWith('\r')) line = line.slice(0, -1);
-                if (!line.startsWith('data: ')) continue;
-                const jsonStr = line.slice(6).trim();
-                if (jsonStr === '[DONE]') break;
-                try {
-                  const parsed = JSON.parse(jsonStr);
-                  const delta = parsed.choices?.[0]?.delta?.content;
-                  if (delta) {
-                    workerText += delta;
-                    const elapsedSec = Math.max(0.1, (Date.now() - workerStartTime) / 1000);
-                    const speed = Math.round((workerBytes / 1024) / elapsedSec * 10) / 10;
-                    const lineCount = workerText.split('\n').length;
-                    setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
-                      ...w,
-                      bytes: workerBytes,
-                      lines: lineCount,
-                      speedKbps: speed,
-                    } : w));
-                  }
-                } catch {}
-              }
-            }
-
-            // Worker finished streaming
-            const finalLines = workerText.split('\n').length;
+            const finalLines = workerResult.content.split('\n').length;
             setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
               ...w,
               status: 'done',
               lines: finalLines,
+              currentAction: `Complete (${workerResult.modelUsed || 'Gemini'})`,
             } : w));
-
-            // Parse files with canonical mapping
-            let parsedFiles = extractProjectFiles(workerText);
-
-            // Filter out any 45-byte stubs or dummy modules
-            parsedFiles = parsedFiles.filter(f => {
-              if (f.content.length < 60 && f.content.includes('Auto-generated module for')) return false;
-              if (f.path === 'src/architect.js' || f.path === 'src/ui_shell.js' || f.path === 'src/db_engineer.js') return false;
-              return true;
-            });
-
-            // Normalize file paths according to canonical role assignment
-            parsedFiles = parsedFiles.map(f => {
-              if (role.role === 'ui_shell' && (f.path.includes('ui_shell') || f.path.endsWith('.html'))) {
-                return { ...f, path: 'index.html' };
-              }
-              if (role.role === 'home_view' && (f.path.includes('home_view') || f.path.endsWith('HomePage.js') || f.path.endsWith('home.js'))) {
-                return { ...f, path: 'src/pages/HomePage.js' };
-              }
-              if (role.role === 'sub_pages' && (f.path.includes('sub_pages') || f.path.endsWith('AppPages.js') || f.path.endsWith('pages.js'))) {
-                return { ...f, path: 'src/pages/AppPages.js' };
-              }
-              if (role.role === 'spa_router' && f.path.includes('router')) {
-                return { ...f, path: 'src/router.js' };
-              }
-              if (role.role === 'logic_engine' && f.path.includes('engine')) {
-                return { ...f, path: 'src/engine.js' };
-              }
-              if (role.role === 'data_sdk' && (f.path.includes('data') || f.path.includes('store'))) {
-                return { ...f, path: 'src/data.js' };
-              }
-              if (role.role === 'qa_security' && (f.path.includes('qa') || f.path.includes('guard'))) {
-                return { ...f, path: 'src/qaGuard.js' };
-              }
-              return f;
-            });
-
-            const CANONICAL_ROLE_FILES: Record<string, string> = {
-              architect: 'package.json',
-              db_engineer: 'schema.sql',
-              backend_api: 'server/index.js',
-              data_sdk: 'src/data.js',
-              logic_engine: 'src/engine.js',
-              ui_shell: 'index.html',
-              spa_router: 'src/router.js',
-              home_view: 'src/pages/HomePage.js',
-              sub_pages: 'src/pages/AppPages.js',
-              qa_security: 'src/qaGuard.js',
-            };
-
-            // If 0 files parsed but worker returned code, map strictly to its canonical target
-            if (parsedFiles.length === 0 && workerText.trim().length > 20) {
-              const canonicalTarget = CANONICAL_ROLE_FILES[role.role];
-              if (canonicalTarget) {
-                const inferredLang = canonicalTarget.endsWith('.html') ? 'html' : canonicalTarget.endsWith('.sql') ? 'sql' : canonicalTarget.endsWith('.json') ? 'json' : 'javascript';
-                let cleanBody = workerText.trim();
-                cleanBody = cleanBody.replace(/^```[a-zA-Z0-9_\-]+(?::[^\n\r]*)?\s*\n?/m, '');
-                cleanBody = cleanBody.replace(/\n?```\s*$/m, '').trim();
-                if (cleanBody.length > 20 && !cleanBody.includes('Auto-generated module for')) {
-                  parsedFiles = [{
-                    path: canonicalTarget,
-                    content: cleanBody,
-                    language: inferredLang,
-                  }];
-                }
-              }
-            }
 
             // Collaboration handshake log
             setCollaborationLogs(prev => [
@@ -3245,18 +3188,18 @@ export default function AveriaAI() {
                 time: now(),
                 from: role.name,
                 to: 'Shared Bus',
-                action: `Delivered ${role.targetFile} (${finalLines} lines, ${Math.round(workerBytes / 1024)} KB)`,
+                action: `Delivered ${role.targetFile} (${finalLines} lines, ${Math.round(workerBytes / 1024)} KB) via ${workerResult.modelUsed || 'Gemini'}`,
                 icon: '✓',
               },
             ]);
 
-            return { role: role.role, files: parsedFiles, content: workerText };
+            return { role: role.role, files: workerResult.files, content: workerResult.content };
           } catch (err: any) {
             console.error(`[Worker Failed] ${role.role}:`, err);
             setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
               ...w,
               status: 'failed',
-              currentAction: err.message ? `Error: ${err.message.slice(0, 45)}` : 'Worker disconnected',
+              currentAction: err.message ? `Error: ${err.message.slice(0, 45)}` : 'Worker failed',
             } : w));
             setCollaborationLogs(prev => [
               ...prev,
@@ -3264,7 +3207,7 @@ export default function AveriaAI() {
                 time: now(),
                 from: role.name,
                 to: 'Swarm Bus',
-                action: `Error: ${err.message || 'Worker disconnected'}`,
+                action: `Error: ${err.message || 'Worker failed'}`,
                 icon: '⚠️',
               },
             ]);
@@ -3378,6 +3321,12 @@ export default function AveriaAI() {
               setWrittenFiles(allFiles.map(f => f.path));
               setDiskStatus(`All ${allFiles.length} files saved to ${localFolderName || 'folder'}`);
               toast.success(`📁 Saved ${allFiles.length} files to ${localFolderName || 'folder'}`);
+
+              // Scan workspace to update Explorer tree and live line counts
+              const scanned = await scanLocalWorkspace(localFolderHandle, 4);
+              if (scanned) {
+                setWorkspaceContext(scanned);
+              }
             } catch (wErr) {
               console.error('Final swarm disk sync error:', wErr);
             }
@@ -4122,6 +4071,20 @@ export default function AveriaAI() {
                       </Button>
                     )}
 
+                    {/* Gemini 10-Key Swarm API Keys Manager */}
+                    <Button
+                      onClick={() => {
+                        setCustomKeysInput(getCustomGeminiKeys().join('\n'));
+                        setShowApiKeysModal(true);
+                      }}
+                      variant="ghost"
+                      size="icon"
+                      className={`h-9 w-9 rounded-xl shrink-0 ${detectedKeysCount > 0 ? 'text-emerald-400 hover:text-emerald-300' : 'text-amber-400 hover:text-amber-300'}`}
+                      title={`Gemini 10-Key Manager (${detectedKeysCount} active keys)`}
+                    >
+                      <Key className="h-4 w-4" />
+                    </Button>
+
                     <textarea
                       ref={inputRef}
                       value={input}
@@ -4158,6 +4121,64 @@ export default function AveriaAI() {
                   <p className="text-[10px] text-muted-foreground text-center mt-2 hidden md:block">
                     Averia AI — Verify • Build • Generate
                   </p>
+
+                  {/* Gemini 10-Key Swarm API Key Manager Modal */}
+                  {showApiKeysModal && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+                      <div className="bg-card border border-border rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+                              <Key className="h-4 w-4" />
+                            </div>
+                            <div>
+                              <h3 className="font-semibold text-foreground text-sm">Gemini 10-Key Swarm Manager</h3>
+                              <p className="text-xs text-muted-foreground">{detectedKeysCount} active keys detected</p>
+                            </div>
+                          </div>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setShowApiKeysModal(false)}>
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+
+                        <div className="text-xs text-muted-foreground space-y-2">
+                          <p>Genesis dispatches <strong>10 parallel subagents directly from your browser</strong> across 10 Gemini API keys without any backend proxy bottlenecks.</p>
+                          <p>Paste up to 10 Google Gemini API keys below (one per line). Keys are safely stored in your browser's <code className="text-foreground">localStorage</code>.</p>
+                        </div>
+
+                        <textarea
+                          value={customKeysInput}
+                          onChange={e => setCustomKeysInput(e.target.value)}
+                          placeholder="AIzaSy...&#10;AIzaSy...&#10;AIzaSy..."
+                          rows={6}
+                          className="w-full bg-background border border-border rounded-xl p-3 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+
+                        <div className="flex items-center justify-between pt-2">
+                          <span className="text-[11px] text-muted-foreground">
+                            {customKeysInput.split(/[\n,]+/).map(k => k.trim()).filter(Boolean).length} custom keys entered
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <Button variant="outline" size="sm" onClick={() => setShowApiKeysModal(false)}>Cancel</Button>
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                const keys = customKeysInput.split(/[\n,]+/).map(k => k.trim()).filter(Boolean);
+                                saveCustomGeminiKeys(keys);
+                                getAllAvailableGeminiKeys(supabase).then(all => {
+                                  setDetectedKeysCount(all.length);
+                                  toast.success(`Saved ${keys.length} custom keys (${all.length} total active)`);
+                                });
+                                setShowApiKeysModal(false);
+                              }}
+                            >
+                              Save Keys
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                 </div>
               </div>
