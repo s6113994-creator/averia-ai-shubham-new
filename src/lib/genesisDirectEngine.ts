@@ -486,6 +486,89 @@ export function extractFencedProjectFiles(text: string): GenesisProjectFile[] {
 /**
  * Call Google Gemini Direct SSE API from the Browser with multi-key rotation and universal model cascade
  */
+/**
+ * Dual-Proxy Stream Fetcher with Automatic Failover:
+ * 1. Target 1: /api/gemini-stream (Vercel Edge Same-Origin proxy: zero CORS, zero timeout, zero proxy overhead)
+ * 2. Target 2: ${SUPABASE_URL}/functions/v1/gemini-stream (Supabase Edge stateless proxy with CORS headers)
+ * 3. Target 3: https://generativelanguage.googleapis.com (Direct Google Gemini API fallback)
+ */
+async function fetchGeminiStreamWithFailover({
+  model,
+  apiKey,
+  requestPayload,
+}: {
+  model: string;
+  apiKey: string;
+  requestPayload: any;
+}): Promise<Response> {
+  const proxyBody = JSON.stringify({
+    model,
+    ...requestPayload,
+  });
+
+  // 1. Try Vercel Edge Same-Origin Proxy (/api/gemini-stream)
+  try {
+    const vercelResp = await fetch('/api/gemini-stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: proxyBody,
+    });
+
+    // If 404 (local Vite dev without vercel edge) or 502/504, failover to Supabase Edge
+    if (vercelResp.status === 404 || vercelResp.status === 502 || vercelResp.status === 504) {
+      console.warn(`[Genesis Dual-Proxy] /api/gemini-stream returned ${vercelResp.status}. Failing over to Supabase Edge proxy...`);
+    } else {
+      return vercelResp;
+    }
+  } catch (vErr: any) {
+    console.warn('[Genesis Dual-Proxy] /api/gemini-stream unreachable. Failing over to Supabase Edge proxy...', vErr.message);
+  }
+
+  // 2. Try Supabase Edge Stateless Proxy (${SUPABASE_URL}/functions/v1/gemini-stream)
+  const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || 'https://qhmxmwigvexyxvklukns.supabase.co').replace(/\/+$/, '');
+  const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+  const supabaseProxyUrl = `${supabaseUrl}/functions/v1/gemini-stream`;
+
+  try {
+    const sbHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    };
+    if (supabaseKey) {
+      sbHeaders['apikey'] = supabaseKey;
+      sbHeaders['authorization'] = `Bearer ${supabaseKey}`;
+    }
+
+    const sbResp = await fetch(supabaseProxyUrl, {
+      method: 'POST',
+      headers: sbHeaders,
+      body: proxyBody,
+    });
+
+    if (sbResp.status === 404) {
+      console.warn('[Genesis Dual-Proxy] Supabase gemini-stream returned 404. Failing over to direct Google Gemini API...');
+    } else {
+      return sbResp;
+    }
+  } catch (sbErr: any) {
+    console.warn('[Genesis Dual-Proxy] Supabase gemini-stream unreachable. Failing over to direct Google Gemini API...', sbErr.message);
+  }
+
+  // 3. Fallback: Direct Google Gemini SSE
+  const directUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
+  return await fetch(directUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
+    body: JSON.stringify(requestPayload),
+  });
+}
+
 export async function streamGeminiRoleDirect({
   role,
   userGoal,
@@ -536,10 +619,7 @@ export async function streamGeminiRoleDirect({
       const model = GEMINI_CASCADE_MODELS[mIdx];
       if (onModelCascade) onModelCascade(model);
 
-      // Official Google Gemini SSE URL (clean endpoint with x-goog-api-key header)
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
-
-      const requestBody = {
+      const requestPayload = {
         contents: [
           {
             role: 'user',
@@ -557,13 +637,10 @@ export async function streamGeminiRoleDirect({
       };
 
       try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': apiKey,
-          },
-          body: JSON.stringify(requestBody),
+        const response = await fetchGeminiStreamWithFailover({
+          model,
+          apiKey,
+          requestPayload,
         });
 
         // 404 Model Not Found -> Cascade to next model on same key
