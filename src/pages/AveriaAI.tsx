@@ -3039,26 +3039,40 @@ export default function AveriaAI() {
             });
           };
 
-          try {
-            let resp = await fetchForSlot(role.keySlot);
+          let resp: Response | null = null;
+          let currentSlot = role.keySlot;
+          let attempts = 0;
+          const maxAttempts = 3;
 
-            // Auto-retry once on next keySlot if transient failure occurs
-            if (!resp.ok) {
-              const retrySlot = (role.keySlot + 1) % 10;
-              console.warn(`[Swarm Worker ${role.role}] Slot ${role.keySlot} failed (HTTP ${resp.status}). Retrying on slot ${retrySlot}...`);
+          while (attempts < maxAttempts) {
+            attempts++;
+            try {
+              resp = await fetchForSlot(currentSlot);
+              if (resp.ok && resp.body) {
+                break; // Succeeded!
+              }
+              const errJson = await resp.json().catch(() => ({ error: `HTTP ${resp?.status}` }));
+              console.warn(`[Swarm Worker ${role.role}] Attempt ${attempts} on slot ${currentSlot} returned ${resp?.status}: ${errJson?.error}`);
+            } catch (fetchErr: any) {
+              console.warn(`[Swarm Worker ${role.role}] Attempt ${attempts} on slot ${currentSlot} error: ${fetchErr?.message}`);
+            }
+
+            if (attempts < maxAttempts) {
+              currentSlot = (currentSlot + 3) % 10;
               setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
                 ...w,
-                currentAction: `Retrying on slot #${retrySlot + 1}...`,
+                currentAction: `Auto-retrying on keySlot #${currentSlot + 1}...`,
               } : w));
-              await new Promise(r => setTimeout(r, 600));
-              resp = await fetchForSlot(retrySlot);
+              await new Promise(r => setTimeout(r, 800));
             }
+          }
 
-            if (!resp.ok) {
-              const errJson = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-              throw new Error(errJson.error || `HTTP ${resp.status}`);
-            }
-            if (!resp.body) throw new Error('No stream body');
+          if (!resp || !resp.ok || !resp.body) {
+            const errStatus = resp ? resp.status : 'Network Error';
+            throw new Error(`Worker ${role.role} failed after ${maxAttempts} attempts (HTTP ${errStatus})`);
+          }
+
+          try {
 
             const reader = resp.body.getReader();
             const decoder = new TextDecoder();

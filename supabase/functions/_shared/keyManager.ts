@@ -24,28 +24,29 @@ export function getAdminSupabase() {
 }
 
 /** Clean & map model name to standard Gemini / OpenAI compatible names */
-export const OFFICIAL_GEMINI_CASCADE = [
+export const GEMINI_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash-lite",
   "gemini-3.8-flash",
   "gemini-3.1-pro-preview",
   "gemini-3.5-flash-lite",
-  "gemini-2.5-flash",
-  "gemini-2.5-pro",
   "gemini-2.0-flash",
-  "gemini-1.5-flash",
+  "gemini-2.0-flash-lite",
+  "gemini-1.5-pro",
+  "gemini-1.5-flash"
 ];
 
-export function sanitizeAveriaModel(model: string = "gemini-3.8-flash"): string {
+export const OFFICIAL_GEMINI_CASCADE = GEMINI_MODELS;
+
+export function sanitizeAveriaModel(model: string = "gemini-2.5-flash"): string {
   let clean = model.replace(/^google\//i, "").replace(/-preview$/i, "").trim();
-  if (clean.includes("3.8-flash") || clean.includes("3.8") || clean.includes("2.5-flash") || clean.includes("2.0-flash")) {
-    return "gemini-3.8-flash";
-  }
-  if (clean.includes("3.1-pro") || clean.includes("2.5-pro")) {
-    return "gemini-3.1-pro-preview";
-  }
-  if (clean.includes("3.5-flash-lite") || clean.includes("2.5-flash-lite") || clean.includes("2.0-flash-lite")) {
-    return "gemini-3.5-flash-lite";
-  }
-  return clean || "gemini-3.8-flash";
+  if (GEMINI_MODELS.includes(clean)) return clean;
+  if (clean.includes("2.5-flash-lite") || clean.includes("3.5-flash-lite")) return "gemini-2.5-flash-lite";
+  if (clean.includes("2.5-pro") || clean.includes("3.1-pro")) return "gemini-2.5-pro";
+  if (clean.includes("2.5-flash") || clean.includes("3.8-flash")) return "gemini-2.5-flash";
+  if (clean.includes("2.0-flash")) return "gemini-2.0-flash";
+  return clean || "gemini-2.5-flash";
 }
 
 // ==========================================
@@ -328,6 +329,7 @@ export async function executeWithGeminiRotation(
     systemPrompt?: string;
     jsonMode?: boolean;
     maxTokens?: number;
+    keySlot?: number;
   }
 ): Promise<Response> {
   const keys = await getGeminiKeys(supabase);
@@ -338,17 +340,17 @@ export async function executeWithGeminiRotation(
     );
   }
 
-  // Keys are pre-ordered by error_count ASC, last_used_at ASC (least recently used first).
-  // Maintaining this order guarantees strictly distinct active keys rotate seamlessly for every request.
-  const rotated = [...keys];
+  // Rotate keys starting at keySlot for dedicated parallel subagent dispatch
+  const offset = typeof options.keySlot === "number" ? (Math.abs(options.keySlot) % keys.length) : 0;
+  const rotated = [...keys.slice(offset), ...keys.slice(0, offset)];
 
   const selectedModel = options.forensicMode ? "gemini-2.5-pro" : (options.model || "gemini-2.5-flash");
   const cleanModel = sanitizeAveriaModel(selectedModel);
 
-  // Model fallback chain: primary requested model -> official Google Gemini cascade
+  // Model fallback chain: primary requested model -> universal Google Gemini cascade
   const modelsToTry = [
     cleanModel,
-    ...OFFICIAL_GEMINI_CASCADE,
+    ...GEMINI_MODELS,
   ].filter((m, i, arr) => arr.indexOf(m) === i);
 
   const finalMessages = [
@@ -360,17 +362,19 @@ export async function executeWithGeminiRotation(
   let lastErrorText = "";
   const deadKeys = new Set<string>();
 
-  for (const currentModel of modelsToTry) {
-    for (let i = 0; i < rotated.length; i++) {
-      const keyRec = rotated[i];
-      const isLovable = keyRec.api_key.startsWith("lovable:") || keyRec.api_key.startsWith("sk_") || keyRec.api_key.startsWith("sk-");
-      const actualKey = keyRec.api_key.replace("lovable:", "");
+  // Outer loop: iterate across all keys in the pool starting at the assigned keySlot
+  for (let i = 0; i < rotated.length; i++) {
+    const keyRec = rotated[i];
+    const isLovable = keyRec.api_key.startsWith("lovable:") || keyRec.api_key.startsWith("sk_") || keyRec.api_key.startsWith("sk-");
+    const actualKey = keyRec.api_key.replace("lovable:", "");
 
-      // Auto-skip any key known to be dead (403)
-      if (deadKeys.has(actualKey)) {
-        continue;
-      }
+    // Auto-skip any key known to be dead (403)
+    if (deadKeys.has(actualKey)) {
+      continue;
+    }
 
+    // Inner loop: test each Gemini model on this key before giving up on the key
+    for (const currentModel of modelsToTry) {
       const endpoint = isLovable
         ? "https://ai.gateway.lovable.dev/v1/chat/completions"
         : "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
@@ -427,12 +431,19 @@ export async function executeWithGeminiRotation(
         lastStatus = res.status;
         lastErrorText = await res.text().catch(() => "");
 
-        // ── 0. MODEL NOT FOUND / DEPRECATED (HTTP 404) -> Step down to next model in cascade immediately ──
-        if (res.status === 404 || lastErrorText.includes("not found") || lastErrorText.includes("is no longer available")) {
+        // ── 0. MODEL NOT FOUND / DEPRECATED (HTTP 404 or 400 with model error) ──
+        // DO NOT throw or abort! Immediately continue to the next model in GEMINI_MODELS on this key!
+        if (
+          res.status === 404 ||
+          lastErrorText.includes("not found") ||
+          lastErrorText.includes("is not found") ||
+          lastErrorText.includes("is no longer available") ||
+          lastErrorText.includes("Call ModelService.ListModels")
+        ) {
           console.warn(
-            `[Averia AI] Model ${currentModel} returned 404 (${lastErrorText.slice(0, 120)}). Cascading to next model...`
+            `[Averia AI] Key #${i + 1} (${actualKey.slice(0, 10)}...) model ${currentModel} returned ${res.status}. Cascading to next model...`
           );
-          break; // Advance to next model in modelsToTry without marking key dead
+          continue; // Try next model on this key!
         }
 
         // ── 1. DEAD-KEY BYPASS (HTTP 403 Forbidden / Invalid Key / Revoked) ──
@@ -451,13 +462,13 @@ export async function executeWithGeminiRotation(
               .then(() => {})
               .catch(() => {});
           }
-          continue;
+          break; // Key is dead; move to next key in pool
         }
 
         // ── 2. AUTO-RETRY WITH EXPONENTIAL BACKOFF ON HTTP 429 (Rate Limit / RPM Spike) ──
         if (res.status === 429) {
           console.warn(
-            `[Averia AI] Key #${i + 1} (${currentModel}) returned HTTP 429: "${lastErrorText.slice(0, 150)}". Incrementing error count, waiting 1500ms backoff, and rotating to next active key...`
+            `[Averia AI] Key #${i + 1} (${currentModel}) returned HTTP 429. Rotating to next active key...`
           );
 
           if (keyRec.source === "database") {
@@ -469,16 +480,15 @@ export async function executeWithGeminiRotation(
               .catch(() => {});
           }
 
-          // Wait 1500ms backoff before rotating to next key so RPM spikes self-heal
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-          continue;
+          // Backoff before moving to the next key
+          await new Promise((resolve) => setTimeout(resolve, 800));
+          break; // Move to next key in pool
         }
 
         // ── 3. SERVER ERROR (5xx) ──
         console.warn(
-          `[Averia AI] Key #${i + 1} (${currentModel}) returned HTTP ${res.status}: "${lastErrorText.slice(0, 150)}". Rotating to next key...`
+          `[Averia AI] Key #${i + 1} (${currentModel}) returned HTTP ${res.status}: "${lastErrorText.slice(0, 150)}". Trying next model/key...`
         );
-        await new Promise((resolve) => setTimeout(resolve, 500));
         continue;
 
       } catch (networkErr: any) {

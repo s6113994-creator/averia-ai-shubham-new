@@ -1187,7 +1187,8 @@ RULES: Start immediately on line 1 with \`\`\`javascript:src/qaGuard.js. ZERO co
         messages: roleMessages,
         systemPrompt: cfg.prompt,
         stream: true,
-        model: "gemini-3.8-flash",
+        model: "gemini-2.5-flash",
+        keySlot: slot,
       });
     }
 
