@@ -76,7 +76,8 @@ export async function getGeminiKeys(supabase: any): Promise<KeyRecord[]> {
       for (const row of data) {
         const k = row.api_key?.trim();
         if (k && row.is_active === true && !seen.has(k)) {
-          if (k.startsWith("AIza") || k.startsWith("sk_") || k.startsWith("sk-") || k.startsWith("lovable:")) {
+          // Accept any valid Google Gemini API key (AIzaSy..., AQ.Ab8..., etc. with length >= 20) or Lovable key
+          if (k.length >= 20 || k.startsWith("lovable:")) {
             seen.add(k);
             records.push({ api_key: k, source: "database" });
           }

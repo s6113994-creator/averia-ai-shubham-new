@@ -380,13 +380,22 @@ function generateDeterministicSpaHtml(brandTitle: string, allFiles: { path: stri
 
   <!-- Automatic App Bus Mount -->
   <script>
-    window.addEventListener('DOMContentLoaded', function() {
+    function bootApp() {
       if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.mount === 'function') {
         window.__AVERIA_APP__.mount();
       } else if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
         window.__AVERIA_ROUTER__.navigate('/');
       }
-    });
+    }
+    if (document.readyState === 'loading') {
+      window.addEventListener('DOMContentLoaded', bootApp);
+    } else {
+      bootApp();
+    }
+    window.addEventListener('load', bootApp);
+    setTimeout(bootApp, 100);
+    setTimeout(bootApp, 350);
+    setTimeout(bootApp, 900);
   </script>
 </body>
 </html>`;
@@ -569,7 +578,16 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
   // 1. Remove local script tags referencing companion files that we will inline
   doc = doc.replace(/<script[^>]*src=["'](?:\.\/|\.\.\/|src\/|js\/)?[^"']+\.(?:js|jsx|ts|tsx)["'][^>]*>\s*<\/script>/gi, '');
 
-  // 2. Ensure Tailwind CDN is present in <head>
+  // 2. Ensure root #app or #root mount point is present in document
+  if (!doc.includes('id="app"') && !doc.includes('id="root"')) {
+    if (doc.includes('<body')) {
+      doc = doc.replace(/<body([^>]*)>/i, '<body$1>\n<div id="app" class="w-full min-h-screen"></div>');
+    } else {
+      doc = '<div id="app" class="w-full min-h-screen"></div>\n' + doc;
+    }
+  }
+
+  // 3. Ensure Tailwind CDN is present in <head>
   if (!doc.includes('cdn.tailwindcss.com')) {
     if (doc.includes('<head>')) {
       doc = doc.replace('<head>', '<head>\n<script src="https://cdn.tailwindcss.com"></script>');
@@ -701,7 +719,17 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
 
     render: function(route, params) {
       var r = normalizeRoute(route || _currentRoute);
-      var container = document.getElementById('app') || document.getElementById('root') || document.body;
+      var container = document.getElementById('app') || document.getElementById('root');
+      if (!container) {
+        container = document.createElement('div');
+        container.id = 'app';
+        container.className = 'w-full min-h-screen';
+        if (document.body) {
+          document.body.prepend(container);
+        } else if (document.documentElement) {
+          document.documentElement.appendChild(container);
+        }
+      }
 
       // 1. Matched route function
       var renderFn = _routes[r];
@@ -712,19 +740,31 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
         else if (_routes['/home']) renderFn = _routes['/home'];
         else if (window.HomePage && typeof window.HomePage.render === 'function') {
           renderFn = function() { window.HomePage.render(params); };
+        } else if (window.HomePage && typeof window.HomePage === 'function') {
+          renderFn = window.HomePage;
+        } else if (window.AppPages && window.AppPages.ShopPage) {
+          renderFn = window.AppPages.ShopPage;
+        } else if (window.AppPages && typeof window.AppPages.renderCatalog === 'function') {
+          renderFn = function() { window.AppPages.renderCatalog(params); };
         }
       }
 
       // 3. Fallback to subpages if available
       if (!renderFn && window.AppPages) {
-        var subName = r.replace(/^\\//, '').toLowerCase();
+        var subName = r.replace(/^\//, '').toLowerCase();
         if (typeof window.AppPages['render' + subName.charAt(0).toUpperCase() + subName.slice(1)] === 'function') {
           renderFn = function() { window.AppPages['render' + subName.charAt(0).toUpperCase() + subName.slice(1)](params); };
         } else if (subName === 'catalog' && typeof window.AppPages.renderCatalog === 'function') renderFn = function() { window.AppPages.renderCatalog(params); };
+        else if (subName === 'shop' && window.AppPages.ShopPage) renderFn = window.AppPages.ShopPage;
+        else if (subName === 'cart' && window.AppPages.CartPage) renderFn = window.AppPages.CartPage;
         else if (subName === 'cart' && typeof window.AppPages.renderCart === 'function') renderFn = function() { window.AppPages.renderCart(params); };
+        else if (subName === 'detail' && window.AppPages.ProductDetailPage) renderFn = window.AppPages.ProductDetailPage;
         else if (subName === 'detail' && typeof window.AppPages.renderDetail === 'function') renderFn = function() { window.AppPages.renderDetail(params); };
+        else if (subName === 'orders' && window.AppPages.OrdersPage) renderFn = window.AppPages.OrdersPage;
         else if (subName === 'orders' && typeof window.AppPages.renderOrders === 'function') renderFn = function() { window.AppPages.renderOrders(params); };
+        else if (subName === 'checkout' && window.AppPages.CheckoutPage) renderFn = window.AppPages.CheckoutPage;
         else if (subName === 'checkout' && typeof window.AppPages.renderCheckout === 'function') renderFn = function() { window.AppPages.renderCheckout(params); };
+        else if (subName === 'admin' && window.AppPages.AdminDashboard) renderFn = window.AppPages.AdminDashboard;
         else if (subName === 'admin' && typeof window.AppPages.renderAdmin === 'function') renderFn = function() { window.AppPages.renderAdmin(params); };
         else if (subName === 'settings' && typeof window.AppPages.renderSettings === 'function') renderFn = function() { window.AppPages.renderSettings(params); };
         else if (subName === 'about' && typeof window.AppPages.renderAbout === 'function') renderFn = function() { window.AppPages.renderAbout(params); };
@@ -758,7 +798,9 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
               }
               window.__averia_react_root__.render(reactElem);
               return;
-            } catch (_) {}
+            } catch (rErr) {
+              console.warn('[AveriaApp React createRoot failed, trying direct invoke]:', rErr);
+            }
           }
           renderFn(params);
         } catch (renderErr) {
@@ -768,11 +810,8 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     },
 
     mount: function() {
-      if (_mounted) return;
-      _mounted = true;
-
       // Auto-register any modules attached to window
-      if (window.HomePage && !_routes['/']) {
+      if (window.HomePage) {
         if (typeof window.HomePage.render === 'function') {
           app.route('/', function(p) { window.HomePage.render(p); });
         } else if (typeof window.HomePage === 'function') {
@@ -781,25 +820,32 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
       }
       if (window.AppPages) {
         var ap = window.AppPages;
-        if (ap.ShopPage && !_routes['/shop']) app.route('/shop', ap.ShopPage);
-        if (ap.ProductDetailPage && !_routes['/product']) app.route('/product', ap.ProductDetailPage);
-        if (ap.CartPage && !_routes['/cart']) app.route('/cart', ap.CartPage);
-        if (ap.CheckoutPage && !_routes['/checkout']) app.route('/checkout', ap.CheckoutPage);
-        if (ap.OrdersPage && !_routes['/orders']) app.route('/orders', ap.OrdersPage);
-        if (ap.WishlistPage && !_routes['/wishlist']) app.route('/wishlist', ap.WishlistPage);
-        if (ap.AdminDashboard && !_routes['/admin']) app.route('/admin', ap.AdminDashboard);
-        if (typeof ap.renderCatalog === 'function' && !_routes['/catalog']) app.route('/catalog', function(p) { ap.renderCatalog(p); });
-        if (typeof ap.renderDetail === 'function' && !_routes['/detail']) app.route('/detail', function(p) { ap.renderDetail(p); });
-        if (typeof ap.renderCart === 'function' && !_routes['/cart']) app.route('/cart', function(p) { ap.renderCart(p); });
-        if (typeof ap.renderOrders === 'function' && !_routes['/orders']) app.route('/orders', function(p) { ap.renderOrders(p); });
-        if (typeof ap.renderCheckout === 'function' && !_routes['/checkout']) app.route('/checkout', function(p) { ap.renderCheckout(p); });
-        if (typeof ap.renderAdmin === 'function' && !_routes['/admin']) app.route('/admin', function(p) { ap.renderAdmin(p); });
-        if (typeof ap.renderSettings === 'function' && !_routes['/settings']) app.route('/settings', function(p) { ap.renderSettings(p); });
-        if (typeof ap.renderAbout === 'function' && !_routes['/about']) app.route('/about', function(p) { ap.renderAbout(p); });
+        if (ap.ShopPage) app.route('/shop', ap.ShopPage);
+        if (ap.ProductDetailPage) app.route('/product', ap.ProductDetailPage);
+        if (ap.CartPage) app.route('/cart', ap.CartPage);
+        if (ap.CheckoutPage) app.route('/checkout', ap.CheckoutPage);
+        if (ap.OrdersPage) app.route('/orders', ap.OrdersPage);
+        if (ap.WishlistPage) app.route('/wishlist', ap.WishlistPage);
+        if (ap.AdminDashboard) app.route('/admin', ap.AdminDashboard);
+        if (typeof ap.renderCatalog === 'function') app.route('/catalog', function(p) { ap.renderCatalog(p); });
+        if (typeof ap.renderDetail === 'function') app.route('/detail', function(p) { ap.renderDetail(p); });
+        if (typeof ap.renderCart === 'function') app.route('/cart', function(p) { ap.renderCart(p); });
+        if (typeof ap.renderOrders === 'function') app.route('/orders', function(p) { ap.renderOrders(p); });
+        if (typeof ap.renderCheckout === 'function') app.route('/checkout', function(p) { ap.renderCheckout(p); });
+        if (typeof ap.renderAdmin === 'function') app.route('/admin', function(p) { ap.renderAdmin(p); });
+        if (typeof ap.renderSettings === 'function') app.route('/settings', function(p) { ap.renderSettings(p); });
+        if (typeof ap.renderAbout === 'function') app.route('/about', function(p) { ap.renderAbout(p); });
+
+        // If no root route registered yet, default to ShopPage or renderCatalog
+        if (!_routes['/']) {
+          if (ap.ShopPage) app.route('/', ap.ShopPage);
+          else if (typeof ap.renderCatalog === 'function') app.route('/', function(p) { ap.renderCatalog(p); });
+        }
       }
 
       var initial = (window.location.hash ? normalizeRoute(window.location.hash) : '/');
       app.navigate(initial);
+      _mounted = true;
     }
   };
 
@@ -816,9 +862,20 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     init: function() { return app.mount(); }
   };
 
-  window.addEventListener('DOMContentLoaded', function() {
-    app.mount();
-  });
+  function bootApp() {
+    if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.mount === 'function') {
+      window.__AVERIA_APP__.mount();
+    }
+  }
+  if (document.readyState === 'loading') {
+    window.addEventListener('DOMContentLoaded', bootApp);
+  } else {
+    bootApp();
+  }
+  window.addEventListener('load', bootApp);
+  setTimeout(bootApp, 100);
+  setTimeout(bootApp, 350);
+  setTimeout(bootApp, 900);
 })();
 </script>\n`;
 
@@ -3490,9 +3547,21 @@ export default function AveriaAI() {
           setPreviewError("No project files could be parsed from the generation stream. The response may have timed out or truncated.");
         } else {
           setPreviewError(null);
-          const indexFile = finalFiles.find(f => /^(?:public\/|src\/)?index\.html$/i.test(f.path) || f.path.endsWith('.html'));
+          let indexFile = finalFiles.find(f => /^(?:public\/|src\/)?index\.html$/i.test(f.path) || f.path.endsWith('.html'));
+          if (!indexFile || indexFile.content.split('\n').length < 30) {
+            console.log('[Fallback Shell] Synthesizing deterministic SPA shell with companion modules...');
+            const synthesizedHtml = generateDeterministicSpaHtml(brandTitle, finalFiles);
+            if (indexFile) {
+              indexFile.content = synthesizedHtml;
+              indexFile.path = 'index.html';
+            } else {
+              indexFile = { path: 'index.html', content: synthesizedHtml, language: 'html' };
+              finalFiles.push(indexFile);
+            }
+          }
           if (indexFile) {
-            setCanvasContent(indexFile.content);
+            const bundled = bundleZeroCORSHtml(indexFile.content, finalFiles);
+            setCanvasContent(bundled);
             setCanvasMode('preview');
             setPreviewKey(k => k + 1);
           }
@@ -4167,7 +4236,7 @@ export default function AveriaAI() {
                         <textarea
                           value={customKeysInput}
                           onChange={e => setCustomKeysInput(e.target.value)}
-                          placeholder="AIzaSy...&#10;AIzaSy...&#10;AIzaSy..."
+                          placeholder="AQ.Ab8... or AIzaSy...&#10;AQ.Ab8...&#10;AIzaSy..."
                           rows={6}
                           className="w-full bg-background border border-border rounded-xl p-3 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-indigo-500"
                         />

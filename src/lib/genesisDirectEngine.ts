@@ -46,10 +46,10 @@ export function getCustomGeminiKeys(): string[] {
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed.map((k: any) => String(k).trim()).filter(k => k.length > 5);
+        return parsed.map((k: any) => String(k).trim()).filter(k => k.length >= 20 && !k.startsWith('lovable:'));
       }
     } catch {
-      return raw.split(',').map(k => k.trim()).filter(k => k.length > 5);
+      return raw.split(',').map(k => k.trim()).filter(k => k.length >= 20 && !k.startsWith('lovable:'));
     }
   } catch {
     return [];
@@ -62,7 +62,7 @@ export function getCustomGeminiKeys(): string[] {
  */
 export function saveCustomGeminiKeys(keys: string[]): void {
   try {
-    const clean = Array.from(new Set(keys.map(k => k.trim()).filter(k => k.length > 5)));
+    const clean = Array.from(new Set(keys.map(k => k.trim()).filter(k => k.length >= 20 && !k.startsWith('lovable:'))));
     localStorage.setItem(LOCAL_STORAGE_KEY_GEMINI, JSON.stringify(clean));
   } catch (err) {
     console.warn('[Genesis] Failed to persist custom Gemini keys:', err);
@@ -73,7 +73,7 @@ export function saveCustomGeminiKeys(keys: string[]): void {
  * Load all available Gemini API keys from all sources:
  * 1. localStorage custom keys
  * 2. Vite env vars (VITE_GEMINI_KEY_1..10, VITE_GEMINI_API_KEYS, VITE_GEMINI_API_KEY)
- * 3. Optional Supabase DB lookup if client provided
+ * 3. Optional Supabase DB lookup if client provided (all active keys: AQ.Ab8..., AIzaSy..., etc.)
  */
 export async function getAllAvailableGeminiKeys(supabaseClient?: any): Promise<string[]> {
   const keys: string[] = [];
@@ -82,7 +82,8 @@ export async function getAllAvailableGeminiKeys(supabaseClient?: any): Promise<s
   const addKey = (k: any) => {
     if (!k || typeof k !== 'string') return;
     const clean = k.trim();
-    if (clean.length > 5 && !seen.has(clean) && !clean.startsWith('lovable:')) {
+    // Accept all valid Gemini API keys (AIzaSy..., AQ.Ab8..., etc. with length >= 20) and ignore non-Gemini
+    if (clean.length >= 20 && !seen.has(clean) && !clean.startsWith('lovable:')) {
       seen.add(clean);
       keys.push(clean);
     }
@@ -104,18 +105,20 @@ export async function getAllAvailableGeminiKeys(supabaseClient?: any): Promise<s
     env.VITE_GEMINI_API_KEYS.split(',').forEach(addKey);
   }
 
-  // 3. Optional DB lookup
-  if (supabaseClient && keys.length < 10) {
+  // 3. Optional DB lookup (fetch up to 30 active keys so all available pool keys are included)
+  if (supabaseClient) {
     try {
       const { data, error } = await supabaseClient
         .from('gemini_api_keys')
         .select('api_key')
         .eq('is_active', true)
-        .limit(15);
+        .limit(30);
       if (!error && Array.isArray(data)) {
         data.forEach(row => addKey(row.api_key));
       }
-    } catch {}
+    } catch (dbErr) {
+      console.warn('[Genesis] Supabase gemini_api_keys lookup warning:', dbErr);
+    }
   }
 
   return keys;
@@ -492,11 +495,13 @@ export async function streamGeminiRoleDirect({
 
   let currentSlot = keySlot % availableKeys.length;
   let keyAttempts = 0;
-  const maxKeyAttempts = Math.min(availableKeys.length * 2, 8);
+  let rateLimitRetries = 0;
+  const maxKeyAttempts = Math.max(availableKeys.length * 3, 15);
 
   while (keyAttempts < maxKeyAttempts) {
     const apiKey = availableKeys[currentSlot];
     keyAttempts++;
+    let hit429 = false;
 
     // Try cascading through models for this key
     for (let mIdx = 0; mIdx < GEMINI_CASCADE_MODELS.length; mIdx++) {
@@ -537,10 +542,17 @@ export async function streamGeminiRoleDirect({
           continue;
         }
 
-        // 429 Rate Limit / Quota -> Rotate key immediately
+        // 429 Rate Limit / Quota -> Exponential backoff retry (1500ms * attempt) and rotate key slot
         if (response.status === 429) {
-          console.warn(`[Genesis Direct] Key #${currentSlot + 1} hit 429 rate limit. Rotating key...`);
-          break; // Break model loop, trigger key rotation
+          hit429 = true;
+          rateLimitRetries++;
+          const attempt = Math.min(rateLimitRetries, 3);
+          const backoffMs = 1500 * attempt;
+          console.warn(`[Genesis Direct] Key #${currentSlot + 1} hit 429 rate limit (attempt ${rateLimitRetries}). Backing off for ${backoffMs}ms and rotating to next key slot...`);
+          currentSlot = (currentSlot + 1) % availableKeys.length;
+          if (onKeyRotate) onKeyRotate(currentSlot);
+          await new Promise(r => setTimeout(r, backoffMs));
+          break; // Break model loop, trigger retry with rotated key
         }
 
         // 400 Bad Request (unsupported feature or model mismatch) -> Cascade model
@@ -664,10 +676,12 @@ export async function streamGeminiRoleDirect({
       }
     }
 
-    // Rotate key slot
-    currentSlot = (currentSlot + 1) % availableKeys.length;
-    if (onKeyRotate) onKeyRotate(currentSlot);
-    await new Promise(r => setTimeout(r, 400));
+    // Rotate key slot if not already rotated by 429 backoff handler
+    if (!hit429) {
+      currentSlot = (currentSlot + 1) % availableKeys.length;
+      if (onKeyRotate) onKeyRotate(currentSlot);
+      await new Promise(r => setTimeout(r, 400));
+    }
   }
 
   throw new Error(`Worker for ${role} failed across all Gemini models and available keys.`);
