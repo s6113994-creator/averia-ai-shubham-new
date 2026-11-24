@@ -15,10 +15,13 @@ import { MessageResponse } from '@/components/ai-elements/message';
 import {
   getAllAvailableGeminiKeys,
   streamGeminiRoleDirect,
+  streamGenesisBatchDirect,
   streamConversationalDirect,
   saveCustomGeminiKeys,
   getCustomGeminiKeys,
   GEMINI_CASCADE_MODELS,
+  GENESIS_SWARM_BATCHES,
+  GenesisBatchDefinition,
   runSwarmConcurrencyPool,
   clearQuarantinedKeys,
 } from '@/lib/genesisDirectEngine';
@@ -264,6 +267,19 @@ function extractProjectFiles(content: string): ParsedProjectFile[] {
       files.push({ path: cleanPath, content: body });
     }
   };
+
+  // 0. Primary Marker: ===FILE: <path>=== ... ===END_FILE=== or next ===FILE:
+  const markerRegex = /(?:===FILE:\s*([^\n\r=]+?)\s*===|(?:\/\*+|\/{2,})\s*===FILE:\s*([^\n\r=]+?)\s*===\s*\*?\/?)[\r\n]+([\s\S]*?)(?=(?:===FILE:|\/\*+\s*===FILE:|\/{2,}\s*===FILE:|$))/gi;
+  let mMatch: RegExpExecArray | null;
+  while ((mMatch = markerRegex.exec(content)) !== null) {
+    const rawPath = mMatch[1] || mMatch[2];
+    if (rawPath) {
+      let body = mMatch[3].replace(/===END_FILE===/gi, '').replace(/```+$/g, '').trim();
+      const inner = body.match(/^```[a-zA-Z0-9_\-]*\s*([\s\S]*?)```$/);
+      if (inner) body = inner[1].trim();
+      addFile(rawPath, body);
+    }
+  }
 
   // 1. Primary: ```file:path/to/file.ext OR ```lang:path/to/file.ext (closed or unclosed)
   const fileHeaderRegex = /```(?:file:|[a-zA-Z0-9_\-]+:)\s*([^\n\r`"']+?)\s*\n([\s\S]*?)(?:```|$)/g;
@@ -3265,12 +3281,12 @@ export default function AveriaAI() {
         const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const initialWorkers: GenesisWorkerStatus[] = GENESIS_SWARM_ROLES.map(r => ({
           ...r,
-          status: 'active',
+          status: 'pending',
           bytes: 0,
           bytesReceived: 0,
           lines: 0,
           speedKbps: 0,
-          currentAction: `Synthesizing ${r.targetFile}...`,
+          currentAction: `Awaiting 3-batch dispatch...`,
         }));
         setWorkersStatus(initialWorkers);
 
@@ -3280,166 +3296,166 @@ export default function AveriaAI() {
           {
             time: now(),
             from: 'System Architect',
-            to: '10 Parallel Direct Workers',
-            action: `Contract published for "${brandTitle}" — Smart Concurrency Pool across ${availableKeys.length} keys`,
+            to: 'Genesis 3-Batch Swarm',
+            action: `Contract published for "${brandTitle}" — 3 Consolidated Batches across ${availableKeys.length} Gemini keys (7 failover reserves)`,
             icon: '📜',
           },
           {
             time: now(),
             from: 'Direct Swarm Orchestrator',
-            to: '10 Workers',
-            action: `Dispatched 10 workers in Rate-Limit-Safe Concurrency Pool (max 3 concurrent, 900ms stagger, x-goog-api-key header auth)`,
+            to: 'Batch Engine',
+            action: `Executing 3 multi-file batches (max 2 concurrent, 2500ms stagger, 16K token window, zero 429 limits)`,
             icon: '🚀',
           },
         ]);
 
-        const runWorker = async (role: typeof GENESIS_SWARM_ROLES[number], workerIdx: number) => {
-          const workerStartTime = Date.now();
-          let workerBytes = 0;
-          let workerText = '';
+        const runBatch = async (batch: GenesisBatchDefinition, batchIdx: number) => {
+          const batchStartTime = Date.now();
+          let batchBytes = 0;
+          let batchText = '';
+
+          // Mark owned subagents as active
+          setWorkersStatus(prev => prev.map(w => batch.workerRoles.includes(w.role) ? {
+            ...w,
+            status: 'active',
+            currentAction: `Synthesizing in ${batch.batchName.split('(')[0].trim()}...`,
+          } : w));
 
           try {
-            const workerResult = await streamGeminiRoleDirect({
-              role: role.role,
+            const batchResult = await streamGenesisBatchDirect({
+              batch,
               userGoal: textContent,
               resolvedTitle: brandTitle,
               sharedContract: contract,
               availableKeys,
-              keySlot: workerIdx % availableKeys.length,
-              onChunk: (delta, bytes) => {
+              onChunk: (delta, bytes, filesSoFar) => {
                 if (bytes) {
-                  workerBytes += bytes;
+                  batchBytes += bytes;
                   setStreamBytes(prev => prev + bytes);
                 }
                 if (delta) {
-                  workerText += delta;
-                  const elapsedSec = Math.max(0.1, (Date.now() - workerStartTime) / 1000);
-                  const speed = Math.round((workerBytes / 1024) / elapsedSec * 10) / 10;
-                  const lineCount = workerText.split('\n').length;
-                  setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
-                    ...w,
-                    bytes: workerBytes,
-                    lines: lineCount,
-                    speedKbps: speed,
-                  } : w));
+                  batchText += delta;
+                  const elapsedSec = Math.max(0.1, (Date.now() - batchStartTime) / 1000);
+                  const speed = Math.round((batchBytes / 1024) / elapsedSec * 10) / 10;
+
+                  // Update line counts for each worker based on their files
+                  setWorkersStatus(prev => prev.map(w => {
+                    if (!batch.workerRoles.includes(w.role)) return w;
+                    const matchingFile = filesSoFar.find(f => {
+                      const targets = w.targetFile.split(',').map(s => s.trim().toLowerCase());
+                      const p = f.path.toLowerCase();
+                      return targets.some(t => p.endsWith(t) || p.includes(t.replace('src/', '')));
+                    });
+                    const fileLines = matchingFile ? matchingFile.content.split('\n').length : Math.round(batchText.split('\n').length / batch.workerRoles.length);
+                    return {
+                      ...w,
+                      bytes: Math.round(batchBytes / batch.workerRoles.length),
+                      lines: fileLines,
+                      speedKbps: speed,
+                    };
+                  }));
                 }
               },
               onModelCascade: (model) => {
-                setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
+                setWorkersStatus(prev => prev.map(w => batch.workerRoles.includes(w.role) ? {
                   ...w,
                   currentAction: `Model: ${model}`,
                 } : w));
               },
               onKeyRotate: (newSlot) => {
-                setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
+                setWorkersStatus(prev => prev.map(w => batch.workerRoles.includes(w.role) ? {
                   ...w,
-                  currentAction: `Key rotation: slot #${newSlot + 1}...`,
+                  currentAction: `Failover key slot #${newSlot + 1}...`,
                 } : w));
               },
             });
 
-            const finalLines = workerResult.content.split('\n').length;
-            setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
-              ...w,
-              status: 'done',
-              lines: finalLines,
-              currentAction: `Complete (${workerResult.modelUsed || 'Gemini'})`,
-            } : w));
+            // Mark all owned subagents as done
+            const parsedFiles = batchResult.files;
+            setWorkersStatus(prev => prev.map(w => {
+              if (!batch.workerRoles.includes(w.role)) return w;
+              const matchingFile = parsedFiles.find(f => {
+                const targets = w.targetFile.split(',').map(s => s.trim().toLowerCase());
+                const p = f.path.toLowerCase();
+                return targets.some(t => p.endsWith(t) || p.includes(t.replace('src/', '')));
+              });
+              const lines = matchingFile ? matchingFile.content.split('\n').length : Math.round(batchResult.content.split('\n').length / batch.workerRoles.length);
+              return {
+                ...w,
+                status: 'done',
+                lines,
+                currentAction: `Complete (${batchResult.modelUsed || 'Gemini'})`,
+              };
+            }));
 
-            // Collaboration handshake log
-            setCollaborationLogs(prev => [
-              ...prev,
-              {
-                time: now(),
-                from: role.name,
-                to: 'Shared Bus',
-                action: `Delivered ${role.targetFile} (${finalLines} lines, ${Math.round(workerBytes / 1024)} KB) via ${workerResult.modelUsed || 'Gemini'}`,
-                icon: '✓',
-              },
-            ]);
+            // Log completion for each role
+            for (const roleId of batch.workerRoles) {
+              const rDef = GENESIS_SWARM_ROLES.find(r => r.role === roleId);
+              if (rDef) {
+                setCollaborationLogs(prev => [
+                  ...prev,
+                  {
+                    time: now(),
+                    from: rDef.name,
+                    to: 'Shared Bus',
+                    action: `Delivered ${rDef.targetFile} via ${batchResult.modelUsed || 'Gemini'}`,
+                    icon: '✓',
+                  },
+                ]);
+              }
+            }
 
-            return { role: role.role, files: workerResult.files, content: workerResult.content };
+            return { role: batch.batchId, files: batchResult.files, content: batchResult.content, modelUsed: batchResult.modelUsed };
           } catch (err: any) {
-            console.error(`[Worker Failed] ${role.role}:`, err);
-            setWorkersStatus(prev => prev.map(w => w.role === role.role ? {
+            console.error(`[Batch Failed] ${batch.batchId}:`, err);
+            setWorkersStatus(prev => prev.map(w => batch.workerRoles.includes(w.role) ? {
               ...w,
               status: 'failed',
-              currentAction: err.message ? `Error: ${err.message.slice(0, 45)}` : 'Worker failed',
+              currentAction: err.message ? `Error: ${err.message.slice(0, 45)}` : 'Batch failed',
             } : w));
-            setCollaborationLogs(prev => [
-              ...prev,
-              {
-                time: now(),
-                from: role.name,
-                to: 'Swarm Bus',
-                action: `Error: ${err.message || 'Worker failed'}`,
-                icon: '⚠️',
-              },
-            ]);
-            return { role: role.role, files: [], content: '', error: err.message };
+            return { role: batch.batchId, files: [], content: '', error: err.message };
           }
         };
 
-        // Dispatch 10 workers in Smart Rate-Limit-Safe Concurrency Pool (max 2 concurrent, 1500ms stagger)
+        // Dispatch 3 consolidated batches with maxConcurrent = 2 and 2500ms launch stagger
         const poolResults = await runSwarmConcurrencyPool(
-          GENESIS_SWARM_ROLES as any,
+          GENESIS_SWARM_BATCHES as any,
           2, // maxConcurrent = 2
-          1500, // 1500ms launch stagger
-          (role, idx) => runWorker(role, idx)
+          2500, // 2500ms launch stagger
+          (batch, idx) => runBatch(batch, idx)
         );
 
-        // ── STRICT 10/10 COMPLETION GATE ──
-        // Only after ALL 10 workers have resolved do we collect files, save to disk, and mount preview
+        // ── STRICT COMPLETION GATE ──
         const results = poolResults.map(val => ({ status: 'fulfilled' as const, value: val }));
 
-        // Collect all files across 10 workers
+        // Collect all files across 3 batches
         const filesMap = new Map<string, ProjectFile>();
-        let completedWorkersCount = 0;
-        const workerErrors: string[] = [];
+        let completedBatchesCount = 0;
+        const batchErrors: string[] = [];
 
         for (const res of results) {
           if (res.status === 'fulfilled' && res.value) {
             if (res.value.files && res.value.files.length > 0) {
-              completedWorkersCount++;
+              completedBatchesCount++;
               for (const f of res.value.files) {
                 if (f.content.length < 60 && f.content.includes('Auto-generated module for')) continue;
-                if (f.path === 'src/architect.js' || f.path === 'src/ui_shell.js' || f.path === 'src/db_engineer.js') continue;
                 const normalizedPath = (f.path.includes('ui_shell') || (res.value.role === 'ui_shell' && f.path.endsWith('.html'))) ? 'index.html' : f.path;
                 filesMap.set(normalizedPath, { ...f, path: normalizedPath });
               }
             }
             if (res.value.error) {
-              workerErrors.push(`[${res.value.role}]: ${res.value.error}`);
+              batchErrors.push(`[${res.value.role}]: ${res.value.error}`);
             }
           }
         }
         let allFiles = Array.from(filesMap.values());
 
-        // STRICT GATE: If 0 workers completed or 0 files generated, NEVER generate fake placeholder HTML!
-        // Display the exact Google API error status/message with 100% transparency.
-        if (completedWorkersCount === 0 || allFiles.length === 0) {
-          const detailedErr = workerErrors.length > 0
-            ? workerErrors.join('\n')
-            : 'All 10 subagents failed to return files. Please verify Gemini API key permissions, live models, and quota.';
+        if (completedBatchesCount === 0 || allFiles.length === 0) {
+          const detailedErr = batchErrors.length > 0
+            ? batchErrors.join('\n')
+            : 'All 3 multi-file batches failed to return files. Please verify Gemini API key permissions and quota.';
           setPreviewError(detailedErr);
-          throw new Error(`Genesis generation failed (0 subagents completed):\n${detailedErr}`);
-        }
-
-        // Deterministic SPA Shell Auto-Synthesizer
-        // ONLY synthesize index.html if real companion files exist and index.html is missing or < 30 lines
-        let indexFile = allFiles.find(f => f.path === 'index.html' || f.path.endsWith('/index.html') || f.path.endsWith('.html'));
-        const indexLines = indexFile ? indexFile.content.split('\n').length : 0;
-
-        if (!indexFile || indexLines < 30) {
-          console.log('[SPA Shell Auto-Synthesizer] Synthesizing index.html wrapper for genuine companion modules...');
-          const synthesizedHtml = generateDeterministicSpaHtml(brandTitle, allFiles);
-          if (indexFile) {
-            indexFile.content = synthesizedHtml;
-            indexFile.path = 'index.html';
-          } else {
-            indexFile = { path: 'index.html', content: synthesizedHtml, language: 'html' };
-            allFiles.push(indexFile);
-          }
+          throw new Error(`Genesis generation failed (0 batches completed):\n${detailedErr}`);
         }
 
         // Output clean code blocks with zero boastful essays
@@ -3459,8 +3475,32 @@ export default function AveriaAI() {
           return [...prev, { role: 'assistant', content: assistantContent }];
         });
 
-        // Bundle Zero-CORS HTML and mount preview
-        if (indexFile) {
+        // ── NEVER RENDER BLANK NAVBAR FALLBACK ──
+        // Only mount Live Preview once real HomePage.tsx and AppPages.tsx content (>150 lines) has been generated
+        const homePageFile = allFiles.find(f => /HomePage\.(?:tsx|jsx|js|ts)$/i.test(f.path) || f.path.endsWith('/HomePage.tsx'));
+        const appPagesFile = allFiles.find(f => /AppPages\.(?:tsx|jsx|js|ts)$/i.test(f.path) || f.path.endsWith('/AppPages.tsx'));
+
+        const homePageLines = homePageFile ? homePageFile.content.split('\n').length : 0;
+        const appPagesLines = appPagesFile ? appPagesFile.content.split('\n').length : 0;
+        const hasSubstantialUI = (homePageFile && homePageLines >= 150) || (appPagesFile && appPagesLines >= 100);
+
+        if (!hasSubstantialUI) {
+          const errMsg = `Live Preview held: HomePage.tsx (${homePageLines} lines) or AppPages.tsx (${appPagesLines} lines) is incomplete (minimum 150 lines required). Please click Retry Generation to regenerate with healthy Gemini reserve keys.`;
+          console.warn('[Genesis Guard]', errMsg);
+          setPreviewError(errMsg);
+          setCanvasContent(null);
+          toast.error('Incomplete UI generation. Click Retry Generation to retry.');
+        } else {
+          setPreviewError(null);
+          let indexFile = allFiles.find(f => f.path === 'index.html' || f.path.endsWith('/index.html') || f.path.endsWith('.html'));
+          if (!indexFile) {
+            indexFile = {
+              path: 'index.html',
+              content: generateDeterministicSpaHtml(brandTitle, allFiles),
+              language: 'html',
+            };
+            allFiles.push(indexFile);
+          }
           const bundled = bundleZeroCORSHtml(indexFile.content, allFiles);
           setCanvasContent(bundled);
           setCanvasMode('preview');
@@ -3478,7 +3518,6 @@ export default function AveriaAI() {
               setDiskStatus(`All ${allFiles.length} files saved to ${localFolderName || 'folder'}`);
               toast.success(`📁 Saved ${allFiles.length} files to ${localFolderName || 'folder'}`);
 
-              // Scan workspace to update Explorer tree and live line counts
               const scanned = await scanLocalWorkspace(localFolderHandle, 4);
               if (scanned) {
                 setWorkspaceContext(scanned);
@@ -3626,21 +3665,30 @@ export default function AveriaAI() {
         const finalFiles = extractProjectFiles(assistantContent);
         if (finalFiles.length === 0) {
           setPreviewError("No project files could be parsed from the generation stream. The response may have timed out or truncated.");
+          setCanvasContent(null);
         } else {
-          setPreviewError(null);
-          let indexFile = finalFiles.find(f => /^(?:public\/|src\/)?index\.html$/i.test(f.path) || f.path.endsWith('.html'));
-          if (!indexFile || indexFile.content.split('\n').length < 30) {
-            console.log('[Fallback Shell] Synthesizing deterministic SPA shell with companion modules...');
-            const synthesizedHtml = generateDeterministicSpaHtml(brandTitle, finalFiles);
-            if (indexFile) {
-              indexFile.content = synthesizedHtml;
-              indexFile.path = 'index.html';
-            } else {
-              indexFile = { path: 'index.html', content: synthesizedHtml, language: 'html' };
+          // ── NEVER RENDER BLANK NAVBAR FALLBACK ──
+          // Only mount Live Preview once real HomePage.tsx and AppPages.tsx content (>150 lines) has been generated
+          const homePageFile = finalFiles.find(f => /HomePage\.(?:tsx|jsx|js|ts)$/i.test(f.path) || f.path.endsWith('/HomePage.tsx'));
+          const appPagesFile = finalFiles.find(f => /AppPages\.(?:tsx|jsx|js|ts)$/i.test(f.path) || f.path.endsWith('/AppPages.tsx'));
+
+          const homePageLines = homePageFile ? homePageFile.content.split('\n').length : 0;
+          const appPagesLines = appPagesFile ? appPagesFile.content.split('\n').length : 0;
+          const hasSubstantialUI = (homePageFile && homePageLines >= 150) || (appPagesFile && appPagesLines >= 100);
+
+          if (!hasSubstantialUI) {
+            const errMsg = `Live Preview held: HomePage.tsx (${homePageLines} lines) or AppPages.tsx (${appPagesLines} lines) is incomplete (minimum 150 lines required). Please click Retry Generation to regenerate with healthy Gemini reserve keys.`;
+            console.warn('[Genesis Guard]', errMsg);
+            setPreviewError(errMsg);
+            setCanvasContent(null);
+            toast.error('Incomplete UI generation. Click Retry Generation to retry.');
+          } else {
+            setPreviewError(null);
+            let indexFile = finalFiles.find(f => /^(?:public\/|src\/)?index\.html$/i.test(f.path) || f.path.endsWith('.html'));
+            if (!indexFile) {
+              indexFile = { path: 'index.html', content: generateDeterministicSpaHtml(brandTitle, finalFiles), language: 'html' };
               finalFiles.push(indexFile);
             }
-          }
-          if (indexFile) {
             const bundled = bundleZeroCORSHtml(indexFile.content, finalFiles);
             setCanvasContent(bundled);
             setCanvasMode('preview');
