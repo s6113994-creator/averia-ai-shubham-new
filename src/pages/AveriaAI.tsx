@@ -15,6 +15,7 @@ import { MessageResponse } from '@/components/ai-elements/message';
 import {
   getAllAvailableGeminiKeys,
   streamGeminiRoleDirect,
+  streamConversationalDirect,
   saveCustomGeminiKeys,
   getCustomGeminiKeys,
   GEMINI_CASCADE_MODELS,
@@ -501,11 +502,13 @@ function extractMultimediaRequests(content: string): { type: string; title: stri
 
 function cleanCodeForBrowser(raw: string): string {
   let code = raw;
-  code = code.replace(/^import\s+.*?['";]\s*$/gm, '');
+  code = code.replace(/import\s+(?:type\s+)?[\s\S]*?from\s*['"][^'"]+['"];?/g, '');
+  code = code.replace(/^\s*import\s+.*?['";]\s*$/gm, '');
   code = code.replace(/export\s+default\s+function\s+/g, 'function ');
   code = code.replace(/export\s+default\s+/g, '');
   code = code.replace(/export\s+function\s+/g, 'function ');
   code = code.replace(/export\s+const\s+/g, 'const ');
+  code = code.replace(/export\s*\{[\s\S]*?\}\s*;?/g, '');
   return code.trim();
 }
 
@@ -546,24 +549,42 @@ export function transpileToVanillaJS(code: string, fileName?: string): { code: s
   cleaned = cleaned.replace(/^\s*(?:public|private|protected|readonly)\s+/gm, '');
 
   // 7. Strip imports and exports (ES module shims)
-  cleaned = cleaned.replace(/import\s+(?:(?:\*\s+as\s+[\w$]+)|(?:[\w$]+(?:\s*,\s*\{[\s\S]*?\})?)|(?:\{[\s\S]*?\}))\s+from\s*['"][^'"]+['"];?/g, '');
+  // Multiline imports: import { ... } from '...'
+  cleaned = cleaned.replace(/import\s+(?:type\s+)?[\s\S]*?from\s*['"][^'"]+['"];?/g, '');
+  // Side-effect imports: import '...' or import "..."
   cleaned = cleaned.replace(/^\s*import\s+['"][^'"]+['"];?\s*$/gm, '');
+  // Dynamic imports: import(...)
   cleaned = cleaned.replace(/import\s*\([^)]+\)/g, 'undefined');
+  // Any leftover import lines
+  cleaned = cleaned.replace(/^\s*import\s+.*?;?\s*$/gm, '');
 
-  cleaned = cleaned.replace(/^\s*export\s+default\s+(function|class|async\s+function)\s+/gm, '$1 ');
-  cleaned = cleaned.replace(/^\s*export\s+default\s+/gm, '');
-  cleaned = cleaned.replace(/^\s*export\s+(const|let|var|function|class|async\s+function)\s+/gm, '$1 ');
-  cleaned = cleaned.replace(/export\s*\{[\s\S]*?\}\s*;?/g, '');
+  // Convert exports
+  cleaned = cleaned.replace(/^\s*export\s+default\s+(async\s+)?function(?:\s+([A-Za-z0-9_$]+))?/gm, (_m, isAsync, name) => {
+    const fnName = name || 'DefaultExport';
+    return `${isAsync ? 'async ' : ''}function ${fnName}`;
+  });
+  cleaned = cleaned.replace(/^\s*export\s+default\s+class(?:\s+([A-Za-z0-9_$]+))?/gm, (_m, name) => {
+    const clsName = name || 'DefaultExportClass';
+    return `class ${clsName}`;
+  });
+  cleaned = cleaned.replace(/^\s*export\s+(async\s+function|function|const|let|var|class)\s+/gm, '$1 ');
+  cleaned = cleaned.replace(/^\s*export\s+default\s+([A-Za-z0-9_$]+)\s*;?/gm, '/* export default $1 */');
+  cleaned = cleaned.replace(/^\s*export\s+default\s+/gm, 'window.__default_export__ = ');
+  cleaned = cleaned.replace(/^\s*export\s*\{[\s\S]*?\}\s*;?/gm, '');
 
   // 8. Auto-expose functions and classes on window
   const exposed: string[] = [];
   const classMatches = cleaned.matchAll(/class\s+([A-Za-z0-9_$]+)/g);
   for (const m of classMatches) {
-    exposed.push(`if (typeof ${m[1]} !== 'undefined' && !window.${m[1]}) window.${m[1]} = ${m[1]};`);
+    exposed.push(`if (typeof ${m[1]} !== 'undefined') window.${m[1]} = ${m[1]};`);
   }
-  const funcMatches = cleaned.matchAll(/(?:function|const|let|var)\s+([A-Z][a-zA-Z0-9_$]*)\s*=/g);
+  const funcMatches = cleaned.matchAll(/(?:async\s+)?function\s+([A-Za-z0-9_$]+)/g);
   for (const m of funcMatches) {
-    exposed.push(`if (typeof ${m[1]} !== 'undefined' && !window.${m[1]}) window.${m[1]} = ${m[1]};`);
+    exposed.push(`if (typeof ${m[1]} !== 'undefined') window.${m[1]} = ${m[1]};`);
+  }
+  const varMatches = cleaned.matchAll(/(?:const|let|var)\s+([A-Z][a-zA-Z0-9_$]*)\s*=/g);
+  for (const m of varMatches) {
+    exposed.push(`if (typeof ${m[1]} !== 'undefined') window.${m[1]} = ${m[1]};`);
   }
 
   const exportShim = exposed.length > 0 ? `\n// Window exports for ${fileName || 'module'}\n${exposed.join('\n')}\n` : '';
@@ -1206,7 +1227,14 @@ button:active {
       const { code: cleanCode } = transpileToVanillaJS(f.content, f.path);
       // All TS, TSX, JS, JSX files compile via Babel Standalone with react and typescript presets!
       const scriptType = ' type="text/babel" data-presets="react,typescript"';
-      return `<script${scriptType} data-file="${f.path}">\n// === MODULE: ${f.path} ===\n${cleanCode}\n</script>`;
+      return `<script${scriptType} data-file="${f.path}">
+try {
+  // === MODULE: ${f.path} ===
+${cleanCode}
+} catch (modErr) {
+  console.error('[Module Execution Error in ${f.path}]:', modErr);
+}
+</script>`;
     }).join('\n\n');
 
     // Ensure React 18, ReactDOM 18, and Babel Standalone are injected into <head>
@@ -3082,7 +3110,68 @@ export default function AveriaAI() {
     // Differentiate app/game building from normal conversational chatting
     const isBuildPrompt = /\b(build|create|make|design|generate|code|develop|write|clone|program)\b.*\b(website|app|page|portfolio|dashboard|landing|component|site|game|saas|tool|platform|store|shop)\b/i.test(userMsg.content);
     const isConversationalGreeting = /^(hi|hello|hey|namaste|salaam|good\s+(morning|afternoon|evening)|kya\s+kar\s+rahe\s+ho|what\s+are\s+you\s+doing|who\s+are\s+you|how\s+are\s+you|help|kaise\s+ho|kya\s+haal\s+hai|thanks|thank\s+you|ok|okay)[?!.,\s]*$/i.test(userMsg.content.trim());
+    const isConversationalQuestion = /\b(who are you|what can you do|how do you work|introduce yourself|kya kar sakte ho|aap kaun ho|aap kese ho|aap kaise ho|kya chal raha hai|help me)\b/i.test(userMsg.content);
     const isCodingInstruction = /\b(html|css|javascript|typescript|react|tailwind|node|express|sql|postgres|drizzle|fix bug|add page|modify code)\b/i.test(userMsg.content);
+
+    const isConversational = currentAttachments.length === 0 && !isBuildPrompt && !isCodingInstruction && (
+      isConversationalGreeting ||
+      isConversationalQuestion ||
+      (userMsg.content.trim().split(/\s+/).length <= 4 && !/\b(run|build|start|preview|test)\b/i.test(userMsg.content))
+    );
+
+    // ── CONVERSATIONAL CHAT ROUTE (Zero Supabase Edge Dependency) ──
+    // Fast direct conversational chat streaming across healthy Gemini keys
+    if (isConversational) {
+      let assistantText = '';
+      try {
+        const availableKeys = await getAllAvailableGeminiKeys(supabase);
+        if (availableKeys.length > 0) {
+          setIsStreaming(true);
+          const conversationHistory = newMessages.slice(0, -1).map(m => ({
+            role: (m.role === 'assistant' ? 'model' : 'user') as 'user' | 'model',
+            parts: [{ text: typeof m.content === 'string' ? m.content : '' }],
+          })).filter(h => h.parts[0].text);
+
+          setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+
+          await streamConversationalDirect({
+            userPrompt: userMsg.content,
+            conversationHistory,
+            availableKeys,
+            onChunk: (delta) => {
+              assistantText += delta;
+              setMessages(prev => {
+                const last = prev[prev.length - 1];
+                if (last?.role === 'assistant') {
+                  return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: assistantText } : m);
+                }
+                return [...prev, { role: 'assistant', content: assistantText }];
+              });
+            },
+          });
+
+          if (assistantText) {
+            if (voiceMode && typeof window !== 'undefined' && window.speechSynthesis) {
+              window.speechSynthesis.cancel();
+              window.speechSynthesis.speak(new SpeechSynthesisUtterance(assistantText));
+            }
+            if (scope.isJoint && scope.workspaceId) {
+              await supabase.from('shared_ai_messages').insert({ workspace_id: scope.workspaceId, conversation_id: convId, author_id: null, role: 'assistant', content: assistantText });
+              await supabase.from('shared_ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', convId);
+            } else {
+              await supabase.from('ai_messages').insert({ conversation_id: convId, role: 'assistant', content: assistantText });
+              await supabase.from('ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', convId);
+            }
+          }
+
+          setIsLoading(false);
+          setIsStreaming(false);
+          return;
+        }
+      } catch (convErr) {
+        console.warn('[Direct Conversational Streaming Error]:', convErr);
+      }
+    }
 
     const isAppBuildInstruction = isBuildPrompt || isCodingInstruction || (
       selectedModel === 'genesis' &&

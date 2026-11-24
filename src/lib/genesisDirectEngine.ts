@@ -27,12 +27,11 @@ export interface GenesisWorkerResult {
 
 export const GEMINI_CASCADE_MODELS = [
   'gemini-3.8-flash',
-  'gemini-3.5-flash-lite',
-  'gemini-3.5-flash',
   'gemini-2.5-flash',
+  'gemini-3.5-flash',
   'gemini-2.5-pro',
   'gemini-3.5-pro',
-  'gemini-2.5-flash-lite',
+  'gemini-3.5-flash-lite',
   'gemini-2.0-flash',
   'gemini-1.5-pro',
   'gemini-1.5-flash',
@@ -131,12 +130,11 @@ export async function discoverSupportedGeminiModels(apiKey: string): Promise<str
     if (validModels.length > 0) {
       const PRIORITY_ORDER = [
         'gemini-3.8-flash',
-        'gemini-3.5-flash-lite',
-        'gemini-3.5-flash',
         'gemini-2.5-flash',
+        'gemini-3.5-flash',
         'gemini-2.5-pro',
         'gemini-3.5-pro',
-        'gemini-2.5-flash-lite',
+        'gemini-3.5-flash-lite',
         'gemini-2.0-flash',
         'gemini-1.5-pro',
         'gemini-1.5-flash',
@@ -348,6 +346,7 @@ RULES: Start immediately on line 1 with \`\`\`typescript:server/index.ts. ZERO c
       targetFiles: 'src/lib/dataSdk.ts',
       prompt: `You are the Principal Client Data & State Architect in the Genesis full-stack compiler swarm.
 Your job is to generate the typed client data SDK for "${resolvedTitle}" (${userGoal}):
+CRITICAL MANDATE: Output 300–700 lines of complete, production-grade code. NEVER output stubs, placeholders, or abbreviated snippets like "// implement logic here".
 \`\`\`typescript:src/lib/dataSdk.ts — Complete state & data SDK wired to window.__AVERIA_APP__ and backed by window.LocalDB:
 - TypeScript interfaces: Item, CartItem, Order, User, Review, FilterOptions
 - Authentic initial dataset (12-16 realistic domain items with id, name, category, price, status, rating, tags, image placeholder)
@@ -374,7 +373,7 @@ Your job is to generate the typed client data SDK for "${resolvedTitle}" (${user
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
 
-RULES: Start immediately on line 1 with \`\`\`typescript:src/lib/dataSdk.ts. ZERO conversational prose. Complete TypeScript only.`
+RULES: Start immediately on line 1 with \`\`\`typescript:src/lib/dataSdk.ts. ZERO conversational prose. Full 300+ lines of production TypeScript only.`
     },
 
     logic_engine: {
@@ -382,6 +381,7 @@ RULES: Start immediately on line 1 with \`\`\`typescript:src/lib/dataSdk.ts. ZER
       targetFiles: 'src/lib/engine.ts',
       prompt: `You are the Lead Core Logic & Analytics Architect in the Genesis full-stack compiler swarm.
 Your job is to generate the core business calculation algorithms or interactive engine for "${resolvedTitle}" (${userGoal}):
+CRITICAL MANDATE: Output 300–700 lines of complete, production-grade code. NEVER output stubs, placeholders, or abbreviated logic.
 \`\`\`typescript:src/lib/engine.ts — Typed calculation algorithms, business logic, or 60FPS loop:
 - IF THE APPLICATION IS SAAS / E-COMMERCE / TOOL:
   * calculateTotals(cart: any[], promoCode?: string, taxRate?: number, shippingMethod?: string): Typed total breakdown (subtotal, promoDiscount, tax, shipping, grandTotal)
@@ -405,7 +405,7 @@ Your job is to generate the core business calculation algorithms or interactive 
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
 
-RULES: Start immediately on line 1 with \`\`\`typescript:src/lib/engine.ts. ZERO conversational prose. Complete TypeScript only.`
+RULES: Start immediately on line 1 with \`\`\`typescript:src/lib/engine.ts. ZERO conversational prose. Full 300+ lines of production TypeScript only.`
     },
 
     ui_shell: {
@@ -413,6 +413,7 @@ RULES: Start immediately on line 1 with \`\`\`typescript:src/lib/engine.ts. ZERO
       targetFiles: 'index.html, src/styles.css, src/components/ui.tsx',
       prompt: `You are the UI Shell & Design System Architect in the Genesis full-stack compiler swarm.
 Your job is to generate the modern responsive HTML5 shell, CSS design system, and reusable React UI primitives for "${resolvedTitle}" (${userGoal}):
+CRITICAL MANDATE: Output complete, production-ready code with full styling and zero stubs.
 1. \`\`\`html:index.html — Full modern responsive HTML5 shell matching world-class Lovable / Vite quality:
    - <script src="https://cdn.tailwindcss.com"></script>
    - <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -447,6 +448,7 @@ RULES: Start immediately on line 1 with \`\`\`html:index.html. ZERO conversation
       targetFiles: 'src/router.tsx',
       prompt: `You are the Multi-Page SPA Router Engineer in the Genesis full-stack compiler swarm.
 Your job is to generate the robust client-side nested router for "${resolvedTitle}" (${userGoal}):
+CRITICAL MANDATE: Output 300–600 lines of complete, production-grade router code. NEVER output stubs or placeholders.
 \`\`\`tsx:src/router.tsx — Typed client-side SPA router wired to window.__AVERIA_APP__:
 - Route registry supporting:
   * '/' -> HomePage.render()
@@ -484,6 +486,7 @@ RULES: Start immediately on line 1 with \`\`\`tsx:src/router.tsx. ZERO conversat
       targetFiles: 'src/pages/HomePage.tsx',
       prompt: `You are the Lead Frontend View Architect in the Genesis full-stack compiler swarm.
 Your job is to generate the primary interactive Home / Storefront React component for "${resolvedTitle}" (${userGoal}):
+CRITICAL MANDATE: Output 300–700 lines of rich, complete, production-grade React TSX code. NEVER output stubs, placeholders, or empty sections.
 \`\`\`tsx:src/pages/HomePage.tsx — Primary React TSX storefront rendering into document.getElementById('app'):
 - Modern React component with hooks (useState, useEffect):
   * High-impact Hero section with headline, search bar, and primary CTA
@@ -513,7 +516,7 @@ Your job is to generate the primary interactive Home / Storefront React componen
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
 
-RULES: Start immediately on line 1 with \`\`\`tsx:src/pages/HomePage.tsx. ZERO conversational prose. Complete TypeScript React only.`
+RULES: Start immediately on line 1 with \`\`\`tsx:src/pages/HomePage.tsx. ZERO conversational prose. Full 300+ lines of production TypeScript React only.`
     },
 
     sub_pages: {
@@ -521,6 +524,7 @@ RULES: Start immediately on line 1 with \`\`\`tsx:src/pages/HomePage.tsx. ZERO c
       targetFiles: 'src/pages/AppPages.tsx',
       prompt: `You are the Senior Application Views Engineer in the Genesis full-stack compiler swarm.
 Your job is to generate the deep secondary React TSX pages and detail views for "${resolvedTitle}" (${userGoal}):
+CRITICAL MANDATE: Output 400–800 lines of rich, complete, production-grade React TSX. Implement ALL secondary pages with full interactive controls, tables, forms, and modals. NEVER output stubs or placeholders.
 \`\`\`tsx:src/pages/AppPages.tsx — Complete multi-page views implementation rendering into document.getElementById('app'):
 - Implement all secondary React components:
   1. ShopPage (or CatalogPage): Full searchable and filterable product catalog with price slider, category checkboxes, and grid/list toggle
@@ -542,7 +546,7 @@ Your job is to generate the deep secondary React TSX pages and detail views for 
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
 
-RULES: Start immediately on line 1 with \`\`\`tsx:src/pages/AppPages.tsx. ZERO conversational prose. Complete TypeScript React only.`
+RULES: Start immediately on line 1 with \`\`\`tsx:src/pages/AppPages.tsx. ZERO conversational prose. Full 400+ lines of production TypeScript React only.`
     },
 
     qa_security: {
@@ -1010,3 +1014,138 @@ export async function runSwarmConcurrencyPool<T, R>(
     }
   });
 }
+
+/**
+ * Streams fast conversational chat responses directly via Gemini streaming proxies,
+ * bypassing Supabase edge function bottlenecks completely.
+ */
+export async function streamConversationalDirect({
+  userPrompt,
+  conversationHistory = [],
+  availableKeys,
+  onChunk,
+  systemInstruction,
+}: {
+  userPrompt: string;
+  conversationHistory?: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
+  availableKeys: string[];
+  onChunk: (delta: string) => void;
+  systemInstruction?: string;
+}): Promise<string> {
+  if (!availableKeys || availableKeys.length === 0) {
+    throw new Error('No Gemini API keys available for conversational chat.');
+  }
+
+  const healthy = availableKeys.filter(k => !quarantinedKeys.has(k));
+  const keysToUse = healthy.length > 0 ? healthy : availableKeys;
+
+  // Discover live models for conversational chat
+  const modelsToTry = await discoverSupportedGeminiModels(keysToUse[0]);
+
+  const defaultSystem = systemInstruction ||
+    'You are Averia AI, an ultra-intelligent, friendly, and expert full-stack AI engineer and companion. Respond naturally, concisely, and helpfully in the user\'s language (English, Hindi/Hinglish, etc.).';
+
+  // Build contents array
+  const contents: any[] = [];
+  if (conversationHistory && conversationHistory.length > 0) {
+    const recent = conversationHistory.slice(-6);
+    contents.push(...recent);
+  }
+  contents.push({
+    role: 'user',
+    parts: [{ text: userPrompt }],
+  });
+
+  const requestPayload = {
+    contents,
+    systemInstruction: {
+      parts: [{ text: defaultSystem }],
+    },
+    generationConfig: {
+      maxOutputTokens: 4096,
+      temperature: 0.7,
+      topP: 0.95,
+    },
+  };
+
+  let accumulated = '';
+  let lastError: any = null;
+
+  for (let kIdx = 0; kIdx < keysToUse.length; kIdx++) {
+    const apiKey = keysToUse[kIdx];
+
+    for (const model of modelsToTry) {
+      try {
+        const response = await fetchGeminiStreamWithFailover({
+          model,
+          apiKey,
+          requestPayload,
+        });
+
+        if (response.status === 404) {
+          continue; // cascade model
+        }
+
+        if (response.status === 400 || response.status === 403) {
+          const errText = await response.text().catch(() => '');
+          if (errText.includes('API_KEY_INVALID') || errText.includes('PERMISSION_DENIED') || response.status === 403) {
+            quarantinedKeys.add(apiKey);
+            break; // rotate key
+          }
+          continue;
+        }
+
+        if (response.status === 429) {
+          // Rate limit -> try next key
+          break;
+        }
+
+        if (!response.ok || !response.body) {
+          continue;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const cleanLine = line.trim();
+            if (!cleanLine.startsWith('data:')) continue;
+            const dataStr = cleanLine.replace(/^data:\s*/, '').trim();
+            if (dataStr === '[DONE]') continue;
+
+            try {
+              const parsed = JSON.parse(dataStr);
+              const textChunk = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (textChunk) {
+                accumulated += textChunk;
+                onChunk(textChunk);
+              }
+            } catch (_) {}
+          }
+        }
+
+        if (accumulated.trim().length > 0) {
+          return accumulated;
+        }
+      } catch (err) {
+        lastError = err;
+      }
+    }
+  }
+
+  if (accumulated.trim().length > 0) {
+    return accumulated;
+  }
+
+  throw lastError || new Error('Failed to get conversational response across available Gemini keys.');
+}
+
