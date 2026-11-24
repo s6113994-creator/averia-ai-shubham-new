@@ -1103,28 +1103,54 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
 
   document.addEventListener('click', function(e) {
     var target = e.target;
-    var a = target && typeof target.closest === 'function' ? target.closest('a') : null;
-    if (!a) return;
+    var el = target && typeof target.closest === 'function' ? target.closest('a, button, [data-route], [data-page], [onclick*="navigate"]') : null;
+    if (!el) return;
 
-    var href = a.getAttribute('href');
-    if (!href) return;
+    var route = el.getAttribute('data-route') || el.getAttribute('data-page');
 
-    if (/^(https?:|\\/\\/|mailto:|tel:|javascript:)/i.test(href)) {
-      if (a.getAttribute('target') !== '_blank') {
-        a.setAttribute('target', '_blank');
-        a.setAttribute('rel', 'noopener noreferrer');
+    if (!route && el.tagName === 'A') {
+      var href = el.getAttribute('href');
+      if (href) {
+        if (/^(https?:|\/\/|mailto:|tel:|javascript:)/i.test(href)) {
+          if (el.getAttribute('target') !== '_blank') {
+            el.setAttribute('target', '_blank');
+            el.setAttribute('rel', 'noopener noreferrer');
+          }
+          return;
+        }
+        route = normalizeRoute(href);
       }
-      return;
     }
 
-    e.preventDefault();
-    e.stopPropagation();
+    if (!route) {
+      var onclickAttr = el.getAttribute('onclick') || '';
+      var m = onclickAttr.match(/navigate\(['"]([^'"]+)['"]\)/);
+      if (m) {
+        route = normalizeRoute(m[1]);
+      } else {
+        var text = (el.innerText || el.textContent || '').trim().toLowerCase();
+        if (text === 'home' || text.startsWith('home ')) route = '/';
+        else if (text.includes('catalog') || text.includes('product') || text.includes('shop') || text.includes('browse')) route = '/catalog';
+        else if (text.includes('cart')) route = '/cart';
+        else if (text.includes('checkout')) route = '/checkout';
+        else if (text.includes('order')) route = '/orders';
+        else if (text.includes('wishlist')) route = '/wishlist';
+        else if (text.includes('admin') || text.includes('dashboard')) route = '/admin';
+      }
+    }
 
-    var route = normalizeRoute(href);
-    if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.navigate === 'function') {
-      window.__AVERIA_APP__.navigate(route);
-    } else if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
-      window.__AVERIA_ROUTER__.navigate(route);
+    if (route) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (window.location) {
+        var cleanTarget = route === '/' ? '' : (route.startsWith('/') ? '#' + route : '#/' + route);
+        window.location.hash = cleanTarget;
+      }
+      if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.navigate === 'function') {
+        window.__AVERIA_APP__.navigate(route);
+      } else if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
+        window.__AVERIA_ROUTER__.navigate(route);
+      }
     }
   }, true);
 
@@ -1388,10 +1414,381 @@ button:active {
 
   window.LocalDB = localDb;
   window.AveriaDB = localDb;
+
+  // 12 Rich Pre-Seeded Products for 0ms Instant Product Hydration
+  var SEED_PRODUCTS = [
+    {
+      id: 'prod-1',
+      name: 'Averia Nova Pro Wireless ANC Headphones',
+      category: 'Audio',
+      price: 14999,
+      mrp: 19999,
+      rating: 4.9,
+      reviewCount: 342,
+      stock: 24,
+      badge: 'Best Seller',
+      description: 'Flagship active noise cancelling headphones with 45-hour battery, spatial hi-res audio, and ultra-plush memory foam cushions.',
+      specs: ['Active Noise Cancellation 48dB', '45hr Battery Life', 'Bluetooth 5.3 + LDAC', 'Multipoint Connection'],
+      imageUrl: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=600&auto=format&fit=crop&q=80'
+    },
+    {
+      id: 'prod-2',
+      name: 'UltraVision 4K 144Hz Gaming Monitor',
+      category: 'Monitors',
+      price: 32999,
+      mrp: 42999,
+      rating: 4.8,
+      reviewCount: 189,
+      stock: 15,
+      badge: 'Editor Choice',
+      description: '27-inch IPS panel with 1ms response time, 99% DCI-P3 color gamut, HDR600 certification, and dual HDMI 2.1 ports.',
+      specs: ['4K UHD 3840x2160', '144Hz Refresh Rate', '1ms GtG Response', 'AMD FreeSync Premium Pro'],
+      imageUrl: 'https://images.unsplash.com/photo-1527443224154-c4a3942d3acf?w=600&auto=format&fit=crop&q=80'
+    },
+    {
+      id: 'prod-3',
+      name: 'Averia Quantum Book M3 Ultra Laptop',
+      category: 'Computing',
+      price: 119999,
+      mrp: 149999,
+      rating: 4.9,
+      reviewCount: 512,
+      stock: 8,
+      badge: 'Flagship',
+      description: 'Precision milled aerospace aluminum ultrabook featuring 16-core neural engine, 32GB unified RAM, and 18-hour all-day battery.',
+      specs: ['16-Core Neural CPU', '32GB Unified RAM', '1TB Gen4 NVMe SSD', 'Liquid Retina XDR 120Hz'],
+      imageUrl: 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?w=600&auto=format&fit=crop&q=80'
+    },
+    {
+      id: 'prod-4',
+      name: 'Titan Chrono Smartwatch Sapphire Edition',
+      category: 'Wearables',
+      price: 21999,
+      mrp: 27999,
+      rating: 4.7,
+      reviewCount: 276,
+      stock: 30,
+      badge: 'Trending',
+      description: 'Aerospace titanium case with sapphire crystal glass, continuous ECG, dual-frequency GPS, and 100m water resistance.',
+      specs: ['Titanium Grade 5 Case', 'Sapphire Glass Touchscreen', 'Dual-Frequency GPS', '14-Day Battery Life'],
+      imageUrl: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=600&auto=format&fit=crop&q=80'
+    },
+    {
+      id: 'prod-5',
+      name: 'Averia Studio Soundbar Atmos 5.1',
+      category: 'Audio',
+      price: 18999,
+      mrp: 24999,
+      rating: 4.8,
+      reviewCount: 154,
+      stock: 18,
+      badge: 'Hi-Fi Audio',
+      description: 'Immersive 360-degree acoustic soundstage with wireless dedicated subwoofer, Dolby Atmos, and eARC lossless audio.',
+      specs: ['5.1 Channel Surround', 'Wireless Subwoofer 200W', 'Dolby Atmos & DTS:X', 'HDMI eARC & Optical'],
+      imageUrl: 'https://images.unsplash.com/photo-1545454675-3531b543be5d?w=600&auto=format&fit=crop&q=80'
+    },
+    {
+      id: 'prod-6',
+      name: 'AuraBeam Ergonomic Mechanical Keyboard',
+      category: 'Accessories',
+      price: 8499,
+      mrp: 11999,
+      rating: 4.9,
+      reviewCount: 428,
+      stock: 45,
+      badge: 'Popular',
+      description: 'Gasket-mounted hot-swappable tactile mechanical keyboard with per-key RGB backlighting and acoustic sound dampening.',
+      specs: ['Gasket Mount Structure', 'Hot-Swappable Switches', 'Tri-Mode Wireless 2.4G/BT', 'Aluminium CNC Top Plate'],
+      imageUrl: 'https://images.unsplash.com/photo-1587829741301-dc798b83add3?w=600&auto=format&fit=crop&q=80'
+    },
+    {
+      id: 'prod-7',
+      name: 'Veloce Pro Wireless Gaming Mouse 8KHz',
+      category: 'Gaming',
+      price: 5999,
+      mrp: 7999,
+      rating: 4.7,
+      reviewCount: 319,
+      stock: 50,
+      badge: 'Esports Ready',
+      description: 'Ultra-lightweight 49g ergonomic chassis with optical switches, 32,000 DPI sensor, and true 8000Hz polling rate.',
+      specs: ['49g Featherweight', '32,000 DPI Optical Sensor', '8000Hz Polling Rate', 'Optical Micro Switches'],
+      imageUrl: 'https://images.unsplash.com/photo-1615663245857-ac93bb7c39e7?w=600&auto=format&fit=crop&q=80'
+    },
+    {
+      id: 'prod-8',
+      name: 'Averia SoundPulse Pocket Hi-Fi Speaker',
+      category: 'Audio',
+      price: 4499,
+      mrp: 5999,
+      rating: 4.6,
+      reviewCount: 210,
+      stock: 60,
+      badge: 'Portable',
+      description: 'Rugged IP67 waterproof pocket powerhouse with dual passive radiators, 24-hour playback, and True Wireless Stereo pairing.',
+      specs: ['IP67 Waterproof & Dustproof', '24hr Playback Time', 'Dual Bass Radiators', 'TWS Stereo Pairing'],
+      imageUrl: 'https://images.unsplash.com/photo-1608043152269-423dbba4e7e1?w=600&auto=format&fit=crop&q=80'
+    },
+    {
+      id: 'prod-9',
+      name: 'CyberShield Pro GaN Fast Charger 140W',
+      category: 'Accessories',
+      price: 3999,
+      mrp: 5499,
+      rating: 4.8,
+      reviewCount: 680,
+      stock: 80,
+      badge: 'Top Rated',
+      description: 'Compact 4-port Gallium Nitride fast charger with dual PD 3.1 USB-C ports capable of full speed 140W laptop charging.',
+      specs: ['GaN V Technology', '140W Max USB-C PD 3.1', '4 Simultaneous Ports', 'Overheat & Surge Protection'],
+      imageUrl: 'https://images.unsplash.com/photo-1583863788434-e58a36330cf0?w=600&auto=format&fit=crop&q=80'
+    },
+    {
+      id: 'prod-10',
+      name: 'Averia VisionVR Spatial Headset',
+      category: 'Gaming',
+      price: 79999,
+      mrp: 99999,
+      rating: 4.9,
+      reviewCount: 145,
+      stock: 6,
+      badge: 'Next-Gen',
+      description: 'Ultra-high resolution Micro-OLED spatial computing headset with real-time eye tracking and LiDAR spatial scanning.',
+      specs: ['Dual 4K Micro-OLED Displays', 'LiDAR Room Spatial Mapping', 'Infrared Eye Tracking', 'Spatial Audio Drivers'],
+      imageUrl: 'https://images.unsplash.com/photo-1593508512255-86ab42a8e620?w=600&auto=format&fit=crop&q=80'
+    },
+    {
+      id: 'prod-11',
+      name: 'AuraSense Smart Air Quality Monitor',
+      category: 'Smart Home',
+      price: 6999,
+      mrp: 8999,
+      rating: 4.7,
+      reviewCount: 198,
+      stock: 22,
+      badge: 'Eco Smart',
+      description: 'Real-time laser particulate sensor measuring PM2.5, VOCs, CO2, temperature and humidity with OLED dashboard.',
+      specs: ['Laser PM2.5 Particle Sensor', 'Swiss Sensirion NDIR CO2', 'Matter & Apple HomeKit', 'Clear OLED Color Display'],
+      imageUrl: 'https://images.unsplash.com/photo-1558002038-1055907df827?w=600&auto=format&fit=crop&q=80'
+    },
+    {
+      id: 'prod-12',
+      name: 'StealthFlow MagSafe Wireless PowerBank 20K',
+      category: 'Accessories',
+      price: 3499,
+      mrp: 4999,
+      rating: 4.8,
+      reviewCount: 520,
+      stock: 75,
+      badge: 'Essential',
+      description: '20,000mAh slimline magnetic battery pack with 15W wireless charging and digital percentage battery display.',
+      specs: ['20,000mAh Lithium Polymer', '15W Fast Magnetic Wireless', '20W PD USB-C Bi-Directional', 'Digital LED Percentage Display'],
+      imageUrl: 'https://images.unsplash.com/photo-1609592424364-7707328cb59a?w=600&auto=format&fit=crop&q=80'
+    }
+  ];
+
+  // Auto-seed if items or products collection is empty
+  var existingItems = localDb.find('items');
+  if (!existingItems || existingItems.length === 0) {
+    saveStore('items', SEED_PRODUCTS);
+    saveStore('products', SEED_PRODUCTS);
+  } else {
+    var existingProds = localDb.find('products');
+    if (!existingProds || existingProds.length === 0) {
+      saveStore('products', existingItems);
+    }
+  }
+
+  // Built-in Complete DataSDK
+  var DataSDK = {
+    getProducts: async function(filter) {
+      var prods = localDb.find('items');
+      if (!prods || prods.length === 0) prods = localDb.find('products');
+      if (filter && typeof filter === 'function') return prods.filter(filter);
+      if (filter && filter.category && filter.category !== 'All') {
+        prods = prods.filter(function(x) { return x.category === filter.category; });
+      }
+      if (filter && filter.search) {
+        var q = String(filter.search).toLowerCase();
+        prods = prods.filter(function(x) {
+          return (x.name && x.name.toLowerCase().indexOf(q) !== -1) ||
+                 (x.category && x.category.toLowerCase().indexOf(q) !== -1);
+        });
+      }
+      return prods;
+    },
+    getProductById: async function(id) {
+      var prods = localDb.find('items');
+      return prods.find(function(x) { return x.id == id || x._id == id; }) || null;
+    },
+    list: async function(col, opts) {
+      return localDb.list(col, opts);
+    },
+    find: function(col, filter) {
+      return localDb.find(col, filter);
+    },
+    getCart: async function() {
+      return localDb.find('cart');
+    },
+    addToCart: async function(item, qty) {
+      var cart = localDb.find('cart') || [];
+      var quantity = qty || 1;
+      var existing = cart.find(function(x) { return x.id == item.id || x._id == item.id; });
+      if (existing) {
+        localDb.update('cart', existing.id || existing._id, { quantity: (existing.quantity || 1) + quantity });
+      } else {
+        localDb.insert('cart', Object.assign({}, item, { quantity: quantity }));
+      }
+      return localDb.find('cart');
+    },
+    updateCartQty: async function(id, qty) {
+      if (qty <= 0) {
+        localDb.delete('cart', id);
+      } else {
+        localDb.update('cart', id, { quantity: qty });
+      }
+      return localDb.find('cart');
+    },
+    removeFromCart: async function(id) {
+      localDb.delete('cart', id);
+      return localDb.find('cart');
+    },
+    clearCart: async function() {
+      localDb.clear('cart');
+      return [];
+    },
+    getWishlist: async function() {
+      return localDb.find('wishlist');
+    },
+    toggleWishlist: async function(item) {
+      var list = localDb.find('wishlist') || [];
+      var existing = list.find(function(x) { return x.id == item.id; });
+      if (existing) {
+        localDb.delete('wishlist', existing.id);
+        return false;
+      } else {
+        localDb.insert('wishlist', Object.assign({}, item));
+        return true;
+      }
+    },
+    placeOrder: async function(orderData) {
+      var cart = localDb.find('cart') || [];
+      var calc = Engine.calculateTotals(cart);
+      var order = {
+        id: 'ord_' + Date.now(),
+        orderNumber: 'ORD-' + Math.floor(100000 + Math.random() * 900000),
+        items: cart,
+        totalAmount: orderData && orderData.totalAmount ? orderData.totalAmount : calc.grandTotal,
+        subtotal: calc.subtotal,
+        tax: calc.tax,
+        shipping: calc.shipping,
+        customer: orderData ? (orderData.customer || orderData) : { name: 'Customer' },
+        status: 'Confirmed',
+        createdAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      };
+      localDb.insert('orders', order);
+      localDb.clear('cart');
+      return order;
+    },
+    getOrders: async function() {
+      return localDb.find('orders');
+    },
+    updateOrderStatus: async function(id, status) {
+      return localDb.update('orders', id, { status: status });
+    },
+    addProduct: async function(item) {
+      localDb.insert('items', item);
+      localDb.insert('products', item);
+      return item;
+    },
+    deleteProduct: async function(id) {
+      localDb.delete('items', id);
+      localDb.delete('products', id);
+      return { success: true };
+    }
+  };
+
+  // Built-in Complete Calculation Engine
+  var Engine = {
+    calculateTotals: function(cart, discountCode) {
+      var items = cart || [];
+      var subtotal = items.reduce(function(sum, it) {
+        return sum + (Number(it.price || 0) * (it.quantity || 1));
+      }, 0);
+      var discountRate = 0;
+      if (discountCode && String(discountCode).toUpperCase() === 'AVERIA20') discountRate = 0.20;
+      var discount = Math.round(subtotal * discountRate);
+      var taxable = subtotal - discount;
+      var tax = Math.round(taxable * 0.18);
+      var shipping = subtotal > 999 || subtotal === 0 ? 0 : 99;
+      var grandTotal = taxable + tax + shipping;
+      var totalItems = items.reduce(function(sum, it) { return sum + (it.quantity || 1); }, 0);
+      return {
+        subtotal: subtotal,
+        discount: discount,
+        tax: tax,
+        shipping: shipping,
+        grandTotal: grandTotal,
+        totalItems: totalItems
+      };
+    },
+    filterProducts: function(products, filters) {
+      var list = (products || []).slice();
+      if (filters && filters.category && filters.category !== 'All') {
+        list = list.filter(function(x) { return x.category === filters.category; });
+      }
+      if (filters && filters.search) {
+        var s = String(filters.search).toLowerCase();
+        list = list.filter(function(x) {
+          return (x.name && x.name.toLowerCase().indexOf(s) !== -1) ||
+                 (x.description && x.description.toLowerCase().indexOf(s) !== -1);
+        });
+      }
+      if (filters && filters.sortBy === 'price_asc') list.sort(function(a, b) { return a.price - b.price; });
+      else if (filters && filters.sortBy === 'price_desc') list.sort(function(a, b) { return b.price - a.price; });
+      else if (filters && filters.sortBy === 'rating') list.sort(function(a, b) { return (b.rating || 0) - (a.rating || 0); });
+      return list;
+    },
+    validateStock: function(cart, inventory) {
+      var issues = [];
+      var inv = inventory || {};
+      for (var i = 0; i < (cart || []).length; i++) {
+        var it = cart[i];
+        var avail = inv[it.id] != null ? inv[it.id] : (it.stock != null ? it.stock : 99);
+        if ((it.quantity || 1) > avail) {
+          issues.push({ id: it.id, requested: it.quantity, available: avail });
+        }
+      }
+      return { valid: issues.length === 0, issues: issues };
+    },
+    computeStoreAnalytics: function(orders, products) {
+      var ords = orders || [];
+      var prods = products || [];
+      var totalRev = ords.reduce(function(sum, o) { return sum + Number(o.totalAmount || 0); }, 0);
+      var avgOrder = ords.length > 0 ? Math.round(totalRev / ords.length) : 0;
+      return {
+        totalRevenue: totalRev,
+        totalOrders: ords.length,
+        averageOrderValue: avgOrder,
+        activeItems: prods.length,
+        activeProducts: prods.length
+      };
+    }
+  };
+
+  window.DataSDK = DataSDK;
+  window.AveriaStore = DataSDK;
+  window.dataSdk = DataSDK;
+  window.Store = DataSDK;
+
+  window.Engine = Engine;
+  window.AveriaEngine = Engine;
+  window.CoreEngine = Engine;
+  window.engine = Engine;
 })();
 </script>\n`;
 
-  const headInject = `${storagePolyfillScript}${reactGlobalsAndIconPreambleScript}${averiaAppRuntimeBusScript}${hashAndLinkInterceptorScript}${imageFallbackAndStyleScript}${localDbSdkScript}${errorListenerScript}`;
+  const headInject = `${storagePolyfillScript}${localDbSdkScript}${reactGlobalsAndIconPreambleScript}${averiaAppRuntimeBusScript}${hashAndLinkInterceptorScript}${imageFallbackAndStyleScript}${errorListenerScript}`;
   if (doc.includes('<head>')) {
     doc = doc.replace('<head>', `<head>\n${headInject}`);
   } else if (doc.includes('<html>')) {
@@ -1478,6 +1875,321 @@ ${cleanCode}
     return null;
   }
 
+  function BuiltinCatalogView() {
+    const [products, setProducts] = React.useState([]);
+    const [search, setSearch] = React.useState('');
+    const [category, setCategory] = React.useState('All');
+    const [sortBy, setSortBy] = React.useState('featured');
+
+    React.useEffect(() => {
+      if (window.DataSDK) {
+        window.DataSDK.getProducts().then(setProducts);
+      }
+    }, []);
+
+    const categories = ['All', 'Audio', 'Monitors', 'Computing', 'Wearables', 'Gaming', 'Accessories', 'Smart Home'];
+    let filtered = window.Engine ? window.Engine.filterProducts(products, { category, search, sortBy }) : products;
+
+    return (
+      <div className="max-w-7xl mx-auto space-y-6 p-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-white tracking-tight">Product Catalog</h2>
+            <p className="text-slate-400 text-xs mt-1">Discover premium tech hardware & audio gear with instant offline delivery</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              type="text"
+              placeholder="Search catalog..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-100 text-xs w-48 md:w-64 focus:outline-none focus:border-indigo-500"
+            />
+            <select
+              value={sortBy}
+              onChange={e => setSortBy(e.target.value)}
+              className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 text-xs cursor-pointer focus:outline-none"
+            >
+              <option value="featured">Featured</option>
+              <option value="price_asc">Price: Low to High</option>
+              <option value="price_desc">Price: High to Low</option>
+              <option value="rating">Top Rated</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 overflow-x-auto pb-2">
+          {categories.map(cat => (
+            <button
+              key={cat}
+              onClick={() => setCategory(cat)}
+              className={'px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ' + (category === cat ? 'bg-indigo-600 text-white' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800')}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          {filtered.map(p => (
+            <div key={p.id} className="rounded-2xl bg-slate-900/80 border border-slate-800 p-4 flex flex-col justify-between hover:border-slate-700 transition-all hover:-translate-y-0.5 shadow-xl">
+              <div className="space-y-3">
+                <div className="relative aspect-video rounded-xl overflow-hidden bg-slate-800">
+                  <img src={p.imageUrl} alt={p.name} className="w-full h-full object-cover" />
+                  <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-slate-950/80 text-[10px] text-slate-300 font-medium">{p.category}</span>
+                  {p.badge && <span className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-indigo-600 text-[10px] text-white font-bold">{p.badge}</span>}
+                </div>
+                <h3 className="font-semibold text-white text-sm line-clamp-1">{p.name}</h3>
+                <p className="text-slate-400 text-xs line-clamp-2">{p.description}</p>
+                <div className="flex items-center gap-2 text-amber-400 text-xs">
+                  <span>★ {p.rating || 4.8}</span>
+                  <span className="text-slate-500">({p.reviewCount || 100})</span>
+                </div>
+              </div>
+              <div className="pt-4 mt-3 border-t border-slate-800 flex items-center justify-between">
+                <div>
+                  <span className="font-bold text-white text-base">₹{Number(p.price).toLocaleString()}</span>
+                  {p.mrp && <span className="text-[11px] text-slate-500 line-through ml-1.5">₹{Number(p.mrp).toLocaleString()}</span>}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => { if (window.DataSDK) window.DataSDK.toggleWishlist(p); }}
+                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors"
+                    title="Wishlist"
+                  >
+                    ♥
+                  </button>
+                  <button
+                    onClick={() => { if (window.DataSDK) window.DataSDK.addToCart(p, 1); }}
+                    className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center gap-1 transition-colors active:scale-95"
+                  >
+                    Add to Cart
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function BuiltinCartView() {
+    const [cart, setCart] = React.useState([]);
+    const [promo, setPromo] = React.useState('');
+    const [appliedPromo, setAppliedPromo] = React.useState('');
+
+    React.useEffect(() => {
+      if (window.LocalDB) setCart(window.LocalDB.find('cart') || []);
+    }, []);
+
+    const totals = window.Engine ? window.Engine.calculateTotals(cart, appliedPromo) : { subtotal: 0, tax: 0, shipping: 0, grandTotal: 0 };
+
+    return (
+      <div className="max-w-4xl mx-auto space-y-6 p-4">
+        <h2 className="text-2xl font-bold text-white">Your Shopping Cart</h2>
+        {cart.length === 0 ? (
+          <div className="text-center py-16 bg-slate-900/40 border border-slate-800 rounded-3xl">
+            <p className="text-slate-400 text-sm">Your cart is currently empty.</p>
+            <button
+              onClick={() => { if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/catalog'); }}
+              className="mt-4 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold"
+            >
+              Browse Catalog
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="md:col-span-2 space-y-3">
+              {cart.map(item => (
+                <div key={item.id} className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <h4 className="font-semibold text-white text-sm truncate">{item.name}</h4>
+                    <span className="text-indigo-400 text-xs font-bold">₹{Number(item.price).toLocaleString()}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => { if (window.DataSDK) window.DataSDK.updateCartQty(item.id, (item.quantity || 1) - 1); }} className="w-7 h-7 rounded-lg bg-slate-800 text-white flex items-center justify-center">-</button>
+                    <span className="text-sm font-bold text-white w-6 text-center">{item.quantity || 1}</span>
+                    <button onClick={() => { if (window.DataSDK) window.DataSDK.updateCartQty(item.id, (item.quantity || 1) + 1); }} className="w-7 h-7 rounded-lg bg-slate-800 text-white flex items-center justify-center">+</button>
+                    <button onClick={() => { if (window.DataSDK) window.DataSDK.removeFromCart(item.id); }} className="text-slate-400 hover:text-rose-400 text-xs ml-2">✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 h-fit">
+              <h3 className="font-bold text-white text-sm">Order Summary</h3>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="AVERIA20 for 20% off"
+                  value={promo}
+                  onChange={e => setPromo(e.target.value)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white flex-1 focus:outline-none"
+                />
+                <button
+                  onClick={() => setAppliedPromo(promo)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold"
+                >
+                  Apply
+                </button>
+              </div>
+              <div className="space-y-2 text-xs text-slate-300">
+                <div className="flex justify-between"><span>Subtotal:</span><span>₹{totals.subtotal.toLocaleString()}</span></div>
+                {totals.discount > 0 && <div className="flex justify-between text-emerald-400"><span>Discount:</span><span>-₹{totals.discount.toLocaleString()}</span></div>}
+                <div className="flex justify-between"><span>GST (18%):</span><span>₹{totals.tax.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span>Shipping:</span><span>{totals.shipping === 0 ? 'FREE' : '₹' + totals.shipping}</span></div>
+                <div className="border-t border-slate-800 pt-2 flex justify-between font-bold text-white text-sm">
+                  <span>Total:</span><span className="text-indigo-400">₹{totals.grandTotal.toLocaleString()}</span>
+                </div>
+              </div>
+              <button
+                onClick={() => { if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/checkout'); }}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/20"
+              >
+                Proceed to Checkout
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function BuiltinCheckoutView() {
+    const [formData, setFormData] = React.useState({ name: '', email: '', phone: '', address: '' });
+    const cart = window.LocalDB ? window.LocalDB.find('cart') : [];
+    const totals = window.Engine ? window.Engine.calculateTotals(cart) : { grandTotal: 0 };
+
+    const handlePlaceOrder = (e) => {
+      e.preventDefault();
+      if (window.DataSDK) {
+        window.DataSDK.placeOrder({ customer: formData, totalAmount: totals.grandTotal });
+        if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/orders');
+      }
+    };
+
+    return (
+      <div className="max-w-lg mx-auto bg-slate-900 border border-slate-800 rounded-3xl p-7 space-y-5">
+        <h2 className="text-xl font-bold text-white">Checkout Details</h2>
+        <form onSubmit={handlePlaceOrder} className="space-y-4">
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">Full Name</label>
+            <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">Email</label>
+            <input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">Shipping Address</label>
+            <textarea required rows={2} value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" />
+          </div>
+          <div className="p-4 rounded-xl bg-slate-800/60 border border-slate-700 flex justify-between font-bold text-white text-sm">
+            <span>Total Payable:</span><span className="text-indigo-400">₹{totals.grandTotal.toLocaleString()}</span>
+          </div>
+          <button type="submit" className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/20">
+            Confirm & Place Order
+          </button>
+        </form>
+      </div>
+    );
+  }
+
+  function BuiltinOrdersView() {
+    const orders = window.LocalDB ? window.LocalDB.find('orders') : [];
+    return (
+      <div className="max-w-4xl mx-auto space-y-6 p-4">
+        <h2 className="text-2xl font-bold text-white">Order History & Tracking</h2>
+        {orders.length === 0 ? (
+          <div className="text-center py-16 bg-slate-900/40 border border-slate-800 rounded-3xl">
+            <p className="text-slate-400 text-sm">No orders placed yet.</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {orders.map((ord, idx) => (
+              <div key={idx} className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <div>
+                    <span className="font-bold text-white text-sm">{ord.orderNumber}</span>
+                    <span className="text-[11px] text-slate-400 block">{ord.createdAt}</span>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">{ord.status || 'Confirmed'}</span>
+                </div>
+                <div className="text-xs text-slate-300 space-y-1">
+                  {(ord.items || []).map((it, i) => (
+                    <div key={i} className="flex justify-between">
+                      <span>{it.quantity}x {it.name}</span>
+                      <span className="font-mono">₹{Number(it.price * (it.quantity || 1)).toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-between pt-2 border-t border-slate-800 font-bold text-sm text-white">
+                  <span>Total:</span><span className="text-indigo-400">₹{Number(ord.totalAmount).toLocaleString()}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function BuiltinWishlistView() {
+    const wishlist = window.LocalDB ? window.LocalDB.find('wishlist') : [];
+    return (
+      <div className="max-w-4xl mx-auto space-y-6 p-4">
+        <h2 className="text-2xl font-bold text-white">Your Wishlist</h2>
+        {wishlist.length === 0 ? (
+          <div className="text-center py-16 bg-slate-900/40 border border-slate-800 rounded-3xl">
+            <p className="text-slate-400 text-sm">Your wishlist is currently empty.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {wishlist.map(item => (
+              <div key={item.id} className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3 flex flex-col justify-between">
+                <div>
+                  <h4 className="font-semibold text-white text-sm">{item.name}</h4>
+                  <span className="text-indigo-400 text-xs font-bold">₹{Number(item.price).toLocaleString()}</span>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => { if (window.DataSDK) { window.DataSDK.addToCart(item, 1); window.DataSDK.toggleWishlist(item); } }} className="flex-1 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Move to Cart</button>
+                  <button onClick={() => { if (window.DataSDK) window.DataSDK.toggleWishlist(item); }} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs">Remove</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function BuiltinAdminView() {
+    const orders = window.LocalDB ? window.LocalDB.find('orders') : [];
+    const products = window.LocalDB ? window.LocalDB.find('items') : [];
+    const stats = window.Engine ? window.Engine.computeStoreAnalytics(orders, products) : { totalRevenue: 0, totalOrders: 0, activeProducts: 0 };
+
+    return (
+      <div className="max-w-5xl mx-auto space-y-6 p-4">
+        <h2 className="text-2xl font-bold text-white">Merchant Administration Dashboard</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800">
+            <span className="text-xs text-slate-400">Total Store Revenue</span>
+            <h3 className="text-3xl font-extrabold text-white mt-2">₹{stats.totalRevenue.toLocaleString()}</h3>
+          </div>
+          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800">
+            <span className="text-xs text-slate-400">Completed Orders</span>
+            <h3 className="text-3xl font-extrabold text-white mt-2">{stats.totalOrders}</h3>
+          </div>
+          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800">
+            <span className="text-xs text-slate-400">Active Products</span>
+            <h3 className="text-3xl font-extrabold text-white mt-2">{stats.activeProducts}</h3>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function UniversalFallbackRouter() {
     const [currentHash, setCurrentHash] = React.useState(window.location.hash || '#/');
     const [dbVersion, setDbVersion] = React.useState(0);
@@ -1507,12 +2219,13 @@ ${cleanCode}
     const rawRoute = (currentHash.replace(/^#\\/?/, '') || '').toLowerCase();
     const cleanRoute = '/' + rawRoute;
 
-    const HomeComp = getComponent('HomePage') || getComponent('Home') || getComponent('ShopPage');
-    const ShopComp = getComponent('ShopPage') || getComponent('CatalogPage') || getComponent('ProductsPage') || HomeComp;
-    const CartComp = getComponent('CartPage') || getComponent('Cart') || HomeComp;
-    const CheckoutComp = getComponent('CheckoutPage') || getComponent('Checkout') || CartComp;
-    const OrdersComp = getComponent('OrdersPage') || getComponent('OrderPage') || getComponent('Orders') || HomeComp;
-    const AdminComp = getComponent('AdminDashboard') || getComponent('AdminPage') || getComponent('Dashboard') || HomeComp;
+    const HomeComp = getComponent('HomePage') || getComponent('Home') || BuiltinCatalogView;
+    const ShopComp = getComponent('ShopPage') || getComponent('CatalogPage') || getComponent('ProductsPage') || BuiltinCatalogView;
+    const CartComp = getComponent('CartPage') || getComponent('Cart') || BuiltinCartView;
+    const CheckoutComp = getComponent('CheckoutPage') || getComponent('Checkout') || BuiltinCheckoutView;
+    const OrdersComp = getComponent('OrdersPage') || getComponent('OrderPage') || getComponent('Orders') || BuiltinOrdersView;
+    const WishlistComp = getComponent('WishlistPage') || getComponent('Wishlist') || BuiltinWishlistView;
+    const AdminComp = getComponent('AdminDashboard') || getComponent('AdminPage') || getComponent('Dashboard') || BuiltinAdminView;
 
     let ActiveView = HomeComp;
     if (rawRoute.startsWith('catalog') || rawRoute.startsWith('shop') || rawRoute.startsWith('product')) {
@@ -1521,18 +2234,12 @@ ${cleanCode}
       ActiveView = CartComp;
     } else if (rawRoute.startsWith('checkout')) {
       ActiveView = CheckoutComp;
-    } else if (rawRoute.startsWith('order')) {
+    } else if (rawRoute.startsWith('order') || rawRoute.startsWith('track')) {
       ActiveView = OrdersComp;
+    } else if (rawRoute.startsWith('wishlist')) {
+      ActiveView = WishlistComp;
     } else if (rawRoute.startsWith('admin') || rawRoute.startsWith('dash')) {
       ActiveView = AdminComp;
-    }
-
-    if (!ActiveView) {
-      return (
-        <div className="p-8 text-center text-slate-400">
-          <p className="text-sm">Initializing views...</p>
-        </div>
-      );
     }
 
     return (
@@ -1562,6 +2269,8 @@ ${cleanCode}
 
     if (window.ReactDOM && window.ReactDOM.createRoot && window.React) {
       if (!window.__averia_react_root__) {
+        // Clear any static loader or "Initializing Averia Engine..." text!
+        container.innerHTML = '';
         window.__averia_react_root__ = window.ReactDOM.createRoot(container);
       }
       window.__averia_react_root__.render(<UniversalFallbackRouter />);

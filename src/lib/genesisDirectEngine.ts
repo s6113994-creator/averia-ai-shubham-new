@@ -591,7 +591,7 @@ export const GENESIS_SWARM_BATCHES: GenesisBatchDefinition[] = [
     batchId: 'batch_foundation',
     batchName: 'Foundation & Core Engine (Architect + DB + Backend + DataSDK + Engine)',
     workerRoles: ['architect', 'db_engineer', 'backend_api', 'data_sdk', 'logic_engine'],
-    targetFilesSummary: 'package.json, schema.sql, src/db/schema.ts, server/index.ts, src/lib/dataSdk.ts, src/lib/engine.ts',
+    targetFilesSummary: 'schema.sql, server/index.ts, src/lib/dataSdk.ts, src/lib/engine.ts',
     primaryKeySlot: 0,
   },
   {
@@ -622,116 +622,18 @@ export function getGenesisBatchPrompt(
     return {
       batchName: 'Foundation & Core Engine',
       prompt: `You are the Lead Foundation & Core Backend Team in the Genesis full-stack compiler swarm.
-Your job is to generate all configuration, PostgreSQL relational schema, Drizzle ORM models, Express backend REST API, client DataSDK, and core calculation logic for "${resolvedTitle}" (${userGoal}).
+Your job is to generate the PostgreSQL relational schema, Express backend REST API, client DataSDK, and core calculation logic for "${resolvedTitle}" (${userGoal}).
 
 MANDATORY RULES:
 - Output every file using: ===FILE: <path>=== followed by complete code.
 - ZERO conversational prose, ZERO placeholders, ZERO stubs (such as "// implement logic here").
-- Provide authentic, production-grade code for every single file.
+- Generate EXACTLY these 4 complete production files:
+  1. schema.sql (Complete PostgreSQL DDL with tables, indexes, and at least 12 authentic seed domain records)
+  2. server/index.ts (Complete Express REST API with GET /api/items, GET /api/items/:id, POST /api/checkout, GET /api/analytics, and health check)
+  3. src/lib/dataSdk.ts (Complete Typed Client Data SDK backed by window.LocalDB, defining DataSDK, AveriaStore, and Item/Cart/Order interfaces)
+  4. src/lib/engine.ts (Complete Core Calculation & Logic Engine with calculateTotals, filterProducts, validateStock, and computeStoreAnalytics)
 
-Generate these complete files:
-
-===FILE: package.json===
-{
-  "name": "${resolvedTitle.toLowerCase().replace(/[^a-z0-9]/g, '-')}",
-  "private": true,
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "server": "tsx server/index.ts"
-  },
-  "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "lucide-react": "^0.460.0",
-    "clsx": "^2.1.1",
-    "tailwind-merge": "^2.5.4",
-    "drizzle-orm": "^0.36.0",
-    "postgres": "^3.4.5",
-    "express": "^4.21.1",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "zod": "^3.23.8"
-  },
-  "devDependencies": {
-    "typescript": "^5.6.3",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
-    "@types/express": "^5.0.0",
-    "@types/cors": "^2.8.17",
-    "@types/node": "^22.9.0",
-    "@vitejs/plugin-react": "^4.3.3",
-    "vite": "^5.4.10",
-    "tailwindcss": "^3.4.14",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.47",
-    "drizzle-kit": "^0.28.0",
-    "tsx": "^4.19.2"
-  }
-}
-
-===FILE: tsconfig.json===
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "useDefineForClassFields": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "strict": true,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/*"]
-    }
-  },
-  "include": ["src", "server"]
-}
-
-===FILE: vite.config.ts===
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import path from 'path';
-
-export default defineConfig({
-  plugins: [react()],
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
-  },
-  server: {
-    port: 3000,
-  },
-});
-
-===FILE: tailwind.config.ts===
-export default {
-  darkMode: ['class'],
-  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
-  theme: {
-    extend: {
-      colors: {
-        primary: {
-          DEFAULT: '#6366f1',
-          foreground: '#ffffff',
-        },
-      },
-    },
-  },
-  plugins: [],
-};
+Generate these 4 complete files:
 
 ===FILE: schema.sql===
 -- Complete PostgreSQL DDL for ${resolvedTitle}
@@ -792,66 +694,6 @@ INSERT INTO items (name, slug, description, price, category, rating, review_coun
 ('Vector Tracking Gimbal', 'vector-tracking-gimbal', '3-axis brushless stabilizer with AI object tracking and gesture control.', 259.00, 'Cameras', 4.6, 68, false, 30, 'https://images.unsplash.com/photo-1516035069371-29a1b244cc32?w=500'),
 ('Flux Matrix RGB Ring', 'flux-matrix-rgb-ring', 'Programmable ambient lighting ring with reactive audio spectrum sync.', 64.99, 'Lighting', 4.5, 115, false, 95, 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=500')
 ON CONFLICT DO NOTHING;
-
-===FILE: src/db/schema.ts===
-import { pgTable, uuid, text, numeric, integer, boolean, jsonb, timestamp } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
-
-export const users = pgTable('users', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  name: text('name').notNull(),
-  email: text('email').unique().notNull(),
-  role: text('role').default('customer'),
-  avatarUrl: text('avatar_url'),
-  createdAt: timestamp('created_at').defaultNow(),
-});
-
-export const items = pgTable('items', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  name: text('name').notNull(),
-  slug: text('slug').unique().notNull(),
-  description: text('description'),
-  price: numeric('price', { precision: 10, scale: 2 }).notNull(),
-  category: text('category').notNull(),
-  tags: text('tags').array().default([]),
-  imageUrl: text('image_url'),
-  stockCount: integer('stock_count').default(100),
-  rating: numeric('rating', { precision: 3, scale: 2 }).default('4.8'),
-  reviewCount: integer('review_count').default(24),
-  isFeatured: boolean('is_featured').default(false),
-  metadata: jsonb('metadata').default({}),
-  createdAt: timestamp('created_at').defaultNow(),
-});
-
-export const orders = pgTable('orders', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
-  orderNumber: text('order_number').unique().notNull(),
-  totalAmount: numeric('total_amount', { precision: 10, scale: 2 }).notNull(),
-  status: text('status').default('pending'),
-  shippingAddress: jsonb('shipping_address').notNull(),
-  items: jsonb('items').notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
-});
-
-export const ordersRelations = relations(orders, ({ one }) => ({
-  user: one(users, {
-    fields: [orders.userId],
-    references: [users.id],
-  }),
-}));
-
-===FILE: drizzle.config.ts===
-import type { Config } from 'drizzle-kit';
-
-export default {
-  schema: './src/db/schema.ts',
-  out: './drizzle',
-  dialect: 'postgresql',
-  dbCredentials: {
-    url: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/${resolvedTitle.toLowerCase().replace(/[^a-z0-9]/g, '_')}',
-  },
-} satisfies Config;
 
 ===FILE: server/index.ts===
 import express from 'express';
@@ -1154,27 +996,10 @@ if (typeof window !== 'undefined') {
 }
 export default engine;
 
-===FILE: .env.example===
-PORT=3001
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/${resolvedTitle.toLowerCase().replace(/[^a-z0-9]/g, '_')}
-VITE_API_URL=http://localhost:3001
-
-===FILE: README.md===
-# ${resolvedTitle}
-
-Production-grade full-stack TypeScript + React application synthesized by Averia Genesis Swarm.
-
-## Architecture
-- Frontend: React 18, Tailwind CSS, Vite, TypeScript
-- Offline Engine: window.LocalDB with reactive DataSDK
-- Calculation Engine: CoreEngine with analytics & pricing algorithms
-- Database: PostgreSQL & Drizzle ORM
-- Backend: Express REST API with full CRUD endpoints
-
 SHARED ARCHITECTURAL CONTRACT:
 ${contract}
 
-RULES: Start immediately on line 1 with ===FILE: package.json===. Complete code only.`
+RULES: Start immediately on line 1 with ===FILE: schema.sql===. Complete code only.`
     };
   }
 
