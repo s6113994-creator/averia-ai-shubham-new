@@ -1187,6 +1187,8 @@ Your job is to generate the modern responsive HTML5 shell, CSS design system, re
 MANDATORY RULES:
 - Output every file using: ===FILE: <path>=== followed by complete code.
 - ZERO conversational prose, ZERO placeholders, ZERO stubs.
+- ZERO external npm imports (use React globally, and use FontAwesome icons like fa-cart-shopping, fa-star, fa-bolt).
+- All navigation links/buttons in index.html MUST use both onclick="if(window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/...');" and href="#/..." for rock-solid dual hash routing.
 - Output complete, production-grade implementations.
 
 Generate these complete files:
@@ -1469,6 +1471,8 @@ Your job is to generate the rich, complete, interactive React TSX pages (HomePag
 CRITICAL MANDATE:
 - Output every file using: ===FILE: <path>=== followed by complete code.
 - ZERO conversational prose, ZERO placeholders, ZERO stubs.
+- ZERO external npm imports (use React globally, and use inline FontAwesome fa-* icons).
+- MUST attach HomePage to window.HomePage, and all subpages to window.AppPages and individual window globals (ShopPage, CartPage, CheckoutPage, OrdersPage, AdminDashboard).
 - HomePage.tsx MUST BE 400+ LINES OF RICH CODE with full hero, category tabs, product cards, filters, and modals.
 - AppPages.tsx MUST BE 500+ LINES OF RICH CODE implementing ShopPage, ProductDetailPage, CartPage, CheckoutPage, OrdersPage, WishlistPage, and AdminDashboard.
 - qaGuard.ts MUST BE A COMPLETE self-healing guard.
@@ -1800,7 +1804,8 @@ HomePage.render = function(params: any) {
 
 if (typeof window !== 'undefined') {
   if ((window as any).__AVERIA_APP__) {
-    (window as any).__AVERIA_APP__.route('/', (params: any) => HomePage.render(params));
+    (window as any).__AVERIA_APP__.route('/', HomePage);
+    (window as any).__AVERIA_APP__.route('/home', HomePage);
     (window as any).__AVERIA_APP__.register('home', HomePage);
   }
   (window as any).HomePage = HomePage;
@@ -2117,28 +2122,20 @@ export const AppPages = {
 if (typeof window !== 'undefined') {
   if ((window as any).__AVERIA_APP__) {
     (window as any).__AVERIA_APP__.register('pages', AppPages);
-    (window as any).__AVERIA_APP__.route('/catalog', () => {
-      const c = document.getElementById('app');
-      if (c && window.ReactDOM) (window.ReactDOM as any).createRoot(c).render(<ShopPage />);
-    });
-    (window as any).__AVERIA_APP__.route('/cart', () => {
-      const c = document.getElementById('app');
-      if (c && window.ReactDOM) (window.ReactDOM as any).createRoot(c).render(<CartPage />);
-    });
-    (window as any).__AVERIA_APP__.route('/checkout', () => {
-      const c = document.getElementById('app');
-      if (c && window.ReactDOM) (window.ReactDOM as any).createRoot(c).render(<CheckoutPage />);
-    });
-    (window as any).__AVERIA_APP__.route('/orders', () => {
-      const c = document.getElementById('app');
-      if (c && window.ReactDOM) (window.ReactDOM as any).createRoot(c).render(<OrdersPage />);
-    });
-    (window as any).__AVERIA_APP__.route('/admin', () => {
-      const c = document.getElementById('app');
-      if (c && window.ReactDOM) (window.ReactDOM as any).createRoot(c).render(<AdminDashboard />);
-    });
+    (window as any).__AVERIA_APP__.route('/catalog', ShopPage);
+    (window as any).__AVERIA_APP__.route('/shop', ShopPage);
+    (window as any).__AVERIA_APP__.route('/products', ShopPage);
+    (window as any).__AVERIA_APP__.route('/cart', CartPage);
+    (window as any).__AVERIA_APP__.route('/checkout', CheckoutPage);
+    (window as any).__AVERIA_APP__.route('/orders', OrdersPage);
+    (window as any).__AVERIA_APP__.route('/admin', AdminDashboard);
   }
   (window as any).AppPages = AppPages;
+  (window as any).ShopPage = ShopPage;
+  (window as any).CartPage = CartPage;
+  (window as any).CheckoutPage = CheckoutPage;
+  (window as any).OrdersPage = OrdersPage;
+  (window as any).AdminDashboard = AdminDashboard;
 }
 export default AppPages;
 
