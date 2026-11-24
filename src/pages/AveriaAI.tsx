@@ -18,6 +18,8 @@ import {
   saveCustomGeminiKeys,
   getCustomGeminiKeys,
   GEMINI_CASCADE_MODELS,
+  runSwarmConcurrencyPool,
+  clearQuarantinedKeys,
 } from '@/lib/genesisDirectEngine';
 
 const SUPABASE_BASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://qhmxmwigvexyxvklukns.supabase.co';
@@ -3171,39 +3173,26 @@ export default function AveriaAI() {
         }));
         setWorkersStatus(initialWorkers);
 
+        clearQuarantinedKeys();
+
         setCollaborationLogs([
           {
             time: now(),
             from: 'System Architect',
             to: '10 Parallel Direct Workers',
-            action: `Contract published for "${brandTitle}" — Direct Browser-to-Gemini swarm across ${availableKeys.length} keys`,
+            action: `Contract published for "${brandTitle}" — Smart Concurrency Pool across ${availableKeys.length} keys`,
             icon: '📜',
           },
           {
             time: now(),
             from: 'Direct Swarm Orchestrator',
             to: '10 Workers',
-            action: `Dispatched 10 direct parallel subagents (zero Edge Function proxy bottlenecks)`,
+            action: `Dispatched 10 workers in Rate-Limit-Safe Concurrency Pool (max 3 concurrent, 900ms stagger, x-goog-api-key header auth)`,
             icon: '🚀',
           },
         ]);
 
-        // ── 2-WAVE COLLISION-FREE PARALLEL EXECUTION ──
-        // Wave 1: Core UI, Engine & Multi-Page Views (4 Workers)
-        const WAVE_1_ROLES = GENESIS_SWARM_ROLES.filter(r =>
-          ['ui_shell', 'home_view', 'logic_engine', 'sub_pages'].includes(r.role)
-        );
-        // Wave 2: Data SDK, Deep Router, Backend API, SQL DB & QA (6 Workers)
-        const WAVE_2_ROLES = GENESIS_SWARM_ROLES.filter(r =>
-          ['data_sdk', 'spa_router', 'db_engineer', 'backend_api', 'architect', 'qa_security'].includes(r.role)
-        );
-
-        const runWorker = async (role: typeof GENESIS_SWARM_ROLES[number], waveIdx: number) => {
-          // 120ms micro-stagger inside each wave to prevent concurrent burst spikes
-          if (waveIdx > 0) {
-            await new Promise(r => setTimeout(r, waveIdx * 120));
-          }
-
+        const runWorker = async (role: typeof GENESIS_SWARM_ROLES[number], workerIdx: number) => {
           const workerStartTime = Date.now();
           let workerBytes = 0;
           let workerText = '';
@@ -3215,7 +3204,7 @@ export default function AveriaAI() {
               resolvedTitle: brandTitle,
               sharedContract: contract,
               availableKeys,
-              keySlot: role.keySlot,
+              keySlot: workerIdx % availableKeys.length,
               onChunk: (delta, bytes) => {
                 if (bytes) {
                   workerBytes += bytes;
@@ -3290,41 +3279,17 @@ export default function AveriaAI() {
           }
         };
 
-        // Dispatch Wave 1: Core UI, Engine & Multi-Page Views (4 Workers)
-        setCollaborationLogs(prev => [
-          ...prev,
-          {
-            time: now(),
-            from: 'Wave 1 Orchestrator',
-            to: 'UI & Engine Cluster',
-            action: 'Dispatched Wave 1: Core UI Shell, Interactive Engine, Home & Sub-Pages',
-            icon: '🎨',
-          },
-        ]);
-
-        const wave1Results = await Promise.allSettled(
-          WAVE_1_ROLES.map((role, idx) => runWorker(role, idx))
-        );
-
-        // Dispatch Wave 2: Data SDK, Deep Router, Backend API, SQL DB & QA (6 Workers)
-        setCollaborationLogs(prev => [
-          ...prev,
-          {
-            time: now(),
-            from: 'Wave 2 Orchestrator',
-            to: 'Backend & Data Cluster',
-            action: 'Dispatched Wave 2: Data SDK, Deep Router, Backend REST API, PostgreSQL Schema & QA Auditor',
-            icon: '🗄️',
-          },
-        ]);
-
-        const wave2Results = await Promise.allSettled(
-          WAVE_2_ROLES.map((role, idx) => runWorker(role, idx))
+        // Dispatch 10 workers in Smart Rate-Limit-Safe Concurrency Pool (max 3 concurrent, 900ms stagger)
+        const poolResults = await runSwarmConcurrencyPool(
+          GENESIS_SWARM_ROLES as any,
+          3, // maxConcurrent = 3
+          900, // 900ms launch stagger
+          (role, idx) => runWorker(role, idx)
         );
 
         // ── STRICT 10/10 COMPLETION GATE ──
-        // Only after ALL 10 workers across Wave 1 & Wave 2 have resolved do we collect files, save to disk, and mount preview
-        const results = [...wave1Results, ...wave2Results];
+        // Only after ALL 10 workers have resolved do we collect files, save to disk, and mount preview
+        const results = poolResults.map(val => ({ status: 'fulfilled' as const, value: val }));
 
         // Collect all files across 10 workers
         const filesMap = new Map<string, ProjectFile>();

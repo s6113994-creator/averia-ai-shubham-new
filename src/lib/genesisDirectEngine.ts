@@ -37,6 +37,15 @@ export const GEMINI_CASCADE_MODELS = [
 const LOCAL_STORAGE_KEY_GEMINI = 'averia_gemini_api_keys';
 
 /**
+ * Global quarantined/dead keys tracker (e.g. HTTP 400/403 API_KEY_INVALID / PERMISSION_DENIED)
+ */
+export const quarantinedKeys = new Set<string>();
+
+export function clearQuarantinedKeys(): void {
+  quarantinedKeys.clear();
+}
+
+/**
  * Retrieve user custom keys stored in browser localStorage
  */
 export function getCustomGeminiKeys(): string[] {
@@ -74,6 +83,8 @@ export function saveCustomGeminiKeys(keys: string[]): void {
  * 1. localStorage custom keys
  * 2. Vite env vars (VITE_GEMINI_KEY_1..10, VITE_GEMINI_API_KEYS, VITE_GEMINI_API_KEY)
  * 3. Optional Supabase DB lookup if client provided (all active keys: AQ.Ab8..., AIzaSy..., etc.)
+ *
+ * Prioritizes AIzaSy... keys first, followed by AQ.Ab8... auth keys across all slots.
  */
 export async function getAllAvailableGeminiKeys(supabaseClient?: any): Promise<string[]> {
   const keys: string[] = [];
@@ -121,7 +132,17 @@ export async function getAllAvailableGeminiKeys(supabaseClient?: any): Promise<s
     }
   }
 
-  return keys;
+  // Prioritize AIzaSy... keys first, then AQ.Ab8... keys, and any other valid keys
+  const sorted = Array.from(keys).sort((a, b) => {
+    const aIsAiza = a.startsWith('AIza') ? 0 : 1;
+    const bIsAiza = b.startsWith('AIza') ? 0 : 1;
+    if (aIsAiza !== bIsAiza) return aIsAiza - bIsAiza;
+    const aIsAq = a.startsWith('AQ.') ? 0 : 1;
+    const bIsAq = b.startsWith('AQ.') ? 0 : 1;
+    return aIsAq - bIsAq;
+  });
+
+  return sorted;
 }
 
 /**
@@ -493,13 +514,20 @@ export async function streamGeminiRoleDirect({
   const roleConfig = getGenesisRolePrompt(role, userGoal, resolvedTitle, sharedContract);
   const userPrompt = `Generate the production-grade modern TypeScript & React code for "${resolvedTitle}" (${userGoal}). Follow your role and architectural contract strictly.`;
 
-  let currentSlot = keySlot % availableKeys.length;
+  const getHealthyKeys = () => {
+    const healthy = availableKeys.filter(k => !quarantinedKeys.has(k));
+    return healthy.length > 0 ? healthy : availableKeys;
+  };
+
+  let healthy = getHealthyKeys();
+  let currentSlot = keySlot % healthy.length;
   let keyAttempts = 0;
   let rateLimitRetries = 0;
-  const maxKeyAttempts = Math.max(availableKeys.length * 3, 15);
+  const maxKeyAttempts = Math.max(availableKeys.length * 4, 20);
 
   while (keyAttempts < maxKeyAttempts) {
-    const apiKey = availableKeys[currentSlot];
+    healthy = getHealthyKeys();
+    const apiKey = healthy[currentSlot % healthy.length];
     keyAttempts++;
     let hit429 = false;
 
@@ -508,7 +536,8 @@ export async function streamGeminiRoleDirect({
       const model = GEMINI_CASCADE_MODELS[mIdx];
       if (onModelCascade) onModelCascade(model);
 
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+      // Official Google Gemini SSE URL (clean endpoint with x-goog-api-key header)
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
 
       const requestBody = {
         contents: [
@@ -521,7 +550,7 @@ export async function streamGeminiRoleDirect({
           parts: [{ text: roleConfig.prompt }],
         },
         generationConfig: {
-          maxOutputTokens: 16384,
+          maxOutputTokens: 12288,
           temperature: 0.2,
           topP: 0.95,
         },
@@ -532,6 +561,7 @@ export async function streamGeminiRoleDirect({
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey,
           },
           body: JSON.stringify(requestBody),
         });
@@ -542,24 +572,42 @@ export async function streamGeminiRoleDirect({
           continue;
         }
 
-        // 429 Rate Limit / Quota -> Exponential backoff retry (1500ms * attempt) and rotate key slot
+        // 400 / 403 API Key Invalid or Permission Denied -> Quarantine key immediately & re-route
+        if (response.status === 400 || response.status === 403) {
+          const errBody = await response.text().catch(() => '');
+          const isKeyError = response.status === 403 ||
+            errBody.includes('API_KEY_INVALID') ||
+            errBody.includes('PERMISSION_DENIED') ||
+            errBody.includes('API key not valid') ||
+            errBody.includes('CONSUMER_INVALID') ||
+            errBody.includes("Method doesn't allow unregistered callers") ||
+            errBody.includes('Key not found');
+
+          if (isKeyError) {
+            console.warn(`[Genesis Direct] Key #${currentSlot + 1} (${apiKey.slice(0, 10)}...) QUARANTINED due to HTTP ${response.status} (${errBody.slice(0, 60)}). Re-routing onto healthy keys...`);
+            quarantinedKeys.add(apiKey);
+            healthy = getHealthyKeys();
+            currentSlot = (currentSlot + 1) % healthy.length;
+            if (onKeyRotate) onKeyRotate(currentSlot);
+            break; // Break model loop, immediately retry on next healthy key
+          } else {
+            console.warn(`[Genesis Direct] Model ${model} returned 400 (${errBody.slice(0, 80)}). Cascading...`);
+            continue;
+          }
+        }
+
+        // 429 Rate Limit / Quota -> Exponential backoff retry (1500ms * attempt, up to 4 retries) and rotate key slot
         if (response.status === 429) {
           hit429 = true;
           rateLimitRetries++;
-          const attempt = Math.min(rateLimitRetries, 3);
+          const attempt = Math.min(rateLimitRetries, 4);
           const backoffMs = 1500 * attempt;
-          console.warn(`[Genesis Direct] Key #${currentSlot + 1} hit 429 rate limit (attempt ${rateLimitRetries}). Backing off for ${backoffMs}ms and rotating to next key slot...`);
-          currentSlot = (currentSlot + 1) % availableKeys.length;
+          console.warn(`[Genesis Direct] Key #${currentSlot + 1} hit 429 rate limit (attempt ${rateLimitRetries}/4). Backing off for ${backoffMs}ms and rotating to next healthy key slot...`);
+          healthy = getHealthyKeys();
+          currentSlot = (currentSlot + 1) % healthy.length;
           if (onKeyRotate) onKeyRotate(currentSlot);
           await new Promise(r => setTimeout(r, backoffMs));
           break; // Break model loop, trigger retry with rotated key
-        }
-
-        // 400 Bad Request (unsupported feature or model mismatch) -> Cascade model
-        if (response.status === 400) {
-          const errBody = await response.text().catch(() => '');
-          console.warn(`[Genesis Direct] Model ${model} returned 400 (${errBody.slice(0, 80)}). Cascading...`);
-          continue;
         }
 
         if (!response.ok || !response.body) {
@@ -676,13 +724,74 @@ export async function streamGeminiRoleDirect({
       }
     }
 
-    // Rotate key slot if not already rotated by 429 backoff handler
+    // Rotate key slot if not already rotated by 429/quarantine handler
     if (!hit429) {
-      currentSlot = (currentSlot + 1) % availableKeys.length;
+      healthy = getHealthyKeys();
+      currentSlot = (currentSlot + 1) % healthy.length;
       if (onKeyRotate) onKeyRotate(currentSlot);
       await new Promise(r => setTimeout(r, 400));
     }
   }
 
   throw new Error(`Worker for ${role} failed across all Gemini models and available keys.`);
+}
+
+/**
+ * Run swarm roles through a Smart Rate-Limit-Safe Concurrency Pool
+ * - maxConcurrent: 3 parallel streams at a time
+ * - launchStaggerMs: 900ms launch stagger between new stream starts
+ * - As soon as 1 stream finishes, next queued worker starts immediately
+ */
+export async function runSwarmConcurrencyPool<T, R>(
+  items: T[],
+  maxConcurrent = 3,
+  launchStaggerMs = 900,
+  workerFn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextQueueIndex = 0;
+  let activeWorkers = 0;
+  let lastLaunchTime = 0;
+
+  return new Promise((resolve) => {
+    const launchWorker = async () => {
+      if (nextQueueIndex >= items.length) {
+        if (activeWorkers === 0) {
+          resolve(results);
+        }
+        return;
+      }
+
+      const itemIndex = nextQueueIndex++;
+      activeWorkers++;
+
+      // Stagger launch to prevent initial burst spike
+      const now = Date.now();
+      const elapsed = now - lastLaunchTime;
+      if (lastLaunchTime > 0 && elapsed < launchStaggerMs) {
+        await new Promise(r => setTimeout(r, launchStaggerMs - elapsed));
+      }
+      lastLaunchTime = Date.now();
+
+      try {
+        results[itemIndex] = await workerFn(items[itemIndex], itemIndex);
+      } catch (err: any) {
+        results[itemIndex] = { error: err.message || 'Worker execution error' } as unknown as R;
+      } finally {
+        activeWorkers--;
+        // Immediately start next queued worker when one finishes
+        launchWorker();
+      }
+
+      // If active workers < maxConcurrent and more queued items, launch next concurrently
+      if (activeWorkers < maxConcurrent && nextQueueIndex < items.length) {
+        launchWorker();
+      }
+    };
+
+    const initialBatch = Math.min(maxConcurrent, items.length);
+    for (let i = 0; i < initialBatch; i++) {
+      launchWorker();
+    }
+  });
 }
