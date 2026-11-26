@@ -927,17 +927,22 @@ ${memoryContext}`;
       });
     }
 
-    // ── SYNTHESIS: 3 parallel creative agents + Studio Image Renderer ──────
+    // ── SYNTHESIS: 3 parallel creative agents + Studio Image Renderer (ONLY on media intent) ──────
     if (selectedModel === "synthesis") {
-      console.log("[averia-ai] Mode: SYNTHESIS (3 parallel creative agents + Studio Renderer)");
-      const statusHeader = buildAgentStatusHeader(SYNTHESIS_AGENTS, "Synthesis");
       const userPrompt = extractTextContent(userMessages[userMessages.length - 1]?.content) || "";
+      const isMediaRequest = /\b(generate|create|draw|paint|render|make|design)\s+(an?\s+)?(image|photo|picture|wallpaper|logo|illustration|poster|artwork)\b/i.test(userPrompt) || /\b(image|picture|photo)\s+(of|for|showing)\b/i.test(userPrompt);
 
-      // Parallel creative swarm (Prompt Architect, Visual Renderer, Detail Enhancer)
+      console.log(`[averia-ai] Mode: SYNTHESIS (isMediaRequest=${isMediaRequest})`);
+
+      // If user did not ask to generate an image, stream natural creative text response with ZERO images!
+      if (!isMediaRequest) {
+        const creativeSystemPrompt = `${AVERIA_SYSTEM_PERSONA}\nYou are Averia Synthesis — a brilliantly creative, articulate, and expressive AI. Answer the user naturally and eloquently in their language with rich detail, clear explanations, and zero unwanted image generation.`;
+        return streamGeminiChat(supabase, userMessages, creativeSystemPrompt);
+      }
+
+      const statusHeader = buildAgentStatusHeader(SYNTHESIS_AGENTS, "Synthesis");
       const swarmResults = await executeSwarm(supabase, SYNTHESIS_AGENTS, userMessages);
       const mergedText = mergeBestSwarmResult(swarmResults, "longest");
-
-      // Generate visual creation using 7-Model Cascade across rotated keys + Pollinations fallback
       const imgResult = await generateAveriaImage(supabase, userPrompt);
 
       const agentSummary = swarmResults
@@ -949,9 +954,20 @@ ${memoryContext}`;
       return streamTextAsSSE(finalText);
     }
 
-    // ── INTELLIGENCE: 5 parallel forensic agents ───────────────────────────
+    // ── INTELLIGENCE: 5 parallel forensic agents (ONLY on verification intent / attachments) ─────
     if (selectedModel === "intelligence") {
-      console.log("[averia-ai] Mode: INTELLIGENCE (5 parallel forensic agents)");
+      const userPrompt = extractTextContent(userMessages[userMessages.length - 1]?.content) || "";
+      const hasAttachments = Boolean(forensicMode) || userMessages.some(m => Array.isArray(m.content) && m.content.some((p: any) => p.type === 'image_url'));
+      const isVerifyRequest = hasAttachments || /\b(verify|fact[-\s]?check|is\s+(this|it)\s+(real|fake|true|false|ai|manipulated)|deepfake|hoax|misinformation|disinformation|sach|jhooth|asli|nakli)\b/i.test(userPrompt);
+
+      console.log(`[averia-ai] Mode: INTELLIGENCE (isVerifyRequest=${isVerifyRequest})`);
+
+      // If normal casual conversation or general Q&A, respond naturally like a warm AI peer with ZERO verdict tables!
+      if (!isVerifyRequest) {
+        const peerSystemPrompt = `${AVERIA_SYSTEM_PERSONA}\nYou are Averia Intelligence — an exceptionally sharp, insightful, and warmly conversational AI peer. Speak naturally, helpfully, and with genuine empathy in the user's language (Hindi, Hinglish, English, etc.). DO NOT output any forensic audit tables, trust scores, or "Forensic Verdict" headers for casual conversation or standard questions.`;
+        return streamGeminiChat(supabase, userMessages, peerSystemPrompt);
+      }
+
       const statusHeader = buildAgentStatusHeader(INTELLIGENCE_AGENTS, "Intelligence");
 
       // Run first 4 agents in parallel, then feed results to Consensus Judge

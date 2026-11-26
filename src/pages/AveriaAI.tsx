@@ -26,6 +26,7 @@ import {
   clearQuarantinedKeys,
   recoverMissingDeliverablesWithSurvivor,
   synthesizeDeterministicProject,
+  selfHealFileWithGemini,
   SurvivorInfo,
 } from '@/lib/genesisDirectEngine';
 
@@ -43,11 +44,61 @@ interface Attachment {
   preview?: string;
 }
 
+export type UserIntent = 'build_app' | 'generate_media' | 'verify_news' | 'chat';
+
+export interface GenesisTelemetry {
+  workers: GenesisWorkerStatus[];
+  collaborationLogs: CollaborationLogEntry[];
+  totalBytes: number;
+  diskStatus?: string | null;
+  localFolderName?: string | null;
+  workspaceContext?: WorkspaceContext | null;
+  hasCanvas?: boolean;
+}
+
 interface Message {
+  id?: string;
   role: 'user' | 'assistant';
   content: string;
   imageUrl?: string;
   attachments?: Attachment[];
+  intent?: UserIntent;
+  genesisTelemetry?: GenesisTelemetry;
+}
+
+export function classifyUserIntent(prompt: string, attachments: Attachment[] = []): UserIntent {
+  const text = (prompt || '').trim();
+  const lower = text.toLowerCase();
+
+  // 1. If media attachments (image/video/audio/url) are present, or claim verification asked
+  const hasMediaAttachments = attachments.some(a => a.kind === 'image' || a.kind === 'video' || a.kind === 'audio' || a.kind === 'url');
+  const verifyNewsKeywords = /\b(verify|fact[-\s]?check|is\s+(this|it)\s+(real|fake|true|false|ai|manipulated)|deepfake|hoax|rumou?r|misinformation|disinformation|news\s+check|sach\s+hai\s+ya\s+jhooth|asli\s+hai\s+ya\s+nakli)\b/i;
+  
+  if (hasMediaAttachments || verifyNewsKeywords.test(lower)) {
+    return 'verify_news';
+  }
+
+  // 2. Generate media (image, illustration, logo, audio, video generation)
+  const mediaGenKeywords = /\b(generate|create|draw|paint|render|make|design)\s+(an?\s+)?(image|photo|picture|wallpaper|logo|illustration|graphic|poster|avatar|portrait|artwork|audio|song|music|soundtrack|video|animation)\b/i;
+  const imageRequestPattern = /\b(image|photo|picture|drawing|illustration)\s+(of|for|showing|depicting)\b/i;
+  if (mediaGenKeywords.test(lower) || imageRequestPattern.test(lower)) {
+    // Avoid classifying "create an app for photo editing" as generate_media
+    if (!/\b(app|application|website|site|game|dashboard|saas|tool|platform|system)\b/i.test(lower)) {
+      return 'generate_media';
+    }
+  }
+
+  // 3. Build / modify / fix app, website, game, SaaS, code
+  const appBuildKeywords = /\b(build|create|make|code|program|develop|generate|clone|design)\b.*\b(app|application|website|web\s+app|site|page|game|snake\s+game|pong|tic\s*tac\s*toe|flappy|rpg|crm|erp|saas|dashboard|store|shop|e-?commerce|portal|platform|todo\s+app|calculator|tracker|portfolio|clone)\b/i;
+  const directAppPattern = /\b(create|build|make)\s+(a|an)?\s*[a-z0-9_-]+\s+(app|game|website|dashboard|saas|platform|tracker)\b/i;
+  const codeEditKeywords = /\b(fix\s+(the\s+)?(bug|error|button|ui|code|crash|page)|modify\s+(the\s+)?code|add\s+(a\s+)?(feature|page|button|route|component)|refactor\s+(the\s+)?code)\b/i;
+
+  if (appBuildKeywords.test(lower) || directAppPattern.test(lower) || codeEditKeywords.test(lower)) {
+    return 'build_app';
+  }
+
+  // 4. Default to 'chat' (normal conversations, explanations, Q&A, greetings)
+  return 'chat';
 }
 
 interface Conversation {
@@ -1782,376 +1833,6 @@ button:active {
   window.LocalDB = localDb;
   window.AveriaDB = localDb;
 
-  // 12 Rich Pre-Seeded Products for 0ms Instant Product Hydration
-  var SEED_PRODUCTS = [
-    {
-      id: 'prod-1',
-      name: 'Averia Nova Pro Wireless ANC Headphones',
-      category: 'Audio',
-      price: 14999,
-      mrp: 19999,
-      rating: 4.9,
-      reviewCount: 342,
-      stock: 24,
-      badge: 'Best Seller',
-      description: 'Flagship active noise cancelling headphones with 45-hour battery, spatial hi-res audio, and ultra-plush memory foam cushions.',
-      specs: ['Active Noise Cancellation 48dB', '45hr Battery Life', 'Bluetooth 5.3 + LDAC', 'Multipoint Connection'],
-      imageUrl: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=600&auto=format&fit=crop&q=80'
-    },
-    {
-      id: 'prod-2',
-      name: 'UltraVision 4K 144Hz Gaming Monitor',
-      category: 'Monitors',
-      price: 32999,
-      mrp: 42999,
-      rating: 4.8,
-      reviewCount: 189,
-      stock: 15,
-      badge: 'Editor Choice',
-      description: '27-inch IPS panel with 1ms response time, 99% DCI-P3 color gamut, HDR600 certification, and dual HDMI 2.1 ports.',
-      specs: ['4K UHD 3840x2160', '144Hz Refresh Rate', '1ms GtG Response', 'AMD FreeSync Premium Pro'],
-      imageUrl: 'https://images.unsplash.com/photo-1527443224154-c4a3942d3acf?w=600&auto=format&fit=crop&q=80'
-    },
-    {
-      id: 'prod-3',
-      name: 'Averia Quantum Book M3 Ultra Laptop',
-      category: 'Computing',
-      price: 119999,
-      mrp: 149999,
-      rating: 4.9,
-      reviewCount: 512,
-      stock: 8,
-      badge: 'Flagship',
-      description: 'Precision milled aerospace aluminum ultrabook featuring 16-core neural engine, 32GB unified RAM, and 18-hour all-day battery.',
-      specs: ['16-Core Neural CPU', '32GB Unified RAM', '1TB Gen4 NVMe SSD', 'Liquid Retina XDR 120Hz'],
-      imageUrl: 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?w=600&auto=format&fit=crop&q=80'
-    },
-    {
-      id: 'prod-4',
-      name: 'Titan Chrono Smartwatch Sapphire Edition',
-      category: 'Wearables',
-      price: 21999,
-      mrp: 27999,
-      rating: 4.7,
-      reviewCount: 276,
-      stock: 30,
-      badge: 'Trending',
-      description: 'Aerospace titanium case with sapphire crystal glass, continuous ECG, dual-frequency GPS, and 100m water resistance.',
-      specs: ['Titanium Grade 5 Case', 'Sapphire Glass Touchscreen', 'Dual-Frequency GPS', '14-Day Battery Life'],
-      imageUrl: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=600&auto=format&fit=crop&q=80'
-    },
-    {
-      id: 'prod-5',
-      name: 'Averia Studio Soundbar Atmos 5.1',
-      category: 'Audio',
-      price: 18999,
-      mrp: 24999,
-      rating: 4.8,
-      reviewCount: 154,
-      stock: 18,
-      badge: 'Hi-Fi Audio',
-      description: 'Immersive 360-degree acoustic soundstage with wireless dedicated subwoofer, Dolby Atmos, and eARC lossless audio.',
-      specs: ['5.1 Channel Surround', 'Wireless Subwoofer 200W', 'Dolby Atmos & DTS:X', 'HDMI eARC & Optical'],
-      imageUrl: 'https://images.unsplash.com/photo-1545454675-3531b543be5d?w=600&auto=format&fit=crop&q=80'
-    },
-    {
-      id: 'prod-6',
-      name: 'AuraBeam Ergonomic Mechanical Keyboard',
-      category: 'Accessories',
-      price: 8499,
-      mrp: 11999,
-      rating: 4.9,
-      reviewCount: 428,
-      stock: 45,
-      badge: 'Popular',
-      description: 'Gasket-mounted hot-swappable tactile mechanical keyboard with per-key RGB backlighting and acoustic sound dampening.',
-      specs: ['Gasket Mount Structure', 'Hot-Swappable Switches', 'Tri-Mode Wireless 2.4G/BT', 'Aluminium CNC Top Plate'],
-      imageUrl: 'https://images.unsplash.com/photo-1587829741301-dc798b83add3?w=600&auto=format&fit=crop&q=80'
-    },
-    {
-      id: 'prod-7',
-      name: 'Veloce Pro Wireless Gaming Mouse 8KHz',
-      category: 'Gaming',
-      price: 5999,
-      mrp: 7999,
-      rating: 4.7,
-      reviewCount: 319,
-      stock: 50,
-      badge: 'Esports Ready',
-      description: 'Ultra-lightweight 49g ergonomic chassis with optical switches, 32,000 DPI sensor, and true 8000Hz polling rate.',
-      specs: ['49g Featherweight', '32,000 DPI Optical Sensor', '8000Hz Polling Rate', 'Optical Micro Switches'],
-      imageUrl: 'https://images.unsplash.com/photo-1615663245857-ac93bb7c39e7?w=600&auto=format&fit=crop&q=80'
-    },
-    {
-      id: 'prod-8',
-      name: 'Averia SoundPulse Pocket Hi-Fi Speaker',
-      category: 'Audio',
-      price: 4499,
-      mrp: 5999,
-      rating: 4.6,
-      reviewCount: 210,
-      stock: 60,
-      badge: 'Portable',
-      description: 'Rugged IP67 waterproof pocket powerhouse with dual passive radiators, 24-hour playback, and True Wireless Stereo pairing.',
-      specs: ['IP67 Waterproof & Dustproof', '24hr Playback Time', 'Dual Bass Radiators', 'TWS Stereo Pairing'],
-      imageUrl: 'https://images.unsplash.com/photo-1608043152269-423dbba4e7e1?w=600&auto=format&fit=crop&q=80'
-    },
-    {
-      id: 'prod-9',
-      name: 'CyberShield Pro GaN Fast Charger 140W',
-      category: 'Accessories',
-      price: 3999,
-      mrp: 5499,
-      rating: 4.8,
-      reviewCount: 680,
-      stock: 80,
-      badge: 'Top Rated',
-      description: 'Compact 4-port Gallium Nitride fast charger with dual PD 3.1 USB-C ports capable of full speed 140W laptop charging.',
-      specs: ['GaN V Technology', '140W Max USB-C PD 3.1', '4 Simultaneous Ports', 'Overheat & Surge Protection'],
-      imageUrl: 'https://images.unsplash.com/photo-1583863788434-e58a36330cf0?w=600&auto=format&fit=crop&q=80'
-    },
-    {
-      id: 'prod-10',
-      name: 'Averia VisionVR Spatial Headset',
-      category: 'Gaming',
-      price: 79999,
-      mrp: 99999,
-      rating: 4.9,
-      reviewCount: 145,
-      stock: 6,
-      badge: 'Next-Gen',
-      description: 'Ultra-high resolution Micro-OLED spatial computing headset with real-time eye tracking and LiDAR spatial scanning.',
-      specs: ['Dual 4K Micro-OLED Displays', 'LiDAR Room Spatial Mapping', 'Infrared Eye Tracking', 'Spatial Audio Drivers'],
-      imageUrl: 'https://images.unsplash.com/photo-1593508512255-86ab42a8e620?w=600&auto=format&fit=crop&q=80'
-    },
-    {
-      id: 'prod-11',
-      name: 'AuraSense Smart Air Quality Monitor',
-      category: 'Smart Home',
-      price: 6999,
-      mrp: 8999,
-      rating: 4.7,
-      reviewCount: 198,
-      stock: 22,
-      badge: 'Eco Smart',
-      description: 'Real-time laser particulate sensor measuring PM2.5, VOCs, CO2, temperature and humidity with OLED dashboard.',
-      specs: ['Laser PM2.5 Particle Sensor', 'Swiss Sensirion NDIR CO2', 'Matter & Apple HomeKit', 'Clear OLED Color Display'],
-      imageUrl: 'https://images.unsplash.com/photo-1558002038-1055907df827?w=600&auto=format&fit=crop&q=80'
-    },
-    {
-      id: 'prod-12',
-      name: 'StealthFlow MagSafe Wireless PowerBank 20K',
-      category: 'Accessories',
-      price: 3499,
-      mrp: 4999,
-      rating: 4.8,
-      reviewCount: 520,
-      stock: 75,
-      badge: 'Essential',
-      description: '20,000mAh slimline magnetic battery pack with 15W wireless charging and digital percentage battery display.',
-      specs: ['20,000mAh Lithium Polymer', '15W Fast Magnetic Wireless', '20W PD USB-C Bi-Directional', 'Digital LED Percentage Display'],
-      imageUrl: 'https://images.unsplash.com/photo-1609592424364-7707328cb59a?w=600&auto=format&fit=crop&q=80'
-    }
-  ];
-
-  // Auto-seed if items or products collection is empty
-  var existingItems = localDb.find('items');
-  if (!existingItems || existingItems.length === 0) {
-    saveStore('items', SEED_PRODUCTS);
-    saveStore('products', SEED_PRODUCTS);
-  } else {
-    var existingProds = localDb.find('products');
-    if (!existingProds || existingProds.length === 0) {
-      saveStore('products', existingItems);
-    }
-  }
-
-  // Built-in Complete DataSDK
-  var DataSDK = {
-    getProducts: async function(filter) {
-      var prods = localDb.find('items');
-      if (!prods || prods.length === 0) prods = localDb.find('products');
-      if (filter && typeof filter === 'function') return prods.filter(filter);
-      if (filter && filter.category && filter.category !== 'All') {
-        prods = prods.filter(function(x) { return x.category === filter.category; });
-      }
-      if (filter && filter.search) {
-        var q = String(filter.search).toLowerCase();
-        prods = prods.filter(function(x) {
-          return (x.name && x.name.toLowerCase().indexOf(q) !== -1) ||
-                 (x.category && x.category.toLowerCase().indexOf(q) !== -1);
-        });
-      }
-      return prods;
-    },
-    getProductById: async function(id) {
-      var prods = localDb.find('items');
-      return prods.find(function(x) { return x.id == id || x._id == id; }) || null;
-    },
-    list: async function(col, opts) {
-      return localDb.list(col, opts);
-    },
-    find: function(col, filter) {
-      return localDb.find(col, filter);
-    },
-    getCart: async function() {
-      return localDb.find('cart');
-    },
-    addToCart: async function(item, qty) {
-      var cart = localDb.find('cart') || [];
-      var quantity = qty || 1;
-      var existing = cart.find(function(x) { return x.id == item.id || x._id == item.id; });
-      if (existing) {
-        localDb.update('cart', existing.id || existing._id, { quantity: (existing.quantity || 1) + quantity });
-      } else {
-        localDb.insert('cart', Object.assign({}, item, { quantity: quantity }));
-      }
-      return localDb.find('cart');
-    },
-    updateCartQty: async function(id, qty) {
-      if (qty <= 0) {
-        localDb.delete('cart', id);
-      } else {
-        localDb.update('cart', id, { quantity: qty });
-      }
-      return localDb.find('cart');
-    },
-    removeFromCart: async function(id) {
-      localDb.delete('cart', id);
-      return localDb.find('cart');
-    },
-    clearCart: async function() {
-      localDb.clear('cart');
-      return [];
-    },
-    getWishlist: async function() {
-      return localDb.find('wishlist');
-    },
-    toggleWishlist: async function(item) {
-      var list = localDb.find('wishlist') || [];
-      var existing = list.find(function(x) { return x.id == item.id; });
-      if (existing) {
-        localDb.delete('wishlist', existing.id);
-        return false;
-      } else {
-        localDb.insert('wishlist', Object.assign({}, item));
-        return true;
-      }
-    },
-    placeOrder: async function(orderData) {
-      var cart = localDb.find('cart') || [];
-      var calc = Engine.calculateTotals(cart);
-      var order = {
-        id: 'ord_' + Date.now(),
-        orderNumber: 'ORD-' + Math.floor(100000 + Math.random() * 900000),
-        items: cart,
-        totalAmount: orderData && orderData.totalAmount ? orderData.totalAmount : calc.grandTotal,
-        subtotal: calc.subtotal,
-        tax: calc.tax,
-        shipping: calc.shipping,
-        customer: orderData ? (orderData.customer || orderData) : { name: 'Customer' },
-        status: 'Confirmed',
-        createdAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-      };
-      localDb.insert('orders', order);
-      localDb.clear('cart');
-      return order;
-    },
-    getOrders: async function() {
-      return localDb.find('orders');
-    },
-    updateOrderStatus: async function(id, status) {
-      return localDb.update('orders', id, { status: status });
-    },
-    addProduct: async function(item) {
-      localDb.insert('items', item);
-      localDb.insert('products', item);
-      return item;
-    },
-    deleteProduct: async function(id) {
-      localDb.delete('items', id);
-      localDb.delete('products', id);
-      return { success: true };
-    }
-  };
-
-  // Built-in Complete Calculation Engine
-  var Engine = {
-    calculateTotals: function(cart, discountCode) {
-      var items = cart || [];
-      var subtotal = items.reduce(function(sum, it) {
-        return sum + (Number(it.price || 0) * (it.quantity || 1));
-      }, 0);
-      var discountRate = 0;
-      if (discountCode && String(discountCode).toUpperCase() === 'AVERIA20') discountRate = 0.20;
-      var discount = Math.round(subtotal * discountRate);
-      var taxable = subtotal - discount;
-      var tax = Math.round(taxable * 0.18);
-      var shipping = subtotal > 999 || subtotal === 0 ? 0 : 99;
-      var grandTotal = taxable + tax + shipping;
-      var totalItems = items.reduce(function(sum, it) { return sum + (it.quantity || 1); }, 0);
-      return {
-        subtotal: subtotal,
-        discount: discount,
-        tax: tax,
-        shipping: shipping,
-        grandTotal: grandTotal,
-        totalItems: totalItems
-      };
-    },
-    filterProducts: function(products, filters) {
-      var list = (products || []).slice();
-      if (filters && filters.category && filters.category !== 'All') {
-        list = list.filter(function(x) { return x.category === filters.category; });
-      }
-      if (filters && filters.search) {
-        var s = String(filters.search).toLowerCase();
-        list = list.filter(function(x) {
-          return (x.name && x.name.toLowerCase().indexOf(s) !== -1) ||
-                 (x.description && x.description.toLowerCase().indexOf(s) !== -1);
-        });
-      }
-      if (filters && filters.sortBy === 'price_asc') list.sort(function(a, b) { return a.price - b.price; });
-      else if (filters && filters.sortBy === 'price_desc') list.sort(function(a, b) { return b.price - a.price; });
-      else if (filters && filters.sortBy === 'rating') list.sort(function(a, b) { return (b.rating || 0) - (a.rating || 0); });
-      return list;
-    },
-    validateStock: function(cart, inventory) {
-      var issues = [];
-      var inv = inventory || {};
-      for (var i = 0; i < (cart || []).length; i++) {
-        var it = cart[i];
-        var avail = inv[it.id] != null ? inv[it.id] : (it.stock != null ? it.stock : 99);
-        if ((it.quantity || 1) > avail) {
-          issues.push({ id: it.id, requested: it.quantity, available: avail });
-        }
-      }
-      return { valid: issues.length === 0, issues: issues };
-    },
-    computeStoreAnalytics: function(orders, products) {
-      var ords = orders || [];
-      var prods = products || [];
-      var totalRev = ords.reduce(function(sum, o) { return sum + Number(o.totalAmount || 0); }, 0);
-      var avgOrder = ords.length > 0 ? Math.round(totalRev / ords.length) : 0;
-      return {
-        totalRevenue: totalRev,
-        totalOrders: ords.length,
-        averageOrderValue: avgOrder,
-        activeItems: prods.length,
-        activeProducts: prods.length
-      };
-    }
-  };
-
-  window.DataSDK = DataSDK;
-  window.AveriaStore = DataSDK;
-  window.dataSdk = DataSDK;
-  window.Store = DataSDK;
-
-  window.Engine = Engine;
-  window.AveriaEngine = Engine;
-  window.CoreEngine = Engine;
-  window.engine = Engine;
 })();
 </script>\n`;
 
@@ -2256,455 +1937,60 @@ ${cleanCode}
     }
   }
 
-  // ── ZERO-WHITE-SCREEN RUNTIME GUARD & GUARANTEED MULTI-PAGE RENDER ──
-  // Checks at 1200 ms (and on window.onerror) if #app/#root has rendered.
-  // If empty (< 100 chars), automatically mounts a full, interactive, multi-page React Storefront
-  // (Home, Catalog, Product Detail, Cart, Checkout, Orders, Wishlist, Admin Dashboard) powered by window.DataSDK.
+  // ── GENUINE RUNTIME HEALTH & PRE-MOUNT WATCHDOG ──
   const vanillaWatchdogScript = `<script>
 (function() {
-  var DELAYS = [800, 1200, 2400];
-  var watchdogMounted = false;
-
-  function runZeroWhiteScreenCheck() {
-    if (watchdogMounted) return;
-    var app = document.getElementById('app') || document.getElementById('root');
-    if (!app) return;
-    var rawText = (app.innerHTML || '').replace(/<!--[\\s\\S]*?-->/g, '').trim();
-    if (rawText.length >= 100) {
-      watchdogMounted = true;
-      return;
-    }
-    console.warn('[Averia Zero-White-Screen Guard] #app container is empty (' + rawText.length + ' chars). Mounting guaranteed interactive multi-page React Storefront.');
-    watchdogMounted = true;
-    mountGuaranteedStorefront(app);
+  function reportRuntimeError(err) {
+    console.error('[Averia Runtime Guard]', err);
+    try {
+      window.parent.postMessage({
+        type: 'AVERIA_RUNTIME_ERROR',
+        message: err.message || String(err),
+        lineno: err.lineno,
+        filename: err.filename
+      }, '*');
+    } catch (_) {}
   }
+
+  window.addEventListener('error', function(e) {
+    reportRuntimeError({ message: e.message, lineno: e.lineno, filename: e.filename });
+  });
+
+  window.addEventListener('unhandledrejection', function(e) {
+    reportRuntimeError({ message: e.reason ? (e.reason.message || String(e.reason)) : 'Unhandled Promise Rejection' });
+  });
 
   window.addEventListener('DOMContentLoaded', function() {
-    DELAYS.forEach(function(d) { setTimeout(runZeroWhiteScreenCheck, d); });
-  });
-  window.addEventListener('load', function() {
-    setTimeout(runZeroWhiteScreenCheck, 1200);
-  });
-  window.onerror = function() {
-    setTimeout(runZeroWhiteScreenCheck, 250);
-  };
-  DELAYS.forEach(function(d) { setTimeout(runZeroWhiteScreenCheck, d); });
-
-  function mountGuaranteedStorefront(container) {
-    var R = window.React;
-    var RD = window.ReactDOM;
-    if (!R || !RD || (!RD.createRoot && !RD.render)) {
-      setTimeout(function() { mountGuaranteedStorefront(container); }, 200);
-      return;
-    }
-    var h = R.createElement;
-    var useState = R.useState;
-    var useEffect = R.useEffect;
-
-    function GuaranteedStorefrontApp() {
-      var _a = useState(window.location.hash || '#/'), hash = _a[0], setHash = _a[1];
-      var _b = useState([]), products = _b[0], setProducts = _b[1];
-      var _c = useState([]), cart = _c[0], setCart = _c[1];
-      var _d = useState([]), wishlist = _d[0], setWishlist = _d[1];
-      var _e = useState([]), orders = _e[0], setOrders = _e[1];
-      var _f = useState(''), search = _f[0], setSearch = _f[1];
-      var _g = useState('All'), category = _g[0], setCategory = _g[1];
-      var _h = useState('featured'), sortBy = _h[0], setSortBy = _h[1];
-      var _j = useState(null), quickView = _j[0], setQuickView = _j[1];
-      var _k = useState(''), promo = _k[0], setPromo = _k[1];
-      var _l = useState(''), appliedPromo = _l[0], setAppliedPromo = _l[1];
-      var _m = useState(null), toast = _m[0], setToast = _m[1];
-      var _n = useState({ name: '', email: '', phone: '', address: '', method: 'UPI' }), checkoutForm = _n[0], setCheckoutForm = _n[1];
-
-      var refreshData = function() {
-        if (window.DataSDK && window.DataSDK.getProducts) {
-          window.DataSDK.getProducts().then(setProducts);
-        }
-        if (window.LocalDB) {
-          setCart(window.LocalDB.find('cart') || []);
-          setWishlist(window.LocalDB.find('wishlist') || []);
-          setOrders(window.LocalDB.find('orders') || []);
-        }
-      };
-
-      useEffect(function() {
-        refreshData();
-        var onHash = function() { setHash(window.location.hash || '#/'); };
-        var onNav = function(e) {
-          if (e && e.detail && e.detail.route) {
-            var r = e.detail.route.startsWith('#') ? e.detail.route : ('#' + (e.detail.route.startsWith('/') ? e.detail.route : '/' + e.detail.route));
-            window.location.hash = r;
-            setHash(r);
-          }
-        };
-        var onDbChange = function() { refreshData(); };
-        window.addEventListener('hashchange', onHash);
-        window.addEventListener('averia:navigate', onNav);
-        window.addEventListener('localdb:change', onDbChange);
-        return function() {
-          window.removeEventListener('hashchange', onHash);
-          window.removeEventListener('averia:navigate', onNav);
-          window.removeEventListener('localdb:change', onDbChange);
-        };
-      }, []);
-
-      var showToast = function(msg) {
-        setToast(msg);
-        setTimeout(function() { setToast(null); }, 3000);
-      };
-
-      var navTo = function(r) {
-        var target = r.startsWith('#') ? r : ('#' + (r.startsWith('/') ? r : '/' + r));
-        window.location.hash = target;
-        setHash(target);
-        window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: r } }));
-      };
-
-      window.__AVERIA_APP__ = window.__AVERIA_APP__ || {};
-      window.__AVERIA_APP__.navigate = navTo;
-      window.__AVERIA_ROUTER__ = window.__AVERIA_APP__;
-
-      var filtered = products.filter(function(p) {
-        var matchCat = category === 'All' || (p.category && p.category.toLowerCase() === category.toLowerCase());
-        var matchSearch = !search || (p.name && p.name.toLowerCase().indexOf(search.toLowerCase()) >= 0) || (p.description && p.description.toLowerCase().indexOf(search.toLowerCase()) >= 0);
-        return matchCat && matchSearch;
-      });
-
-      if (sortBy === 'price_asc') filtered.sort(function(a, b) { return a.price - b.price; });
-      else if (sortBy === 'price_desc') filtered.sort(function(a, b) { return b.price - a.price; });
-      else if (sortBy === 'rating') filtered.sort(function(a, b) { return (b.rating || 0) - (a.rating || 0); });
-
-      var totals = window.Engine && window.Engine.calculateTotals
-        ? window.Engine.calculateTotals(cart, appliedPromo)
-        : { subtotal: 0, tax: 0, shipping: 0, grandTotal: 0, discount: 0 };
-
-      var rawRoute = (hash.replace(/^#\\/?/, '') || '').toLowerCase();
-      var cartCount = cart.reduce(function(sum, it) { return sum + (it.quantity || 1); }, 0);
-
-      var navBar = h('header', { className: 'sticky top-0 z-40 bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 py-3' },
-        h('div', { className: 'max-w-7xl mx-auto flex items-center justify-between gap-4' },
-          h('div', { className: 'flex items-center gap-3 cursor-pointer', onClick: function() { navTo('/'); } },
-            h('div', { className: 'w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-emerald-400 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/20' }, '⚡'),
-            h('span', { className: 'font-bold text-lg text-white tracking-tight' }, 'NovaStore PRO')
-          ),
-          h('nav', { className: 'hidden md:flex items-center gap-1 text-xs' },
-            h('button', { onClick: function() { navTo('/'); }, className: 'px-3 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition ' + (rawRoute === '' || rawRoute === 'home' ? 'bg-slate-800 text-white font-semibold' : '') }, 'Home'),
-            h('button', { onClick: function() { navTo('/shop'); }, className: 'px-3 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition ' + (rawRoute.indexOf('shop') === 0 || rawRoute.indexOf('catalog') === 0 ? 'bg-slate-800 text-white font-semibold' : '') }, 'Catalog'),
-            h('button', { onClick: function() { navTo('/wishlist'); }, className: 'px-3 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition ' + (rawRoute.indexOf('wishlist') === 0 ? 'bg-slate-800 text-white font-semibold' : '') }, 'Wishlist (' + wishlist.length + ')'),
-            h('button', { onClick: function() { navTo('/orders'); }, className: 'px-3 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition ' + (rawRoute.indexOf('order') === 0 ? 'bg-slate-800 text-white font-semibold' : '') }, 'Orders (' + orders.length + ')'),
-            h('button', { onClick: function() { navTo('/admin'); }, className: 'px-3 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition ' + (rawRoute.indexOf('admin') === 0 ? 'bg-slate-800 text-white font-semibold' : '') }, 'Admin')
-          ),
-          h('div', { className: 'flex items-center gap-2' },
-            h('button', { onClick: function() { navTo('/cart'); }, className: 'flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/20 transition' },
-              h('span', null, '🛒 Cart'),
-              h('span', { className: 'px-1.5 py-0.5 rounded-full bg-white/20 text-[10px]' }, cartCount)
-            )
-          )
-        )
-      );
-
-      var toastNode = toast ? h('div', { className: 'fixed bottom-5 right-5 z-50 bg-emerald-600 text-white text-xs px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 animate-bounce' }, '✓ ' + toast) : null;
-      var mainContent = null;
-
-      if (rawRoute.indexOf('product/') === 0) {
-        var prodId = rawRoute.replace('product/', '');
-        var foundProd = products.find(function(p) { return String(p.id) === prodId; }) || products[0];
-        mainContent = foundProd ? h('div', { className: 'max-w-4xl mx-auto p-4 md:p-8 space-y-6' },
-          h('button', { onClick: function() { navTo('/shop'); }, className: 'text-indigo-400 text-xs hover:underline flex items-center gap-1' }, '← Back to Catalog'),
-          h('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-8 bg-slate-900 border border-slate-800 rounded-3xl p-6' },
-            h('div', { className: 'aspect-square rounded-2xl overflow-hidden bg-slate-800' },
-              h('img', { src: foundProd.imageUrl || foundProd.image, alt: foundProd.name, className: 'w-full h-full object-cover' })
-            ),
-            h('div', { className: 'space-y-4 flex flex-col justify-between' },
-              h('div', { className: 'space-y-2' },
-                h('span', { className: 'px-2.5 py-1 rounded-full bg-indigo-600/20 text-indigo-400 text-[11px] font-semibold' }, foundProd.category || 'Tech'),
-                h('h1', { className: 'text-2xl font-bold text-white' }, foundProd.name),
-                h('p', { className: 'text-slate-400 text-xs' }, foundProd.description),
-                h('div', { className: 'flex items-center gap-2 text-amber-400 text-xs' }, '★ ' + (foundProd.rating || 4.8) + ' (' + (foundProd.reviewCount || 120) + ' reviews)'),
-                h('div', { className: 'pt-2 flex items-baseline gap-2' },
-                  h('span', { className: 'text-2xl font-extrabold text-white' }, '₹' + Number(foundProd.price).toLocaleString()),
-                  foundProd.mrp ? h('span', { className: 'text-xs text-slate-500 line-through' }, '₹' + Number(foundProd.mrp).toLocaleString()) : null
-                )
-              ),
-              h('div', { className: 'space-y-2 pt-4 border-t border-slate-800' },
-                h('button', {
-                  onClick: function() { if (window.DataSDK) window.DataSDK.addToCart(foundProd, 1); showToast('Added to cart!'); },
-                  className: 'w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/20'
-                }, 'Add to Cart'),
-                h('button', {
-                  onClick: function() { if (window.DataSDK) window.DataSDK.addToCart(foundProd, 1); navTo('/checkout'); },
-                  className: 'w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs'
-                }, 'Buy Now')
-              )
-            )
-          )
-        ) : null;
-      } else if (rawRoute.indexOf('cart') === 0) {
-        mainContent = h('div', { className: 'max-w-4xl mx-auto p-4 md:p-6 space-y-6' },
-          h('h2', { className: 'text-2xl font-bold text-white' }, 'Shopping Cart'),
-          cart.length === 0 ? h('div', { className: 'text-center py-16 bg-slate-900 border border-slate-800 rounded-3xl space-y-3' },
-            h('p', { className: 'text-slate-400 text-sm' }, 'Your cart is currently empty.'),
-            h('button', { onClick: function() { navTo('/shop'); }, className: 'mt-2 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold' }, 'Browse Catalog')
-          ) : h('div', { className: 'grid grid-cols-1 md:grid-cols-3 gap-6' },
-            h('div', { className: 'md:col-span-2 space-y-3' },
-              cart.map(function(item) {
-                return h('div', { key: item.id, className: 'p-4 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-4' },
-                  h('div', { className: 'min-w-0 flex-1' },
-                    h('h4', { className: 'font-semibold text-white text-sm truncate' }, item.name),
-                    h('span', { className: 'text-indigo-400 text-xs font-bold' }, '₹' + Number(item.price).toLocaleString())
-                  ),
-                  h('div', { className: 'flex items-center gap-2' },
-                    h('button', { onClick: function() { if (window.DataSDK) window.DataSDK.updateCartQty(item.id, (item.quantity||1)-1); }, className: 'w-7 h-7 rounded-lg bg-slate-800 text-white flex items-center justify-center' }, '-'),
-                    h('span', { className: 'text-sm font-bold text-white w-6 text-center' }, item.quantity || 1),
-                    h('button', { onClick: function() { if (window.DataSDK) window.DataSDK.updateCartQty(item.id, (item.quantity||1)+1); }, className: 'w-7 h-7 rounded-lg bg-slate-800 text-white flex items-center justify-center' }, '+'),
-                    h('button', { onClick: function() { if (window.DataSDK) window.DataSDK.removeFromCart(item.id); }, className: 'text-slate-400 hover:text-rose-400 text-xs ml-2' }, '✕')
-                  )
-                );
-              })
-            ),
-            h('div', { className: 'p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 h-fit' },
-              h('h3', { className: 'font-bold text-white text-sm' }, 'Order Summary'),
-              h('div', { className: 'flex gap-2' },
-                h('input', { type: 'text', placeholder: 'AVERIA20', value: promo, onChange: function(e) { setPromo(e.target.value); }, className: 'px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white flex-1 focus:outline-none' }),
-                h('button', { onClick: function() { setAppliedPromo(promo); showToast('Promo applied!'); }, className: 'px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold' }, 'Apply')
-              ),
-              h('div', { className: 'space-y-2 text-xs text-slate-300' },
-                h('div', { className: 'flex justify-between' }, h('span', null, 'Subtotal:'), h('span', null, '₹' + totals.subtotal.toLocaleString())),
-                totals.discount > 0 ? h('div', { className: 'flex justify-between text-emerald-400' }, h('span', null, 'Discount (20%):'), h('span', null, '-₹' + totals.discount.toLocaleString())) : null,
-                h('div', { className: 'flex justify-between' }, h('span', null, 'GST (18%):'), h('span', null, '₹' + totals.tax.toLocaleString())),
-                h('div', { className: 'flex justify-between' }, h('span', null, 'Shipping:'), h('span', null, totals.shipping === 0 ? 'FREE' : '₹' + totals.shipping)),
-                h('div', { className: 'border-t border-slate-800 pt-2 flex justify-between font-bold text-white text-sm' }, h('span', null, 'Total:'), h('span', { className: 'text-indigo-400' }, '₹' + totals.grandTotal.toLocaleString()))
-              ),
-              h('button', { onClick: function() { navTo('/checkout'); }, className: 'w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg' }, 'Proceed to Checkout')
-            )
-          )
-        );
-      } else if (rawRoute.indexOf('checkout') === 0) {
-        mainContent = h('div', { className: 'max-w-lg mx-auto p-4 md:p-6 bg-slate-900 border border-slate-800 rounded-3xl space-y-5 my-6' },
-          h('h2', { className: 'text-xl font-bold text-white' }, 'Checkout Details'),
-          h('form', {
-            onSubmit: function(e) {
-              e.preventDefault();
-              if (window.DataSDK) {
-                window.DataSDK.placeOrder({ customer: checkoutForm, totalAmount: totals.grandTotal, items: cart });
-                showToast('Order confirmed successfully!');
-                navTo('/orders');
+    [600, 1200, 2000].forEach(function(delay) {
+      setTimeout(function() {
+        var container = document.getElementById('app') || document.getElementById('root');
+        if (!container) return;
+        var text = (container.innerHTML || '').replace(/<!--[\s\S]*?-->/g, '').trim();
+        if (text.length < 20) {
+          if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.mount === 'function') {
+            try { window.__AVERIA_APP__.mount(); } catch (e) { reportRuntimeError(e); }
+          } else if (window.HomePage) {
+            try {
+              if (typeof window.HomePage.render === 'function') {
+                window.HomePage.render();
+              } else if (window.ReactDOM && window.React) {
+                var R = window.React;
+                var RD = window.ReactDOM;
+                if (RD.createRoot) {
+                  if (!window.__averia_root__) window.__averia_root__ = RD.createRoot(container);
+                  window.__averia_root__.render(R.createElement(window.HomePage));
+                } else if (RD.render) {
+                  RD.render(R.createElement(window.HomePage), container);
+                }
               }
-            },
-            className: 'space-y-4'
-          },
-            h('div', null, h('label', { className: 'text-xs text-slate-400 block mb-1' }, 'Full Name'), h('input', { required: true, type: 'text', value: checkoutForm.name, onChange: function(e) { setCheckoutForm(Object.assign({}, checkoutForm, { name: e.target.value })); }, className: 'w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none' })),
-            h('div', null, h('label', { className: 'text-xs text-slate-400 block mb-1' }, 'Email Address'), h('input', { required: true, type: 'email', value: checkoutForm.email, onChange: function(e) { setCheckoutForm(Object.assign({}, checkoutForm, { email: e.target.value })); }, className: 'w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none' })),
-            h('div', null, h('label', { className: 'text-xs text-slate-400 block mb-1' }, 'Phone Number'), h('input', { required: true, type: 'tel', value: checkoutForm.phone, onChange: function(e) { setCheckoutForm(Object.assign({}, checkoutForm, { phone: e.target.value })); }, className: 'w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none' })),
-            h('div', null, h('label', { className: 'text-xs text-slate-400 block mb-1' }, 'Shipping Address'), h('textarea', { required: true, rows: 2, value: checkoutForm.address, onChange: function(e) { setCheckoutForm(Object.assign({}, checkoutForm, { address: e.target.value })); }, className: 'w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none' })),
-            h('div', { className: 'p-4 rounded-xl bg-slate-800/60 border border-slate-700 flex justify-between font-bold text-white text-sm' }, h('span', null, 'Total Payable:'), h('span', { className: 'text-indigo-400' }, '₹' + totals.grandTotal.toLocaleString())),
-            h('button', { type: 'submit', className: 'w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg' }, 'Confirm & Place Order')
-          )
-        );
-      } else if (rawRoute.indexOf('order') === 0) {
-        mainContent = h('div', { className: 'max-w-4xl mx-auto p-4 md:p-6 space-y-6' },
-          h('h2', { className: 'text-2xl font-bold text-white' }, 'Order History & Tracking'),
-          orders.length === 0 ? h('div', { className: 'text-center py-16 bg-slate-900 border border-slate-800 rounded-3xl space-y-3' },
-            h('p', { className: 'text-slate-400 text-sm' }, 'No orders placed yet.'),
-            h('button', { onClick: function() { navTo('/shop'); }, className: 'mt-2 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold' }, 'Start Shopping')
-          ) : h('div', { className: 'space-y-4' },
-            orders.map(function(ord, i) {
-              return h('div', { key: i, className: 'p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3' },
-                h('div', { className: 'flex items-center justify-between border-b border-slate-800 pb-3' },
-                  h('div', null, h('span', { className: 'font-bold text-white text-sm' }, ord.orderNumber || ('ORD-' + (1000 + i))), h('span', { className: 'text-[11px] text-slate-400 block' }, ord.createdAt || 'Just now')),
-                  h('span', { className: 'px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' }, ord.status || 'Confirmed')
-                ),
-                h('div', { className: 'text-xs text-slate-300 space-y-1' },
-                  (ord.items || []).map(function(it, j) {
-                    return h('div', { key: j, className: 'flex justify-between' },
-                      h('span', null, (it.quantity || 1) + 'x ' + it.name),
-                      h('span', null, '₹' + Number(it.price * (it.quantity || 1)).toLocaleString())
-                    );
-                  })
-                ),
-                h('div', { className: 'flex justify-between pt-2 border-t border-slate-800 font-bold text-sm text-white' },
-                  h('span', null, 'Total:'),
-                  h('span', { className: 'text-indigo-400' }, '₹' + Number(ord.totalAmount || 0).toLocaleString())
-                )
-              );
-            })
-          )
-        );
-      } else if (rawRoute.indexOf('wishlist') === 0) {
-        mainContent = h('div', { className: 'max-w-4xl mx-auto p-4 md:p-6 space-y-6' },
-          h('h2', { className: 'text-2xl font-bold text-white' }, 'Your Wishlist'),
-          wishlist.length === 0 ? h('div', { className: 'text-center py-16 bg-slate-900 border border-slate-800 rounded-3xl space-y-3' },
-            h('p', { className: 'text-slate-400 text-sm' }, 'Your wishlist is currently empty.'),
-            h('button', { onClick: function() { navTo('/shop'); }, className: 'mt-2 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold' }, 'Browse Items')
-          ) : h('div', { className: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5' },
-            wishlist.map(function(item) {
-              return h('div', { key: item.id, className: 'p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3 flex flex-col justify-between' },
-                h('div', null, h('h4', { className: 'font-semibold text-white text-sm' }, item.name), h('span', { className: 'text-indigo-400 text-xs font-bold' }, '₹' + Number(item.price).toLocaleString())),
-                h('div', { className: 'flex gap-2' },
-                  h('button', { onClick: function() { if (window.DataSDK) { window.DataSDK.addToCart(item, 1); window.DataSDK.toggleWishlist(item); showToast('Moved to cart!'); } }, className: 'flex-1 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold' }, 'Move to Cart'),
-                  h('button', { onClick: function() { if (window.DataSDK) window.DataSDK.toggleWishlist(item); }, className: 'px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs' }, 'Remove')
-                )
-              );
-            })
-          )
-        );
-      } else if (rawRoute.indexOf('admin') === 0 || rawRoute.indexOf('dash') === 0) {
-        var stats = window.Engine && window.Engine.computeStoreAnalytics
-          ? window.Engine.computeStoreAnalytics(orders, products)
-          : { totalRevenue: 0, totalOrders: orders.length, activeProducts: products.length };
-        mainContent = h('div', { className: 'max-w-5xl mx-auto p-4 md:p-6 space-y-6' },
-          h('h2', { className: 'text-2xl font-bold text-white' }, 'Merchant Administration Dashboard'),
-          h('div', { className: 'grid grid-cols-1 md:grid-cols-3 gap-6' },
-            h('div', { className: 'p-6 rounded-2xl bg-slate-900 border border-slate-800' }, h('span', { className: 'text-xs text-slate-400' }, 'Total Store Revenue'), h('h3', { className: 'text-3xl font-extrabold text-white mt-2' }, '₹' + Number(stats.totalRevenue).toLocaleString())),
-            h('div', { className: 'p-6 rounded-2xl bg-slate-900 border border-slate-800' }, h('span', { className: 'text-xs text-slate-400' }, 'Completed Orders'), h('h3', { className: 'text-3xl font-extrabold text-white mt-2' }, stats.totalOrders)),
-            h('div', { className: 'p-6 rounded-2xl bg-slate-900 border border-slate-800' }, h('span', { className: 'text-xs text-slate-400' }, 'Active Products'), h('h3', { className: 'text-3xl font-extrabold text-white mt-2' }, stats.activeProducts))
-          )
-        );
-      } else {
-        var isCatalog = rawRoute.indexOf('shop') === 0 || rawRoute.indexOf('catalog') === 0;
-        var categories = ['All', 'Audio', 'Monitors', 'Computing', 'Wearables', 'Gaming', 'Accessories', 'Smart Home'];
-
-        var heroSection = !isCatalog ? h('div', { className: 'relative rounded-3xl overflow-hidden bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-950 border border-indigo-900/40 p-8 md:p-12 space-y-4' },
-          h('span', { className: 'px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold' }, '⚡ Next-Gen Tech Hardware'),
-          h('h1', { className: 'text-3xl md:text-5xl font-extrabold text-white tracking-tight leading-tight max-w-2xl' }, 'High-Performance Gear for Creators & Engineers'),
-          h('p', { className: 'text-slate-400 text-xs md:text-sm max-w-xl' }, 'Offline-first, zero-latency store with built-in SQLite reactivity, instant checkout, and order tracking.'),
-          h('div', { className: 'flex flex-wrap gap-3 pt-2' },
-            h('button', { onClick: function() { navTo('/shop'); }, className: 'px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/30' }, 'Explore Catalog'),
-            h('button', { onClick: function() { navTo('/cart'); }, className: 'px-6 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs' }, 'View Cart (' + cartCount + ')')
-          )
-        ) : null;
-
-        var filterBar = h('div', { className: 'space-y-4' },
-          h('div', { className: 'flex flex-col md:flex-row md:items-center justify-between gap-4' },
-            h('div', null,
-              h('h2', { className: 'text-xl font-bold text-white' }, isCatalog ? 'Product Catalog' : 'Featured Products'),
-              h('p', { className: 'text-slate-400 text-xs' }, '12 seeded items with rich specs, instant delivery & real-time stock')
-            ),
-            h('div', { className: 'flex items-center gap-3' },
-              h('input', {
-                type: 'text',
-                placeholder: 'Search gear...',
-                value: search,
-                onChange: function(e) { setSearch(e.target.value); },
-                className: 'px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-xs w-48 focus:outline-none focus:border-indigo-500'
-              }),
-              h('select', {
-                value: sortBy,
-                onChange: function(e) { setSortBy(e.target.value); },
-                className: 'px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 text-xs focus:outline-none'
-              },
-                h('option', { value: 'featured' }, 'Featured'),
-                h('option', { value: 'price_asc' }, 'Price: Low to High'),
-                h('option', { value: 'price_desc' }, 'Price: High to Low'),
-                h('option', { value: 'rating' }, 'Top Rated')
-              )
-            )
-          ),
-          h('div', { className: 'flex items-center gap-2 overflow-x-auto pb-2' },
-            categories.map(function(cat) {
-              return h('button', {
-                key: cat,
-                onClick: function() { setCategory(cat); },
-                className: 'px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ' + (category === cat ? 'bg-indigo-600 text-white' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800')
-              }, cat);
-            })
-          )
-        );
-
-        var gridSection = h('div', { className: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6' },
-          filtered.map(function(p) {
-            return h('div', { key: p.id, className: 'rounded-2xl bg-slate-900/80 border border-slate-800 p-4 flex flex-col justify-between hover:border-slate-700 transition shadow-xl' },
-              h('div', { className: 'space-y-3' },
-                h('div', { className: 'relative aspect-video rounded-xl overflow-hidden bg-slate-800 cursor-pointer', onClick: function() { navTo('/product/' + p.id); } },
-                  h('img', { src: p.imageUrl || p.image, alt: p.name, className: 'w-full h-full object-cover hover:scale-105 transition duration-300' }),
-                  h('span', { className: 'absolute top-2 left-2 px-2 py-0.5 rounded-full bg-slate-950/80 text-[10px] text-slate-300 font-medium' }, p.category),
-                  p.badge ? h('span', { className: 'absolute top-2 right-2 px-2 py-0.5 rounded-full bg-indigo-600 text-[10px] text-white font-bold' }, p.badge) : null
-                ),
-                h('h3', { className: 'font-semibold text-white text-sm line-clamp-1 cursor-pointer hover:text-indigo-400', onClick: function() { navTo('/product/' + p.id); } }, p.name),
-                h('p', { className: 'text-slate-400 text-xs line-clamp-2' }, p.description),
-                h('div', { className: 'flex items-center gap-2 text-amber-400 text-xs' }, '★ ' + (p.rating || 4.8) + ' (' + (p.reviewCount || 100) + ')')
-              ),
-              h('div', { className: 'pt-4 mt-3 border-t border-slate-800 flex items-center justify-between' },
-                h('div', null,
-                  h('span', { className: 'font-bold text-white text-base' }, '₹' + Number(p.price).toLocaleString()),
-                  p.mrp ? h('span', { className: 'text-[11px] text-slate-500 line-through ml-1.5' }, '₹' + Number(p.mrp).toLocaleString()) : null
-                ),
-                h('div', { className: 'flex items-center gap-1.5' },
-                  h('button', { onClick: function() { setQuickView(p); }, className: 'p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs', title: 'Quick View' }, '👁'),
-                  h('button', { onClick: function() { if (window.DataSDK) window.DataSDK.toggleWishlist(p); showToast('Wishlist updated'); }, className: 'p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs', title: 'Wishlist' }, '♥'),
-                  h('button', { onClick: function() { if (window.DataSDK) window.DataSDK.addToCart(p, 1); showToast('Added to cart!'); }, className: 'px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs' }, 'Add')
-                )
-              )
-            );
-          })
-        );
-
-        mainContent = h('div', { className: 'max-w-7xl mx-auto p-4 md:p-6 space-y-8' },
-          heroSection,
-          filterBar,
-          gridSection
-        );
-      }
-
-      var quickViewModal = quickView ? h('div', { className: 'fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4' },
-        h('div', { className: 'bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-6 space-y-4 relative' },
-          h('button', { onClick: function() { setQuickView(null); }, className: 'absolute top-4 right-4 text-slate-400 hover:text-white text-base w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center' }, '✕'),
-          h('div', { className: 'grid grid-cols-1 sm:grid-cols-2 gap-4' },
-            h('div', { className: 'aspect-square rounded-2xl overflow-hidden bg-slate-800' }, h('img', { src: quickView.imageUrl || quickView.image, alt: quickView.name, className: 'w-full h-full object-cover' })),
-            h('div', { className: 'space-y-3 flex flex-col justify-between' },
-              h('div', { className: 'space-y-2' },
-                h('span', { className: 'px-2 py-0.5 rounded-full bg-indigo-600/20 text-indigo-400 text-[10px] font-semibold' }, quickView.category),
-                h('h3', { className: 'text-lg font-bold text-white' }, quickView.name),
-                h('p', { className: 'text-slate-400 text-xs line-clamp-3' }, quickView.description),
-                h('div', { className: 'text-amber-400 text-xs' }, '★ ' + (quickView.rating || 4.8)),
-                h('div', { className: 'text-xl font-bold text-white' }, '₹' + Number(quickView.price).toLocaleString())
-              ),
-              h('div', { className: 'space-y-2' },
-                h('button', {
-                  onClick: function() { if (window.DataSDK) window.DataSDK.addToCart(quickView, 1); setQuickView(null); showToast('Added to cart!'); },
-                  className: 'w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg'
-                }, 'Add to Cart'),
-                h('button', {
-                  onClick: function() { var id = quickView.id; setQuickView(null); navTo('/product/' + id); },
-                  className: 'w-full py-2 rounded-xl bg-slate-800 text-slate-300 text-xs'
-                }, 'Full Product Page')
-              )
-            )
-          )
-        )
-      ) : null;
-
-      return h('div', { className: 'min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between selection:bg-indigo-500 selection:text-white' },
-        h('div', null,
-          navBar,
-          mainContent
-        ),
-        h('footer', { className: 'border-t border-slate-800/80 bg-slate-900/60 py-8 px-4 text-center text-xs text-slate-500 mt-12' },
-          h('div', { className: 'max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4' },
-            h('span', null, '© 2026 NovaStore PRO · Built with Averia Genesis Engine'),
-            h('div', { className: 'flex items-center gap-4 text-slate-400' },
-              h('button', { onClick: function() { navTo('/'); } }, 'Home'),
-              h('button', { onClick: function() { navTo('/shop'); } }, 'Catalog'),
-              h('button', { onClick: function() { navTo('/orders'); } }, 'Orders'),
-              h('button', { onClick: function() { navTo('/admin'); } }, 'Merchant Dashboard')
-            )
-          )
-        ),
-        quickViewModal,
-        toastNode
-      );
-    }
-
-    container.innerHTML = '';
-    if (RD.createRoot) {
-      if (!window.__averia_guaranteed_root__) {
-        window.__averia_guaranteed_root__ = RD.createRoot(container);
-      }
-      window.__averia_guaranteed_root__.render(h(GuaranteedStorefrontApp));
-    } else if (RD.render) {
-      RD.render(h(GuaranteedStorefrontApp), container);
-    }
-  }
+            } catch (e) {
+              reportRuntimeError(e);
+            }
+          }
+        }
+      }, delay);
+    });
+  });
 })();
 </script>`;
 
@@ -3675,6 +2961,7 @@ export default function AveriaAI() {
     return () => { isMounted = false; };
   }, [activeConvId]);
   const [isGeneratingApp, setIsGeneratingApp] = useState(false);
+  const [activeIntent, setActiveIntent] = useState<UserIntent>('chat');
   const [telemetrySteps, setTelemetrySteps] = useState<Array<{
     id: string;
     agent: string;
@@ -4516,7 +3803,10 @@ export default function AveriaAI() {
     }
 
     const currentAttachments = customPrompt ? [] : attachments;
-    const userMsg: Message = { role: 'user', content: textContent || '(forensic analysis request)', attachments: currentAttachments };
+    const intent = classifyUserIntent(textContent, currentAttachments);
+    setActiveIntent(intent);
+
+    const userMsg: Message = { role: 'user', content: textContent || '(forensic analysis request)', attachments: currentAttachments, intent };
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     if (!customPrompt) {
@@ -4564,21 +3854,32 @@ export default function AveriaAI() {
       return { role: m.role, content: m.content };
     });
 
-    // Differentiate app/game building from normal conversational chatting
-    const isBuildPrompt = /\b(build|create|make|design|generate|code|develop|write|clone|program)\b.*\b(website|app|page|portfolio|dashboard|landing|component|site|game|saas|tool|platform|store|shop)\b/i.test(userMsg.content);
-    const isConversationalGreeting = /^(hi|hello|hey|namaste|salaam|good\s+(morning|afternoon|evening)|kya\s+kar\s+rahe\s+ho|what\s+are\s+you\s+doing|who\s+are\s+you|how\s+are\s+you|help|kaise\s+ho|kya\s+haal\s+hai|thanks|thank\s+you|ok|okay)[?!.,\s]*$/i.test(userMsg.content.trim());
-    const isConversationalQuestion = /\b(who are you|what can you do|how do you work|introduce yourself|kya kar sakte ho|aap kaun ho|aap kese ho|aap kaise ho|kya chal raha hai|help me)\b/i.test(userMsg.content);
-    const isCodingInstruction = /\b(html|css|javascript|typescript|react|tailwind|node|express|sql|postgres|drizzle|fix bug|add page|modify code)\b/i.test(userMsg.content);
+    // ── IGNITE CAPABILITY GATING: Ignite only handles 'chat' ──
+    if (selectedModel === 'ignite' && intent !== 'chat') {
+      let adviceText = '';
+      if (intent === 'build_app') {
+        adviceText = 'I am **Averia Ignite**, optimized exclusively for ultra-fast conversational reasoning and direct Q&A.\n\nTo construct full-stack web applications, arcade games, and interactive UIs with real-time live preview and our parallel 10-agent swarm, please switch to **Averia Genesis** mode using the model selector above.';
+      } else if (intent === 'generate_media') {
+        adviceText = 'I am **Averia Ignite**, your rapid conversational AI.\n\nTo generate digital imagery, visual concept art, or multimodal media, please switch to **Averia Synthesis** mode using the model selector above.';
+      } else if (intent === 'verify_news') {
+        adviceText = 'I am **Averia Ignite**.\n\nFor deep multi-source forensic verification, deepfake detection, and claim fact-checking, please switch to **Averia Intelligence** mode using the model selector above.';
+      }
 
-    const isConversational = currentAttachments.length === 0 && !isBuildPrompt && !isCodingInstruction && (
-      isConversationalGreeting ||
-      isConversationalQuestion ||
-      (userMsg.content.trim().split(/\s+/).length <= 4 && !/\b(run|build|start|preview|test)\b/i.test(userMsg.content))
-    );
+      setMessages(prev => [...prev, { role: 'assistant', content: adviceText, intent }]);
+      if (scope.isJoint && scope.workspaceId) {
+        await supabase.from('shared_ai_messages').insert({ workspace_id: scope.workspaceId, conversation_id: convId, author_id: null, role: 'assistant', content: adviceText });
+        await supabase.from('shared_ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', convId);
+      } else {
+        await supabase.from('ai_messages').insert({ conversation_id: convId, role: 'assistant', content: adviceText });
+        await supabase.from('ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', convId);
+      }
+      setIsLoading(false);
+      return;
+    }
 
-    // ── CONVERSATIONAL CHAT ROUTE (Zero Supabase Edge Dependency) ──
-    // Fast direct conversational chat streaming across healthy Gemini keys
-    if (isConversational) {
+    // ── UNIVERSAL CONVERSATIONAL CHAT ROUTE (For all 4 models when intent === 'chat') ──
+    // Fast direct conversational chat streaming across healthy Gemini keys with model-tuned personas
+    if (intent === 'chat') {
       let assistantText = '';
       try {
         const availableKeys = await getAllAvailableGeminiKeys(supabase);
@@ -4589,12 +3890,20 @@ export default function AveriaAI() {
             parts: [{ text: typeof m.content === 'string' ? m.content : '' }],
           })).filter(h => h.parts[0].text);
 
-          setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+          setMessages(prev => [...prev, { role: 'assistant', content: '', intent: 'chat' }]);
+
+          const roleInstructions: Record<string, string> = {
+            genesis: 'You are Averia Genesis in conversational mode. You are a world-class software architect and friendly advisor. Answer clearly, directly, and helpfully. Do not output project code blocks, file headers, or mock apps unless explicitly asked to build or code an application. Always respond naturally in the user\'s language (Hindi, Hinglish, or English).',
+            synthesis: 'You are Averia Synthesis in conversational mode. You are a creative, vivid, and articulate multimodal thinker. Answer thoughtfully and eloquently with pure text. Do not emit markdown image syntax unless explicitly instructed to generate an image. Always respond in the user\'s language (Hindi, Hinglish, or English).',
+            intelligence: 'You are Averia Intelligence in conversational mode. You are an observant, respectful, and analytical companion. Speak naturally, warmly, and helpfully like a trusted partner. Do not output forensic verification tables or consensus logs unless verifying news, media, or URLs. Always respond in the user\'s language (Hindi, Hinglish, or English).',
+            ignite: 'You are Averia Ignite, an ultra-fast, intelligent, and concise conversational AI. Respond crisply, accurately, and helpfully in the user\'s language (Hindi, Hinglish, or English).',
+          };
 
           await streamConversationalDirect({
             userPrompt: userMsg.content,
             conversationHistory,
             availableKeys,
+            systemInstruction: roleInstructions[selectedModel] || roleInstructions.ignite,
             onChunk: (delta) => {
               assistantText += delta;
               setMessages(prev => {
@@ -4602,7 +3911,7 @@ export default function AveriaAI() {
                 if (last?.role === 'assistant') {
                   return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: assistantText } : m);
                 }
-                return [...prev, { role: 'assistant', content: assistantText }];
+                return [...prev, { role: 'assistant', content: assistantText, intent: 'chat' }];
               });
             },
           });
@@ -4630,17 +3939,15 @@ export default function AveriaAI() {
       }
     }
 
-    const isAppBuildInstruction = isBuildPrompt || isCodingInstruction || (
-      selectedModel === 'genesis' &&
-      !isConversationalGreeting &&
-      userMsg.content.trim().split(/\s+/).length > 3
+    const isAppBuildInstruction = intent === 'build_app' || (
+      selectedModel === 'genesis' && intent !== 'chat'
     );
 
     const effectiveModel = isAppBuildInstruction
       ? 'genesis'
       : (selectedModel === 'genesis' ? 'gemini-2.5-flash' : selectedModel);
 
-    if (isBuildPrompt && selectedModel !== 'genesis') {
+    if (intent === 'build_app' && selectedModel !== 'genesis') {
       setSelectedModel('genesis');
     }
 
@@ -5150,6 +4457,92 @@ export default function AveriaAI() {
           }
         }
 
+        // ── IN-BUILD PRE-MOUNT BABEL SYNTAX VALIDATION & GEMINI SELF-HEALING ──
+        if (typeof window !== 'undefined' && (window as any).Babel) {
+          const Babel = (window as any).Babel;
+          for (const file of allFiles) {
+            if (/\.(tsx|ts|jsx|js)$/i.test(file.path) && !file.path.endsWith('.d.ts')) {
+              try {
+                Babel.transform(file.content, {
+                  presets: ['react', 'typescript'],
+                  filename: file.path,
+                });
+              } catch (babelErr: any) {
+                console.warn(`[Genesis Pre-Mount Syntax Check] Syntax error in ${file.path}:`, babelErr.message);
+                setCollaborationLogs(prev => [
+                  ...prev,
+                  {
+                    time: now(),
+                    from: 'In-Build Babel Guard',
+                    to: 'Gemini Healer',
+                    action: `Syntax issue detected in ${file.path}: ${babelErr.message.slice(0, 50)}. Self-healing...`,
+                    icon: '🔧',
+                  },
+                ]);
+                try {
+                  const healedContent = await selfHealFileWithGemini({
+                    file: file as any,
+                    error: babelErr.message,
+                    userGoal: textContent,
+                    brandTitle,
+                    survivor: survivorPool.length > 0 ? survivorPool[survivorPool.length - 1] : undefined,
+                    availableKeys,
+                  });
+                  if (healedContent && healedContent.trim().length > 50) {
+                    file.content = healedContent;
+                    filesMap.set(file.path, file);
+                    setCollaborationLogs(prev => [
+                      ...prev,
+                      {
+                        time: now(),
+                        from: 'Gemini Healer',
+                        to: 'Live Preview',
+                        action: `Successfully repaired ${file.path} for browser execution`,
+                        icon: '✓',
+                      },
+                    ]);
+                  }
+                } catch (healErr) {
+                  console.warn(`[Genesis Self-Heal Pass Error for ${file.path}]:`, healErr);
+                }
+              }
+            }
+          }
+        }
+
+        // Attach Genesis Telemetry snapshot to this message
+        const finalWorkers = workersStatus.map(w => ({
+          ...w,
+          status: (w.status === 'active' || w.status === 'pending') ? ('done' as const) : w.status,
+        }));
+        const snapshotTelemetry: GenesisTelemetry = {
+          workers: finalWorkers,
+          collaborationLogs: [...collaborationLogs],
+          totalBytes: streamBytes,
+          diskStatus: `All ${allFiles.length} files saved to ${localFolderName || 'folder'}`,
+          localFolderName,
+          workspaceContext: activeWorkspace,
+          hasCanvas: true,
+        };
+
+        setMessages(prev => {
+          const last = prev[prev.length - 1];
+          if (last?.role === 'assistant') {
+            return prev.map((m, i) => i === prev.length - 1 ? {
+              ...m,
+              content: assistantContent,
+              intent: 'build_app',
+              genesisTelemetry: snapshotTelemetry,
+            } : m);
+          }
+          return [...prev, {
+            role: 'assistant',
+            content: assistantContent,
+            intent: 'build_app',
+            genesisTelemetry: snapshotTelemetry,
+          }];
+        });
+
         // Phase C verification log
         setCollaborationLogs(prev => [
           ...prev,
@@ -5351,7 +4744,9 @@ export default function AveriaAI() {
           await supabase.from('ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', convId);
         }
 
-        const imageRequest = extractImageRequest(assistantContent);
+        const imageRequest = (intent === 'generate_media' || (selectedModel === 'synthesis' && intent !== 'chat'))
+          ? extractImageRequest(assistantContent)
+          : null;
         if (imageRequest) {
           handleImageGeneration(imageRequest, convId);
         }
@@ -5600,16 +4995,16 @@ export default function AveriaAI() {
                                 </div>
                               )}
                               {cleanedProse ? <MessageResponse>{cleanedProse}</MessageResponse> : null}
-                              {(isGeneratingApp || workersStatus.length > 0) && i === messages.length - 1 && (
+                              {msg.genesisTelemetry && (
                                 <GenesisSwarmConsole
-                                  workers={workersStatus}
-                                  collaborationLogs={collaborationLogs}
-                                  isActive={isGeneratingApp}
-                                  totalBytes={streamBytes}
-                                  diskStatus={diskStatus}
-                                  localFolderName={localFolderName}
-                                  workspaceContext={workspaceContext}
-                                  hasCanvas={hasCanvas}
+                                  workers={msg.genesisTelemetry.workers}
+                                  collaborationLogs={msg.genesisTelemetry.collaborationLogs}
+                                  isActive={false}
+                                  totalBytes={msg.genesisTelemetry.totalBytes}
+                                  diskStatus={msg.genesisTelemetry.diskStatus}
+                                  localFolderName={msg.genesisTelemetry.localFolderName}
+                                  workspaceContext={msg.genesisTelemetry.workspaceContext}
+                                  hasCanvas={msg.genesisTelemetry.hasCanvas ?? hasCanvas}
                                   onRetry={() => {
                                     const lastUser = [...messages].reverse().find(m => m.role === 'user');
                                     if (lastUser?.content) sendMessage(lastUser.content);
@@ -5655,7 +5050,7 @@ export default function AveriaAI() {
                         <AveriaLogo size="sm" animate />
                       </div>
                       <div className="bg-transparent rounded-2xl rounded-bl-sm px-4 py-3 flex-1 max-w-[85%]">
-                        {selectedModel !== 'ignite' && (
+                        {selectedModel !== 'ignite' && activeIntent !== 'chat' && (
                           <SwarmAgentLiveBanner
                             model={selectedModel}
                             isRunning={true}
@@ -5669,7 +5064,8 @@ export default function AveriaAI() {
                             <span className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                           </div>
                           <span>
-                            {selectedModel === 'genesis' ? 'Genesis 10-Agent Swarm assembling full-stack application...' :
+                            {activeIntent === 'chat' ? 'Averia AI thinking...' :
+                             selectedModel === 'genesis' ? 'Genesis 10-Agent Swarm assembling full-stack application...' :
                              selectedModel === 'intelligence' ? 'Intelligence 5-Agent Swarm analyzing forensic consensus...' :
                              selectedModel === 'synthesis' ? 'Synthesis 3-Agent Swarm generating creative output...' :
                              'Averia AI thinking...'}
