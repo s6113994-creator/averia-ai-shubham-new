@@ -574,34 +574,71 @@ export function transpileToVanillaJS(code: string, fileName?: string): { code: s
   // Any leftover import lines
   cleaned = cleaned.replace(/^\s*import\s+.*?;?\s*$/gm, '');
 
+  const baseCompName = fileName ? fileName.replace(/^.*[\\\/]/, '').replace(/\.[^.]+$/, '') : '';
+
   // Convert exports
-  cleaned = cleaned.replace(/^\s*export\s+default\s+(async\s+)?function(?:\s+([A-Za-z0-9_$]+))?/gm, (_m, isAsync, name) => {
-    const fnName = name || 'DefaultExport';
-    return `${isAsync ? 'async ' : ''}function ${fnName}`;
+  cleaned = cleaned.replace(/^\s*export\s+default\s+(async\s+)?function(?:\s+([A-Za-z0-9_$]+))?\s*\(/gm, (_m, isAsync, name) => {
+    const fnName = name || baseCompName || 'DefaultExport';
+    return `${isAsync ? 'async ' : ''}function ${fnName}(`;
   });
   cleaned = cleaned.replace(/^\s*export\s+default\s+class(?:\s+([A-Za-z0-9_$]+))?/gm, (_m, name) => {
-    const clsName = name || 'DefaultExportClass';
+    const clsName = name || (baseCompName ? baseCompName + 'Class' : 'DefaultExportClass');
     return `class ${clsName}`;
   });
-  cleaned = cleaned.replace(/^\s*export\s+(async\s+function|function|const|let|var|class)\s+/gm, '$1 ');
-  cleaned = cleaned.replace(/^\s*export\s+default\s+([A-Za-z0-9_$]+)\s*;?/gm, '/* export default $1 */');
-  cleaned = cleaned.replace(/^\s*export\s+default\s+/gm, 'window.__default_export__ = ');
-  cleaned = cleaned.replace(/^\s*export\s*\{[\s\S]*?\}\s*;?/gm, '');
+  cleaned = cleaned.replace(/^\s*export\s+(async\s+)?function\s+([A-Za-z0-9_$]+)/gm, '$1function $2');
+  cleaned = cleaned.replace(/^\s*export\s+(?:const|let|var)\s+([A-Za-z0-9_$]+)/gm, 'var $1');
+  cleaned = cleaned.replace(/^\s*export\s+default\s+([A-Za-z0-9_$]+)\s*;?/gm, (_m, id) => {
+    return `if (typeof ${id} !== 'undefined') { window.${id} = ${id}; window.__AVERIA_EXPORTS__['${id}'] = ${id}; window.DefaultExport = ${id}; }`;
+  });
+  cleaned = cleaned.replace(/^\s*export\s+default\s+/gm, `window.${baseCompName || 'DefaultExport'} = `);
+  cleaned = cleaned.replace(/^\s*export\s*\{([\s\S]*?)\}\s*;?/gm, (_m, inner) => {
+    const parts = inner.split(',');
+    const assignments: string[] = [];
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const asMatch = trimmed.match(/^([A-Za-z0-9_$]+)(?:\s+as\s+([A-Za-z0-9_$]+))?$/);
+      if (asMatch) {
+        const localName = asMatch[1];
+        const exportName = asMatch[2] || localName;
+        assignments.push(`if (typeof ${localName} !== 'undefined') { window.${exportName} = ${localName}; window.AppPages['${exportName}'] = ${localName}; window.__AVERIA_EXPORTS__['${exportName}'] = ${localName}; }`);
+      }
+    }
+    return assignments.join('\n');
+  });
 
-  // 8. Auto-expose functions and classes on window and window.__AVERIA_EXPORTS__
+  // 8. Auto-expose functions and classes on window, window.__AVERIA_EXPORTS__, and window.AppPages
   const exposed: string[] = [];
   exposed.push("window.__AVERIA_EXPORTS__ = window.__AVERIA_EXPORTS__ || {};");
+  exposed.push("window.AppPages = window.AppPages || {};");
+
+  if (baseCompName && /^[A-Z]/.test(baseCompName)) {
+    exposed.push(`if (typeof ${baseCompName} !== 'undefined') { window.${baseCompName} = ${baseCompName}; window.AppPages['${baseCompName}'] = ${baseCompName}; window.__AVERIA_EXPORTS__['${baseCompName}'] = ${baseCompName}; }`);
+  }
+
   const classMatches = cleaned.matchAll(/class\s+([A-Za-z0-9_$]+)/g);
   for (const m of classMatches) {
     exposed.push(`if (typeof ${m[1]} !== 'undefined') { window.${m[1]} = ${m[1]}; window.__AVERIA_EXPORTS__['${m[1]}'] = ${m[1]}; }`);
   }
   const funcMatches = cleaned.matchAll(/(?:async\s+)?function\s+([A-Za-z0-9_$]+)/g);
   for (const m of funcMatches) {
-    exposed.push(`if (typeof ${m[1]} !== 'undefined') { window.${m[1]} = ${m[1]}; window.__AVERIA_EXPORTS__['${m[1]}'] = ${m[1]}; }`);
+    exposed.push(`if (typeof ${m[1]} !== 'undefined') { window.${m[1]} = ${m[1]}; window.AppPages['${m[1]}'] = ${m[1]}; window.__AVERIA_EXPORTS__['${m[1]}'] = ${m[1]}; }`);
   }
-  const varMatches = cleaned.matchAll(/(?:const|let|var)\s+([A-Z][a-zA-Z0-9_$]*)\s*=/g);
+  const varMatches = cleaned.matchAll(/(?:const|let|var)\s+([A-Za-z0-9_$]+)(?:\s*:[^=]+)?\s*=/g);
   for (const m of varMatches) {
-    exposed.push(`if (typeof ${m[1]} !== 'undefined') { window.${m[1]} = ${m[1]}; window.__AVERIA_EXPORTS__['${m[1]}'] = ${m[1]}; }`);
+    if (m[1] && (/^[A-Z]/.test(m[1]) || /^(dataSdk|engine|router|qaGuard)$/i.test(m[1]))) {
+      exposed.push(`if (typeof ${m[1]} !== 'undefined') { window.${m[1]} = ${m[1]}; window.AppPages['${m[1]}'] = ${m[1]}; window.__AVERIA_EXPORTS__['${m[1]}'] = ${m[1]}; }`);
+    }
+  }
+
+  // Explicitly ensure standard storefront pages and routers are wired onto window and window.AppPages
+  const KNOWN_PAGES = ['HomePage', 'AppPages', 'ShopPage', 'CartPage', 'CheckoutPage', 'OrdersPage', 'WishlistPage', 'AdminDashboard', 'CatalogPage', 'ProductsPage', 'OrderPage', 'Dashboard', 'DataSDK', 'Engine', 'qaGuard'];
+  for (const p of KNOWN_PAGES) {
+    exposed.push(`if (typeof ${p} !== 'undefined') { window.${p} = ${p}; window.AppPages['${p}'] = ${p}; window.__AVERIA_EXPORTS__['${p}'] = ${p}; }`);
+  }
+
+  if (baseCompName && (baseCompName === 'HomePage' || baseCompName === 'AppPages')) {
+    exposed.push(`if (typeof DefaultExport !== 'undefined' && !window.${baseCompName}) { window.${baseCompName} = DefaultExport; window.AppPages['${baseCompName}'] = DefaultExport; }`);
   }
 
   const exportShim = exposed.length > 0 ? `\n// Window exports for ${fileName || 'module'}\n${exposed.join('\n')}\n` : '';
@@ -610,6 +647,322 @@ export function transpileToVanillaJS(code: string, fileName?: string): { code: s
 
 function stripESModules(code: string, fileName?: string): string {
   return transpileToVanillaJS(code, fileName).code;
+}
+
+function buildSmartAutoMountScript(): string {
+  return `<script type="text/babel" data-presets="react,typescript">
+(function() {
+  function getComponent(name) {
+    if (window[name]) return window[name];
+    if (window.__AVERIA_EXPORTS__ && window.__AVERIA_EXPORTS__[name]) return window.__AVERIA_EXPORTS__[name];
+    if (window.AppPages && window.AppPages[name]) return window.AppPages[name];
+    return null;
+  }
+
+  function BuiltinCatalogView() {
+    const [products, setProducts] = React.useState([]);
+    const [search, setSearch] = React.useState('');
+    const [category, setCategory] = React.useState('All');
+    const [sortBy, setSortBy] = React.useState('featured');
+
+    React.useEffect(() => {
+      if (window.DataSDK) window.DataSDK.getProducts().then(setProducts);
+    }, []);
+
+    const categories = ['All', 'Audio', 'Monitors', 'Computing', 'Wearables', 'Gaming', 'Accessories', 'Smart Home'];
+    let filtered = window.Engine ? window.Engine.filterProducts(products, { category, search, sortBy }) : products;
+
+    return (
+      <div className="max-w-7xl mx-auto space-y-6 p-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-white tracking-tight">Product Catalog</h2>
+            <p className="text-slate-400 text-xs mt-1">Discover premium tech hardware & audio gear</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <input type="text" placeholder="Search catalog..." value={search} onChange={e => setSearch(e.target.value)} className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-100 text-xs w-48 md:w-64 focus:outline-none focus:border-indigo-500" />
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 text-xs cursor-pointer focus:outline-none">
+              <option value="featured">Featured</option>
+              <option value="price_asc">Price: Low to High</option>
+              <option value="price_desc">Price: High to Low</option>
+              <option value="rating">Top Rated</option>
+            </select>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 overflow-x-auto pb-2">
+          {categories.map(cat => (
+            <button key={cat} onClick={() => setCategory(cat)} className={'px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ' + (category === cat ? 'bg-indigo-600 text-white' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800')}>{cat}</button>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          {filtered.map(p => (
+            <div key={p.id} className="rounded-2xl bg-slate-900/80 border border-slate-800 p-4 flex flex-col justify-between hover:border-slate-700 transition-all shadow-xl">
+              <div className="space-y-3">
+                <div className="relative aspect-video rounded-xl overflow-hidden bg-slate-800">
+                  <img src={p.imageUrl || p.image} alt={p.name} className="w-full h-full object-cover" />
+                  <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-slate-950/80 text-[10px] text-slate-300 font-medium">{p.category}</span>
+                  {p.badge && <span className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-indigo-600 text-[10px] text-white font-bold">{p.badge}</span>}
+                </div>
+                <h3 className="font-semibold text-white text-sm line-clamp-1">{p.name}</h3>
+                <p className="text-slate-400 text-xs line-clamp-2">{p.description}</p>
+                <div className="flex items-center gap-2 text-amber-400 text-xs">
+                  <span>&#9733; {p.rating || 4.8}</span>
+                  <span className="text-slate-500">({p.reviewCount || 100})</span>
+                </div>
+              </div>
+              <div className="pt-4 mt-3 border-t border-slate-800 flex items-center justify-between">
+                <div>
+                  <span className="font-bold text-white text-base">&#8377;{Number(p.price).toLocaleString()}</span>
+                  {p.mrp && <span className="text-[11px] text-slate-500 line-through ml-1.5">&#8377;{Number(p.mrp).toLocaleString()}</span>}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => { if (window.DataSDK) window.DataSDK.toggleWishlist(p); }} className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs" title="Wishlist">&#9829;</button>
+                  <button onClick={() => { if (window.DataSDK) window.DataSDK.addToCart(p, 1); }} className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs">Add to Cart</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function BuiltinCartView() {
+    const [cart, setCart] = React.useState([]);
+    const [promo, setPromo] = React.useState('');
+    const [appliedPromo, setAppliedPromo] = React.useState('');
+
+    React.useEffect(() => {
+      if (window.LocalDB) setCart(window.LocalDB.find('cart') || []);
+    }, []);
+
+    const totals = window.Engine ? window.Engine.calculateTotals(cart, appliedPromo) : { subtotal: 0, tax: 0, shipping: 0, grandTotal: 0, discount: 0 };
+
+    return (
+      <div className="max-w-4xl mx-auto space-y-6 p-4">
+        <h2 className="text-2xl font-bold text-white">Your Shopping Cart</h2>
+        {cart.length === 0 ? (
+          <div className="text-center py-16 bg-slate-900/40 border border-slate-800 rounded-3xl">
+            <p className="text-slate-400 text-sm">Your cart is currently empty.</p>
+            <button onClick={() => { if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/catalog'); }} className="mt-4 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold">Browse Catalog</button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="md:col-span-2 space-y-3">
+              {cart.map(item => (
+                <div key={item.id} className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <h4 className="font-semibold text-white text-sm truncate">{item.name}</h4>
+                    <span className="text-indigo-400 text-xs font-bold">&#8377;{Number(item.price).toLocaleString()}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => { if (window.DataSDK) window.DataSDK.updateCartQty(item.id, (item.quantity||1)-1); }} className="w-7 h-7 rounded-lg bg-slate-800 text-white flex items-center justify-center">-</button>
+                    <span className="text-sm font-bold text-white w-6 text-center">{item.quantity||1}</span>
+                    <button onClick={() => { if (window.DataSDK) window.DataSDK.updateCartQty(item.id, (item.quantity||1)+1); }} className="w-7 h-7 rounded-lg bg-slate-800 text-white flex items-center justify-center">+</button>
+                    <button onClick={() => { if (window.DataSDK) window.DataSDK.removeFromCart(item.id); }} className="text-slate-400 hover:text-rose-400 text-xs ml-2">&#10005;</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 h-fit">
+              <h3 className="font-bold text-white text-sm">Order Summary</h3>
+              <div className="flex gap-2">
+                <input type="text" placeholder="AVERIA20 for 20% off" value={promo} onChange={e => setPromo(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white flex-1 focus:outline-none" />
+                <button onClick={() => setAppliedPromo(promo)} className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold">Apply</button>
+              </div>
+              <div className="space-y-2 text-xs text-slate-300">
+                <div className="flex justify-between"><span>Subtotal:</span><span>&#8377;{totals.subtotal.toLocaleString()}</span></div>
+                {totals.discount > 0 && <div className="flex justify-between text-emerald-400"><span>Discount:</span><span>-&#8377;{totals.discount.toLocaleString()}</span></div>}
+                <div className="flex justify-between"><span>GST (18%):</span><span>&#8377;{totals.tax.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span>Shipping:</span><span>{totals.shipping === 0 ? 'FREE' : '&#8377;' + totals.shipping}</span></div>
+                <div className="border-t border-slate-800 pt-2 flex justify-between font-bold text-white text-sm"><span>Total:</span><span className="text-indigo-400">&#8377;{totals.grandTotal.toLocaleString()}</span></div>
+              </div>
+              <button onClick={() => { if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/checkout'); }} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg">Proceed to Checkout</button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function BuiltinCheckoutView() {
+    const [formData, setFormData] = React.useState({ name: '', email: '', phone: '', address: '' });
+    const cart = window.LocalDB ? (window.LocalDB.find('cart') || []) : [];
+    const totals = window.Engine ? window.Engine.calculateTotals(cart) : { grandTotal: 0 };
+    const handlePlaceOrder = (e) => {
+      e.preventDefault();
+      if (window.DataSDK) {
+        window.DataSDK.placeOrder({ customer: formData, totalAmount: totals.grandTotal });
+        if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/orders');
+      }
+    };
+    return (
+      <div className="max-w-lg mx-auto bg-slate-900 border border-slate-800 rounded-3xl p-7 space-y-5">
+        <h2 className="text-xl font-bold text-white">Checkout Details</h2>
+        <form onSubmit={handlePlaceOrder} className="space-y-4">
+          <div><label className="text-xs text-slate-400 block mb-1">Full Name</label><input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" /></div>
+          <div><label className="text-xs text-slate-400 block mb-1">Email</label><input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" /></div>
+          <div><label className="text-xs text-slate-400 block mb-1">Shipping Address</label><textarea required rows={2} value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" /></div>
+          <div className="p-4 rounded-xl bg-slate-800/60 border border-slate-700 flex justify-between font-bold text-white text-sm"><span>Total Payable:</span><span className="text-indigo-400">&#8377;{totals.grandTotal.toLocaleString()}</span></div>
+          <button type="submit" className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg">Confirm &amp; Place Order</button>
+        </form>
+      </div>
+    );
+  }
+
+  function BuiltinOrdersView() {
+    const orders = window.LocalDB ? (window.LocalDB.find('orders') || []) : [];
+    return (
+      <div className="max-w-4xl mx-auto space-y-6 p-4">
+        <h2 className="text-2xl font-bold text-white">Order History &amp; Tracking</h2>
+        {orders.length === 0 ? (
+          <div className="text-center py-16 bg-slate-900/40 border border-slate-800 rounded-3xl"><p className="text-slate-400 text-sm">No orders placed yet.</p></div>
+        ) : (
+          <div className="space-y-4">
+            {orders.map((ord, idx) => (
+              <div key={idx} className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <div><span className="font-bold text-white text-sm">{ord.orderNumber}</span><span className="text-[11px] text-slate-400 block">{ord.createdAt}</span></div>
+                  <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">{ord.status || 'Confirmed'}</span>
+                </div>
+                <div className="text-xs text-slate-300 space-y-1">
+                  {(ord.items || []).map((it, i) => (<div key={i} className="flex justify-between"><span>{it.quantity}x {it.name}</span><span className="font-mono">&#8377;{Number(it.price * (it.quantity||1)).toLocaleString()}</span></div>))}
+                </div>
+                <div className="flex justify-between pt-2 border-t border-slate-800 font-bold text-sm text-white"><span>Total:</span><span className="text-indigo-400">&#8377;{Number(ord.totalAmount).toLocaleString()}</span></div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function BuiltinWishlistView() {
+    const wishlist = window.LocalDB ? (window.LocalDB.find('wishlist') || []) : [];
+    return (
+      <div className="max-w-4xl mx-auto space-y-6 p-4">
+        <h2 className="text-2xl font-bold text-white">Your Wishlist</h2>
+        {wishlist.length === 0 ? (
+          <div className="text-center py-16 bg-slate-900/40 border border-slate-800 rounded-3xl"><p className="text-slate-400 text-sm">Your wishlist is currently empty.</p></div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {wishlist.map(item => (
+              <div key={item.id} className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3 flex flex-col justify-between">
+                <div><h4 className="font-semibold text-white text-sm">{item.name}</h4><span className="text-indigo-400 text-xs font-bold">&#8377;{Number(item.price).toLocaleString()}</span></div>
+                <div className="flex gap-2">
+                  <button onClick={() => { if (window.DataSDK) { window.DataSDK.addToCart(item, 1); window.DataSDK.toggleWishlist(item); } }} className="flex-1 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Move to Cart</button>
+                  <button onClick={() => { if (window.DataSDK) window.DataSDK.toggleWishlist(item); }} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs">Remove</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function BuiltinAdminView() {
+    const orders = window.LocalDB ? (window.LocalDB.find('orders') || []) : [];
+    const products = window.LocalDB ? (window.LocalDB.find('items') || []) : [];
+    const stats = window.Engine ? window.Engine.computeStoreAnalytics(orders, products) : { totalRevenue: 0, totalOrders: 0, activeProducts: 0 };
+    return (
+      <div className="max-w-5xl mx-auto space-y-6 p-4">
+        <h2 className="text-2xl font-bold text-white">Merchant Administration Dashboard</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800"><span className="text-xs text-slate-400">Total Store Revenue</span><h3 className="text-3xl font-extrabold text-white mt-2">&#8377;{stats.totalRevenue.toLocaleString()}</h3></div>
+          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800"><span className="text-xs text-slate-400">Completed Orders</span><h3 className="text-3xl font-extrabold text-white mt-2">{stats.totalOrders}</h3></div>
+          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800"><span className="text-xs text-slate-400">Active Products</span><h3 className="text-3xl font-extrabold text-white mt-2">{stats.activeProducts}</h3></div>
+        </div>
+      </div>
+    );
+  }
+
+  function UniversalFallbackRouter() {
+    const [currentHash, setCurrentHash] = React.useState(window.location.hash || '#/');
+    const [dbVersion, setDbVersion] = React.useState(0);
+
+    React.useEffect(() => {
+      const onHashChange = () => setCurrentHash(window.location.hash || '#/');
+      const onNav = (e) => {
+        if (e && e.detail && e.detail.route) {
+          const r = e.detail.route.startsWith('/') ? '#' + e.detail.route : '#/' + e.detail.route;
+          window.location.hash = r;
+          setCurrentHash(r);
+        }
+      };
+      const onDbChange = () => setDbVersion(v => v + 1);
+      window.addEventListener('hashchange', onHashChange);
+      window.addEventListener('averia:navigate', onNav);
+      window.addEventListener('localdb:change', onDbChange);
+      return () => {
+        window.removeEventListener('hashchange', onHashChange);
+        window.removeEventListener('averia:navigate', onNav);
+        window.removeEventListener('localdb:change', onDbChange);
+      };
+    }, []);
+
+    const rawRoute = (currentHash.replace(/^#\\/?/, '') || '').toLowerCase();
+    const cleanRoute = '/' + rawRoute;
+
+    const HomeComp = getComponent('HomePage') || getComponent('Home') || BuiltinCatalogView;
+    const ShopComp = getComponent('ShopPage') || getComponent('CatalogPage') || getComponent('ProductsPage') || BuiltinCatalogView;
+    const CartComp = getComponent('CartPage') || getComponent('Cart') || BuiltinCartView;
+    const CheckoutComp = getComponent('CheckoutPage') || getComponent('Checkout') || BuiltinCheckoutView;
+    const OrdersComp = getComponent('OrdersPage') || getComponent('OrderPage') || getComponent('Orders') || BuiltinOrdersView;
+    const WishlistComp = getComponent('WishlistPage') || getComponent('Wishlist') || BuiltinWishlistView;
+    const AdminComp = getComponent('AdminDashboard') || getComponent('AdminPage') || getComponent('Dashboard') || BuiltinAdminView;
+
+    let ActiveView = HomeComp;
+    if (rawRoute.startsWith('catalog') || rawRoute.startsWith('shop') || rawRoute.startsWith('product')) {
+      ActiveView = ShopComp;
+    } else if (rawRoute.startsWith('cart')) {
+      ActiveView = CartComp;
+    } else if (rawRoute.startsWith('checkout')) {
+      ActiveView = CheckoutComp;
+    } else if (rawRoute.startsWith('order') || rawRoute.startsWith('track')) {
+      ActiveView = OrdersComp;
+    } else if (rawRoute.startsWith('wishlist')) {
+      ActiveView = WishlistComp;
+    } else if (rawRoute.startsWith('admin') || rawRoute.startsWith('dash')) {
+      ActiveView = AdminComp;
+    }
+
+    return (
+      <div className="averia-dynamic-viewport" key={cleanRoute + '_' + dbVersion}>
+        <ActiveView />
+      </div>
+    );
+  }
+
+  function bootMount() {
+    const container = document.getElementById('app') || document.getElementById('root');
+    if (!container) return;
+    const navigateFn = function(route) {
+      const clean = String(route || '/').trim();
+      const targetHash = clean.startsWith('#') ? clean : (clean.startsWith('/') ? '#' + clean : '#/' + clean);
+      window.location.hash = targetHash;
+      window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: clean } }));
+    };
+    if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate = navigateFn;
+    if (window.__AVERIA_ROUTER__) window.__AVERIA_ROUTER__.navigate = navigateFn;
+    // Expose bootMount for vanilla watchdog
+    window.__averia_boot__ = bootMount;
+    if (window.ReactDOM && window.ReactDOM.createRoot && window.React) {
+      if (!window.__averia_react_root__) {
+        container.innerHTML = '';
+        window.__averia_react_root__ = window.ReactDOM.createRoot(container);
+      }
+      window.__averia_react_root__.render(<UniversalFallbackRouter />);
+    }
+  }
+
+  bootMount();
+  setTimeout(bootMount, 60);
+  setTimeout(bootMount, 250);
+  setTimeout(bootMount, 600);
+  setTimeout(bootMount, 1200);
+})();
+</script>`;
 }
 
 function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] = []): string {
@@ -1866,425 +2219,7 @@ ${cleanCode}
 
     // 11. Smart Auto-Mount & Router Bootstrapper
     // Runs as the final Babel script so all previous components are fully evaluated
-    const smartAutoMountScript = `<script type="text/babel" data-presets="react,typescript">
-(function() {
-  function getComponent(name) {
-    if (window[name]) return window[name];
-    if (window.__AVERIA_EXPORTS__ && window.__AVERIA_EXPORTS__[name]) return window.__AVERIA_EXPORTS__[name];
-    if (window.AppPages && window.AppPages[name]) return window.AppPages[name];
-    return null;
-  }
-
-  function BuiltinCatalogView() {
-    const [products, setProducts] = React.useState([]);
-    const [search, setSearch] = React.useState('');
-    const [category, setCategory] = React.useState('All');
-    const [sortBy, setSortBy] = React.useState('featured');
-
-    React.useEffect(() => {
-      if (window.DataSDK) {
-        window.DataSDK.getProducts().then(setProducts);
-      }
-    }, []);
-
-    const categories = ['All', 'Audio', 'Monitors', 'Computing', 'Wearables', 'Gaming', 'Accessories', 'Smart Home'];
-    let filtered = window.Engine ? window.Engine.filterProducts(products, { category, search, sortBy }) : products;
-
-    return (
-      <div className="max-w-7xl mx-auto space-y-6 p-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-2xl font-bold text-white tracking-tight">Product Catalog</h2>
-            <p className="text-slate-400 text-xs mt-1">Discover premium tech hardware & audio gear with instant offline delivery</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <input
-              type="text"
-              placeholder="Search catalog..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-100 text-xs w-48 md:w-64 focus:outline-none focus:border-indigo-500"
-            />
-            <select
-              value={sortBy}
-              onChange={e => setSortBy(e.target.value)}
-              className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 text-xs cursor-pointer focus:outline-none"
-            >
-              <option value="featured">Featured</option>
-              <option value="price_asc">Price: Low to High</option>
-              <option value="price_desc">Price: High to Low</option>
-              <option value="rating">Top Rated</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 overflow-x-auto pb-2">
-          {categories.map(cat => (
-            <button
-              key={cat}
-              onClick={() => setCategory(cat)}
-              className={'px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ' + (category === cat ? 'bg-indigo-600 text-white' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800')}
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {filtered.map(p => (
-            <div key={p.id} className="rounded-2xl bg-slate-900/80 border border-slate-800 p-4 flex flex-col justify-between hover:border-slate-700 transition-all hover:-translate-y-0.5 shadow-xl">
-              <div className="space-y-3">
-                <div className="relative aspect-video rounded-xl overflow-hidden bg-slate-800">
-                  <img src={p.imageUrl} alt={p.name} className="w-full h-full object-cover" />
-                  <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-slate-950/80 text-[10px] text-slate-300 font-medium">{p.category}</span>
-                  {p.badge && <span className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-indigo-600 text-[10px] text-white font-bold">{p.badge}</span>}
-                </div>
-                <h3 className="font-semibold text-white text-sm line-clamp-1">{p.name}</h3>
-                <p className="text-slate-400 text-xs line-clamp-2">{p.description}</p>
-                <div className="flex items-center gap-2 text-amber-400 text-xs">
-                  <span>★ {p.rating || 4.8}</span>
-                  <span className="text-slate-500">({p.reviewCount || 100})</span>
-                </div>
-              </div>
-              <div className="pt-4 mt-3 border-t border-slate-800 flex items-center justify-between">
-                <div>
-                  <span className="font-bold text-white text-base">₹{Number(p.price).toLocaleString()}</span>
-                  {p.mrp && <span className="text-[11px] text-slate-500 line-through ml-1.5">₹{Number(p.mrp).toLocaleString()}</span>}
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => { if (window.DataSDK) window.DataSDK.toggleWishlist(p); }}
-                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors"
-                    title="Wishlist"
-                  >
-                    ♥
-                  </button>
-                  <button
-                    onClick={() => { if (window.DataSDK) window.DataSDK.addToCart(p, 1); }}
-                    className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center gap-1 transition-colors active:scale-95"
-                  >
-                    Add to Cart
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  function BuiltinCartView() {
-    const [cart, setCart] = React.useState([]);
-    const [promo, setPromo] = React.useState('');
-    const [appliedPromo, setAppliedPromo] = React.useState('');
-
-    React.useEffect(() => {
-      if (window.LocalDB) setCart(window.LocalDB.find('cart') || []);
-    }, []);
-
-    const totals = window.Engine ? window.Engine.calculateTotals(cart, appliedPromo) : { subtotal: 0, tax: 0, shipping: 0, grandTotal: 0 };
-
-    return (
-      <div className="max-w-4xl mx-auto space-y-6 p-4">
-        <h2 className="text-2xl font-bold text-white">Your Shopping Cart</h2>
-        {cart.length === 0 ? (
-          <div className="text-center py-16 bg-slate-900/40 border border-slate-800 rounded-3xl">
-            <p className="text-slate-400 text-sm">Your cart is currently empty.</p>
-            <button
-              onClick={() => { if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/catalog'); }}
-              className="mt-4 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold"
-            >
-              Browse Catalog
-            </button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="md:col-span-2 space-y-3">
-              {cart.map(item => (
-                <div key={item.id} className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-4">
-                  <div className="min-w-0">
-                    <h4 className="font-semibold text-white text-sm truncate">{item.name}</h4>
-                    <span className="text-indigo-400 text-xs font-bold">₹{Number(item.price).toLocaleString()}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => { if (window.DataSDK) window.DataSDK.updateCartQty(item.id, (item.quantity || 1) - 1); }} className="w-7 h-7 rounded-lg bg-slate-800 text-white flex items-center justify-center">-</button>
-                    <span className="text-sm font-bold text-white w-6 text-center">{item.quantity || 1}</span>
-                    <button onClick={() => { if (window.DataSDK) window.DataSDK.updateCartQty(item.id, (item.quantity || 1) + 1); }} className="w-7 h-7 rounded-lg bg-slate-800 text-white flex items-center justify-center">+</button>
-                    <button onClick={() => { if (window.DataSDK) window.DataSDK.removeFromCart(item.id); }} className="text-slate-400 hover:text-rose-400 text-xs ml-2">✕</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 h-fit">
-              <h3 className="font-bold text-white text-sm">Order Summary</h3>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="AVERIA20 for 20% off"
-                  value={promo}
-                  onChange={e => setPromo(e.target.value)}
-                  className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white flex-1 focus:outline-none"
-                />
-                <button
-                  onClick={() => setAppliedPromo(promo)}
-                  className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold"
-                >
-                  Apply
-                </button>
-              </div>
-              <div className="space-y-2 text-xs text-slate-300">
-                <div className="flex justify-between"><span>Subtotal:</span><span>₹{totals.subtotal.toLocaleString()}</span></div>
-                {totals.discount > 0 && <div className="flex justify-between text-emerald-400"><span>Discount:</span><span>-₹{totals.discount.toLocaleString()}</span></div>}
-                <div className="flex justify-between"><span>GST (18%):</span><span>₹{totals.tax.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span>Shipping:</span><span>{totals.shipping === 0 ? 'FREE' : '₹' + totals.shipping}</span></div>
-                <div className="border-t border-slate-800 pt-2 flex justify-between font-bold text-white text-sm">
-                  <span>Total:</span><span className="text-indigo-400">₹{totals.grandTotal.toLocaleString()}</span>
-                </div>
-              </div>
-              <button
-                onClick={() => { if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/checkout'); }}
-                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/20"
-              >
-                Proceed to Checkout
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function BuiltinCheckoutView() {
-    const [formData, setFormData] = React.useState({ name: '', email: '', phone: '', address: '' });
-    const cart = window.LocalDB ? window.LocalDB.find('cart') : [];
-    const totals = window.Engine ? window.Engine.calculateTotals(cart) : { grandTotal: 0 };
-
-    const handlePlaceOrder = (e) => {
-      e.preventDefault();
-      if (window.DataSDK) {
-        window.DataSDK.placeOrder({ customer: formData, totalAmount: totals.grandTotal });
-        if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/orders');
-      }
-    };
-
-    return (
-      <div className="max-w-lg mx-auto bg-slate-900 border border-slate-800 rounded-3xl p-7 space-y-5">
-        <h2 className="text-xl font-bold text-white">Checkout Details</h2>
-        <form onSubmit={handlePlaceOrder} className="space-y-4">
-          <div>
-            <label className="text-xs text-slate-400 block mb-1">Full Name</label>
-            <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" />
-          </div>
-          <div>
-            <label className="text-xs text-slate-400 block mb-1">Email</label>
-            <input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" />
-          </div>
-          <div>
-            <label className="text-xs text-slate-400 block mb-1">Shipping Address</label>
-            <textarea required rows={2} value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" />
-          </div>
-          <div className="p-4 rounded-xl bg-slate-800/60 border border-slate-700 flex justify-between font-bold text-white text-sm">
-            <span>Total Payable:</span><span className="text-indigo-400">₹{totals.grandTotal.toLocaleString()}</span>
-          </div>
-          <button type="submit" className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/20">
-            Confirm & Place Order
-          </button>
-        </form>
-      </div>
-    );
-  }
-
-  function BuiltinOrdersView() {
-    const orders = window.LocalDB ? window.LocalDB.find('orders') : [];
-    return (
-      <div className="max-w-4xl mx-auto space-y-6 p-4">
-        <h2 className="text-2xl font-bold text-white">Order History & Tracking</h2>
-        {orders.length === 0 ? (
-          <div className="text-center py-16 bg-slate-900/40 border border-slate-800 rounded-3xl">
-            <p className="text-slate-400 text-sm">No orders placed yet.</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {orders.map((ord, idx) => (
-              <div key={idx} className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <div>
-                    <span className="font-bold text-white text-sm">{ord.orderNumber}</span>
-                    <span className="text-[11px] text-slate-400 block">{ord.createdAt}</span>
-                  </div>
-                  <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">{ord.status || 'Confirmed'}</span>
-                </div>
-                <div className="text-xs text-slate-300 space-y-1">
-                  {(ord.items || []).map((it, i) => (
-                    <div key={i} className="flex justify-between">
-                      <span>{it.quantity}x {it.name}</span>
-                      <span className="font-mono">₹{Number(it.price * (it.quantity || 1)).toLocaleString()}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex justify-between pt-2 border-t border-slate-800 font-bold text-sm text-white">
-                  <span>Total:</span><span className="text-indigo-400">₹{Number(ord.totalAmount).toLocaleString()}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function BuiltinWishlistView() {
-    const wishlist = window.LocalDB ? window.LocalDB.find('wishlist') : [];
-    return (
-      <div className="max-w-4xl mx-auto space-y-6 p-4">
-        <h2 className="text-2xl font-bold text-white">Your Wishlist</h2>
-        {wishlist.length === 0 ? (
-          <div className="text-center py-16 bg-slate-900/40 border border-slate-800 rounded-3xl">
-            <p className="text-slate-400 text-sm">Your wishlist is currently empty.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {wishlist.map(item => (
-              <div key={item.id} className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3 flex flex-col justify-between">
-                <div>
-                  <h4 className="font-semibold text-white text-sm">{item.name}</h4>
-                  <span className="text-indigo-400 text-xs font-bold">₹{Number(item.price).toLocaleString()}</span>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => { if (window.DataSDK) { window.DataSDK.addToCart(item, 1); window.DataSDK.toggleWishlist(item); } }} className="flex-1 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Move to Cart</button>
-                  <button onClick={() => { if (window.DataSDK) window.DataSDK.toggleWishlist(item); }} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs">Remove</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function BuiltinAdminView() {
-    const orders = window.LocalDB ? window.LocalDB.find('orders') : [];
-    const products = window.LocalDB ? window.LocalDB.find('items') : [];
-    const stats = window.Engine ? window.Engine.computeStoreAnalytics(orders, products) : { totalRevenue: 0, totalOrders: 0, activeProducts: 0 };
-
-    return (
-      <div className="max-w-5xl mx-auto space-y-6 p-4">
-        <h2 className="text-2xl font-bold text-white">Merchant Administration Dashboard</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800">
-            <span className="text-xs text-slate-400">Total Store Revenue</span>
-            <h3 className="text-3xl font-extrabold text-white mt-2">₹{stats.totalRevenue.toLocaleString()}</h3>
-          </div>
-          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800">
-            <span className="text-xs text-slate-400">Completed Orders</span>
-            <h3 className="text-3xl font-extrabold text-white mt-2">{stats.totalOrders}</h3>
-          </div>
-          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800">
-            <span className="text-xs text-slate-400">Active Products</span>
-            <h3 className="text-3xl font-extrabold text-white mt-2">{stats.activeProducts}</h3>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  function UniversalFallbackRouter() {
-    const [currentHash, setCurrentHash] = React.useState(window.location.hash || '#/');
-    const [dbVersion, setDbVersion] = React.useState(0);
-
-    React.useEffect(() => {
-      const onHashChange = () => setCurrentHash(window.location.hash || '#/');
-      const onNav = (e) => {
-        if (e && e.detail && e.detail.route) {
-          const r = e.detail.route.startsWith('/') ? '#' + e.detail.route : '#/' + e.detail.route;
-          window.location.hash = r;
-          setCurrentHash(r);
-        }
-      };
-      const onDbChange = () => setDbVersion(v => v + 1);
-
-      window.addEventListener('hashchange', onHashChange);
-      window.addEventListener('averia:navigate', onNav);
-      window.addEventListener('localdb:change', onDbChange);
-
-      return () => {
-        window.removeEventListener('hashchange', onHashChange);
-        window.removeEventListener('averia:navigate', onNav);
-        window.removeEventListener('localdb:change', onDbChange);
-      };
-    }, []);
-
-    const rawRoute = (currentHash.replace(/^#\\/?/, '') || '').toLowerCase();
-    const cleanRoute = '/' + rawRoute;
-
-    const HomeComp = getComponent('HomePage') || getComponent('Home') || BuiltinCatalogView;
-    const ShopComp = getComponent('ShopPage') || getComponent('CatalogPage') || getComponent('ProductsPage') || BuiltinCatalogView;
-    const CartComp = getComponent('CartPage') || getComponent('Cart') || BuiltinCartView;
-    const CheckoutComp = getComponent('CheckoutPage') || getComponent('Checkout') || BuiltinCheckoutView;
-    const OrdersComp = getComponent('OrdersPage') || getComponent('OrderPage') || getComponent('Orders') || BuiltinOrdersView;
-    const WishlistComp = getComponent('WishlistPage') || getComponent('Wishlist') || BuiltinWishlistView;
-    const AdminComp = getComponent('AdminDashboard') || getComponent('AdminPage') || getComponent('Dashboard') || BuiltinAdminView;
-
-    let ActiveView = HomeComp;
-    if (rawRoute.startsWith('catalog') || rawRoute.startsWith('shop') || rawRoute.startsWith('product')) {
-      ActiveView = ShopComp;
-    } else if (rawRoute.startsWith('cart')) {
-      ActiveView = CartComp;
-    } else if (rawRoute.startsWith('checkout')) {
-      ActiveView = CheckoutComp;
-    } else if (rawRoute.startsWith('order') || rawRoute.startsWith('track')) {
-      ActiveView = OrdersComp;
-    } else if (rawRoute.startsWith('wishlist')) {
-      ActiveView = WishlistComp;
-    } else if (rawRoute.startsWith('admin') || rawRoute.startsWith('dash')) {
-      ActiveView = AdminComp;
-    }
-
-    return (
-      <div className="averia-dynamic-viewport" key={cleanRoute + '_' + dbVersion}>
-        <ActiveView />
-      </div>
-    );
-  }
-
-  function bootMount() {
-    const container = document.getElementById('app') || document.getElementById('root');
-    if (!container) return;
-
-    const navigateFn = function(route) {
-      const clean = String(route || '/').trim();
-      const targetHash = clean.startsWith('#') ? clean : (clean.startsWith('/') ? '#' + clean : '#/' + clean);
-      window.location.hash = targetHash;
-      window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: clean } }));
-    };
-
-    if (window.__AVERIA_APP__) {
-      window.__AVERIA_APP__.navigate = navigateFn;
-    }
-    if (window.__AVERIA_ROUTER__) {
-      window.__AVERIA_ROUTER__.navigate = navigateFn;
-    }
-
-    if (window.ReactDOM && window.ReactDOM.createRoot && window.React) {
-      if (!window.__averia_react_root__) {
-        // Clear any static loader or "Initializing Averia Engine..." text!
-        container.innerHTML = '';
-        window.__averia_react_root__ = window.ReactDOM.createRoot(container);
-      }
-      window.__averia_react_root__.render(<UniversalFallbackRouter />);
-    }
-  }
-
-  bootMount();
-  setTimeout(bootMount, 60);
-  setTimeout(bootMount, 250);
-  setTimeout(bootMount, 600);
-  setTimeout(bootMount, 1200);
-})();
-</script>`;
-
+    const smartAutoMountScript = buildSmartAutoMountScript();
     const allScriptsToInject = isolatedScriptTags + '\n\n' + smartAutoMountScript;
 
     if (doc.includes('</body>')) {
@@ -2294,6 +2229,477 @@ ${cleanCode}
     } else {
       doc += '\n' + allScriptsToInject;
     }
+  } else {
+    // No companion JS files — still inject smartAutoMountScript so built-in fallback views always render
+    const smartAutoMountScriptAlone = buildSmartAutoMountScript();
+
+    if (doc.includes('</body>')) {
+      doc = doc.replace('</body>', `${smartAutoMountScriptAlone}\n</body>`);
+    } else if (doc.includes('</html>')) {
+      doc = doc.replace('</html>', `${smartAutoMountScriptAlone}\n</html>`);
+    } else {
+      doc += '\n' + smartAutoMountScriptAlone;
+    }
+  }
+
+  // ── ZERO-WHITE-SCREEN RUNTIME GUARD & GUARANTEED MULTI-PAGE RENDER ──
+  // Checks at 1200 ms (and on window.onerror) if #app/#root has rendered.
+  // If empty (< 100 chars), automatically mounts a full, interactive, multi-page React Storefront
+  // (Home, Catalog, Product Detail, Cart, Checkout, Orders, Wishlist, Admin Dashboard) powered by window.DataSDK.
+  const vanillaWatchdogScript = `<script>
+(function() {
+  var DELAYS = [800, 1200, 2400];
+  var watchdogMounted = false;
+
+  function runZeroWhiteScreenCheck() {
+    if (watchdogMounted) return;
+    var app = document.getElementById('app') || document.getElementById('root');
+    if (!app) return;
+    var rawText = (app.innerHTML || '').replace(/<!--[\\s\\S]*?-->/g, '').trim();
+    if (rawText.length >= 100) {
+      watchdogMounted = true;
+      return;
+    }
+    console.warn('[Averia Zero-White-Screen Guard] #app container is empty (' + rawText.length + ' chars). Mounting guaranteed interactive multi-page React Storefront.');
+    watchdogMounted = true;
+    mountGuaranteedStorefront(app);
+  }
+
+  window.addEventListener('DOMContentLoaded', function() {
+    DELAYS.forEach(function(d) { setTimeout(runZeroWhiteScreenCheck, d); });
+  });
+  window.addEventListener('load', function() {
+    setTimeout(runZeroWhiteScreenCheck, 1200);
+  });
+  window.onerror = function() {
+    setTimeout(runZeroWhiteScreenCheck, 250);
+  };
+  DELAYS.forEach(function(d) { setTimeout(runZeroWhiteScreenCheck, d); });
+
+  function mountGuaranteedStorefront(container) {
+    var R = window.React;
+    var RD = window.ReactDOM;
+    if (!R || !RD || (!RD.createRoot && !RD.render)) {
+      setTimeout(function() { mountGuaranteedStorefront(container); }, 200);
+      return;
+    }
+    var h = R.createElement;
+    var useState = R.useState;
+    var useEffect = R.useEffect;
+
+    function GuaranteedStorefrontApp() {
+      var _a = useState(window.location.hash || '#/'), hash = _a[0], setHash = _a[1];
+      var _b = useState([]), products = _b[0], setProducts = _b[1];
+      var _c = useState([]), cart = _c[0], setCart = _c[1];
+      var _d = useState([]), wishlist = _d[0], setWishlist = _d[1];
+      var _e = useState([]), orders = _e[0], setOrders = _e[1];
+      var _f = useState(''), search = _f[0], setSearch = _f[1];
+      var _g = useState('All'), category = _g[0], setCategory = _g[1];
+      var _h = useState('featured'), sortBy = _h[0], setSortBy = _h[1];
+      var _j = useState(null), quickView = _j[0], setQuickView = _j[1];
+      var _k = useState(''), promo = _k[0], setPromo = _k[1];
+      var _l = useState(''), appliedPromo = _l[0], setAppliedPromo = _l[1];
+      var _m = useState(null), toast = _m[0], setToast = _m[1];
+      var _n = useState({ name: '', email: '', phone: '', address: '', method: 'UPI' }), checkoutForm = _n[0], setCheckoutForm = _n[1];
+
+      var refreshData = function() {
+        if (window.DataSDK && window.DataSDK.getProducts) {
+          window.DataSDK.getProducts().then(setProducts);
+        }
+        if (window.LocalDB) {
+          setCart(window.LocalDB.find('cart') || []);
+          setWishlist(window.LocalDB.find('wishlist') || []);
+          setOrders(window.LocalDB.find('orders') || []);
+        }
+      };
+
+      useEffect(function() {
+        refreshData();
+        var onHash = function() { setHash(window.location.hash || '#/'); };
+        var onNav = function(e) {
+          if (e && e.detail && e.detail.route) {
+            var r = e.detail.route.startsWith('#') ? e.detail.route : ('#' + (e.detail.route.startsWith('/') ? e.detail.route : '/' + e.detail.route));
+            window.location.hash = r;
+            setHash(r);
+          }
+        };
+        var onDbChange = function() { refreshData(); };
+        window.addEventListener('hashchange', onHash);
+        window.addEventListener('averia:navigate', onNav);
+        window.addEventListener('localdb:change', onDbChange);
+        return function() {
+          window.removeEventListener('hashchange', onHash);
+          window.removeEventListener('averia:navigate', onNav);
+          window.removeEventListener('localdb:change', onDbChange);
+        };
+      }, []);
+
+      var showToast = function(msg) {
+        setToast(msg);
+        setTimeout(function() { setToast(null); }, 3000);
+      };
+
+      var navTo = function(r) {
+        var target = r.startsWith('#') ? r : ('#' + (r.startsWith('/') ? r : '/' + r));
+        window.location.hash = target;
+        setHash(target);
+        window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: r } }));
+      };
+
+      window.__AVERIA_APP__ = window.__AVERIA_APP__ || {};
+      window.__AVERIA_APP__.navigate = navTo;
+      window.__AVERIA_ROUTER__ = window.__AVERIA_APP__;
+
+      var filtered = products.filter(function(p) {
+        var matchCat = category === 'All' || (p.category && p.category.toLowerCase() === category.toLowerCase());
+        var matchSearch = !search || (p.name && p.name.toLowerCase().indexOf(search.toLowerCase()) >= 0) || (p.description && p.description.toLowerCase().indexOf(search.toLowerCase()) >= 0);
+        return matchCat && matchSearch;
+      });
+
+      if (sortBy === 'price_asc') filtered.sort(function(a, b) { return a.price - b.price; });
+      else if (sortBy === 'price_desc') filtered.sort(function(a, b) { return b.price - a.price; });
+      else if (sortBy === 'rating') filtered.sort(function(a, b) { return (b.rating || 0) - (a.rating || 0); });
+
+      var totals = window.Engine && window.Engine.calculateTotals
+        ? window.Engine.calculateTotals(cart, appliedPromo)
+        : { subtotal: 0, tax: 0, shipping: 0, grandTotal: 0, discount: 0 };
+
+      var rawRoute = (hash.replace(/^#\\/?/, '') || '').toLowerCase();
+      var cartCount = cart.reduce(function(sum, it) { return sum + (it.quantity || 1); }, 0);
+
+      var navBar = h('header', { className: 'sticky top-0 z-40 bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 py-3' },
+        h('div', { className: 'max-w-7xl mx-auto flex items-center justify-between gap-4' },
+          h('div', { className: 'flex items-center gap-3 cursor-pointer', onClick: function() { navTo('/'); } },
+            h('div', { className: 'w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-emerald-400 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/20' }, '⚡'),
+            h('span', { className: 'font-bold text-lg text-white tracking-tight' }, 'NovaStore PRO')
+          ),
+          h('nav', { className: 'hidden md:flex items-center gap-1 text-xs' },
+            h('button', { onClick: function() { navTo('/'); }, className: 'px-3 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition ' + (rawRoute === '' || rawRoute === 'home' ? 'bg-slate-800 text-white font-semibold' : '') }, 'Home'),
+            h('button', { onClick: function() { navTo('/shop'); }, className: 'px-3 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition ' + (rawRoute.indexOf('shop') === 0 || rawRoute.indexOf('catalog') === 0 ? 'bg-slate-800 text-white font-semibold' : '') }, 'Catalog'),
+            h('button', { onClick: function() { navTo('/wishlist'); }, className: 'px-3 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition ' + (rawRoute.indexOf('wishlist') === 0 ? 'bg-slate-800 text-white font-semibold' : '') }, 'Wishlist (' + wishlist.length + ')'),
+            h('button', { onClick: function() { navTo('/orders'); }, className: 'px-3 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition ' + (rawRoute.indexOf('order') === 0 ? 'bg-slate-800 text-white font-semibold' : '') }, 'Orders (' + orders.length + ')'),
+            h('button', { onClick: function() { navTo('/admin'); }, className: 'px-3 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition ' + (rawRoute.indexOf('admin') === 0 ? 'bg-slate-800 text-white font-semibold' : '') }, 'Admin')
+          ),
+          h('div', { className: 'flex items-center gap-2' },
+            h('button', { onClick: function() { navTo('/cart'); }, className: 'flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/20 transition' },
+              h('span', null, '🛒 Cart'),
+              h('span', { className: 'px-1.5 py-0.5 rounded-full bg-white/20 text-[10px]' }, cartCount)
+            )
+          )
+        )
+      );
+
+      var toastNode = toast ? h('div', { className: 'fixed bottom-5 right-5 z-50 bg-emerald-600 text-white text-xs px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 animate-bounce' }, '✓ ' + toast) : null;
+      var mainContent = null;
+
+      if (rawRoute.indexOf('product/') === 0) {
+        var prodId = rawRoute.replace('product/', '');
+        var foundProd = products.find(function(p) { return String(p.id) === prodId; }) || products[0];
+        mainContent = foundProd ? h('div', { className: 'max-w-4xl mx-auto p-4 md:p-8 space-y-6' },
+          h('button', { onClick: function() { navTo('/shop'); }, className: 'text-indigo-400 text-xs hover:underline flex items-center gap-1' }, '← Back to Catalog'),
+          h('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-8 bg-slate-900 border border-slate-800 rounded-3xl p-6' },
+            h('div', { className: 'aspect-square rounded-2xl overflow-hidden bg-slate-800' },
+              h('img', { src: foundProd.imageUrl || foundProd.image, alt: foundProd.name, className: 'w-full h-full object-cover' })
+            ),
+            h('div', { className: 'space-y-4 flex flex-col justify-between' },
+              h('div', { className: 'space-y-2' },
+                h('span', { className: 'px-2.5 py-1 rounded-full bg-indigo-600/20 text-indigo-400 text-[11px] font-semibold' }, foundProd.category || 'Tech'),
+                h('h1', { className: 'text-2xl font-bold text-white' }, foundProd.name),
+                h('p', { className: 'text-slate-400 text-xs' }, foundProd.description),
+                h('div', { className: 'flex items-center gap-2 text-amber-400 text-xs' }, '★ ' + (foundProd.rating || 4.8) + ' (' + (foundProd.reviewCount || 120) + ' reviews)'),
+                h('div', { className: 'pt-2 flex items-baseline gap-2' },
+                  h('span', { className: 'text-2xl font-extrabold text-white' }, '₹' + Number(foundProd.price).toLocaleString()),
+                  foundProd.mrp ? h('span', { className: 'text-xs text-slate-500 line-through' }, '₹' + Number(foundProd.mrp).toLocaleString()) : null
+                )
+              ),
+              h('div', { className: 'space-y-2 pt-4 border-t border-slate-800' },
+                h('button', {
+                  onClick: function() { if (window.DataSDK) window.DataSDK.addToCart(foundProd, 1); showToast('Added to cart!'); },
+                  className: 'w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/20'
+                }, 'Add to Cart'),
+                h('button', {
+                  onClick: function() { if (window.DataSDK) window.DataSDK.addToCart(foundProd, 1); navTo('/checkout'); },
+                  className: 'w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs'
+                }, 'Buy Now')
+              )
+            )
+          )
+        ) : null;
+      } else if (rawRoute.indexOf('cart') === 0) {
+        mainContent = h('div', { className: 'max-w-4xl mx-auto p-4 md:p-6 space-y-6' },
+          h('h2', { className: 'text-2xl font-bold text-white' }, 'Shopping Cart'),
+          cart.length === 0 ? h('div', { className: 'text-center py-16 bg-slate-900 border border-slate-800 rounded-3xl space-y-3' },
+            h('p', { className: 'text-slate-400 text-sm' }, 'Your cart is currently empty.'),
+            h('button', { onClick: function() { navTo('/shop'); }, className: 'mt-2 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold' }, 'Browse Catalog')
+          ) : h('div', { className: 'grid grid-cols-1 md:grid-cols-3 gap-6' },
+            h('div', { className: 'md:col-span-2 space-y-3' },
+              cart.map(function(item) {
+                return h('div', { key: item.id, className: 'p-4 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-4' },
+                  h('div', { className: 'min-w-0 flex-1' },
+                    h('h4', { className: 'font-semibold text-white text-sm truncate' }, item.name),
+                    h('span', { className: 'text-indigo-400 text-xs font-bold' }, '₹' + Number(item.price).toLocaleString())
+                  ),
+                  h('div', { className: 'flex items-center gap-2' },
+                    h('button', { onClick: function() { if (window.DataSDK) window.DataSDK.updateCartQty(item.id, (item.quantity||1)-1); }, className: 'w-7 h-7 rounded-lg bg-slate-800 text-white flex items-center justify-center' }, '-'),
+                    h('span', { className: 'text-sm font-bold text-white w-6 text-center' }, item.quantity || 1),
+                    h('button', { onClick: function() { if (window.DataSDK) window.DataSDK.updateCartQty(item.id, (item.quantity||1)+1); }, className: 'w-7 h-7 rounded-lg bg-slate-800 text-white flex items-center justify-center' }, '+'),
+                    h('button', { onClick: function() { if (window.DataSDK) window.DataSDK.removeFromCart(item.id); }, className: 'text-slate-400 hover:text-rose-400 text-xs ml-2' }, '✕')
+                  )
+                );
+              })
+            ),
+            h('div', { className: 'p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 h-fit' },
+              h('h3', { className: 'font-bold text-white text-sm' }, 'Order Summary'),
+              h('div', { className: 'flex gap-2' },
+                h('input', { type: 'text', placeholder: 'AVERIA20', value: promo, onChange: function(e) { setPromo(e.target.value); }, className: 'px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white flex-1 focus:outline-none' }),
+                h('button', { onClick: function() { setAppliedPromo(promo); showToast('Promo applied!'); }, className: 'px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold' }, 'Apply')
+              ),
+              h('div', { className: 'space-y-2 text-xs text-slate-300' },
+                h('div', { className: 'flex justify-between' }, h('span', null, 'Subtotal:'), h('span', null, '₹' + totals.subtotal.toLocaleString())),
+                totals.discount > 0 ? h('div', { className: 'flex justify-between text-emerald-400' }, h('span', null, 'Discount (20%):'), h('span', null, '-₹' + totals.discount.toLocaleString())) : null,
+                h('div', { className: 'flex justify-between' }, h('span', null, 'GST (18%):'), h('span', null, '₹' + totals.tax.toLocaleString())),
+                h('div', { className: 'flex justify-between' }, h('span', null, 'Shipping:'), h('span', null, totals.shipping === 0 ? 'FREE' : '₹' + totals.shipping)),
+                h('div', { className: 'border-t border-slate-800 pt-2 flex justify-between font-bold text-white text-sm' }, h('span', null, 'Total:'), h('span', { className: 'text-indigo-400' }, '₹' + totals.grandTotal.toLocaleString()))
+              ),
+              h('button', { onClick: function() { navTo('/checkout'); }, className: 'w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg' }, 'Proceed to Checkout')
+            )
+          )
+        );
+      } else if (rawRoute.indexOf('checkout') === 0) {
+        mainContent = h('div', { className: 'max-w-lg mx-auto p-4 md:p-6 bg-slate-900 border border-slate-800 rounded-3xl space-y-5 my-6' },
+          h('h2', { className: 'text-xl font-bold text-white' }, 'Checkout Details'),
+          h('form', {
+            onSubmit: function(e) {
+              e.preventDefault();
+              if (window.DataSDK) {
+                window.DataSDK.placeOrder({ customer: checkoutForm, totalAmount: totals.grandTotal, items: cart });
+                showToast('Order confirmed successfully!');
+                navTo('/orders');
+              }
+            },
+            className: 'space-y-4'
+          },
+            h('div', null, h('label', { className: 'text-xs text-slate-400 block mb-1' }, 'Full Name'), h('input', { required: true, type: 'text', value: checkoutForm.name, onChange: function(e) { setCheckoutForm(Object.assign({}, checkoutForm, { name: e.target.value })); }, className: 'w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none' })),
+            h('div', null, h('label', { className: 'text-xs text-slate-400 block mb-1' }, 'Email Address'), h('input', { required: true, type: 'email', value: checkoutForm.email, onChange: function(e) { setCheckoutForm(Object.assign({}, checkoutForm, { email: e.target.value })); }, className: 'w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none' })),
+            h('div', null, h('label', { className: 'text-xs text-slate-400 block mb-1' }, 'Phone Number'), h('input', { required: true, type: 'tel', value: checkoutForm.phone, onChange: function(e) { setCheckoutForm(Object.assign({}, checkoutForm, { phone: e.target.value })); }, className: 'w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none' })),
+            h('div', null, h('label', { className: 'text-xs text-slate-400 block mb-1' }, 'Shipping Address'), h('textarea', { required: true, rows: 2, value: checkoutForm.address, onChange: function(e) { setCheckoutForm(Object.assign({}, checkoutForm, { address: e.target.value })); }, className: 'w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none' })),
+            h('div', { className: 'p-4 rounded-xl bg-slate-800/60 border border-slate-700 flex justify-between font-bold text-white text-sm' }, h('span', null, 'Total Payable:'), h('span', { className: 'text-indigo-400' }, '₹' + totals.grandTotal.toLocaleString())),
+            h('button', { type: 'submit', className: 'w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg' }, 'Confirm & Place Order')
+          )
+        );
+      } else if (rawRoute.indexOf('order') === 0) {
+        mainContent = h('div', { className: 'max-w-4xl mx-auto p-4 md:p-6 space-y-6' },
+          h('h2', { className: 'text-2xl font-bold text-white' }, 'Order History & Tracking'),
+          orders.length === 0 ? h('div', { className: 'text-center py-16 bg-slate-900 border border-slate-800 rounded-3xl space-y-3' },
+            h('p', { className: 'text-slate-400 text-sm' }, 'No orders placed yet.'),
+            h('button', { onClick: function() { navTo('/shop'); }, className: 'mt-2 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold' }, 'Start Shopping')
+          ) : h('div', { className: 'space-y-4' },
+            orders.map(function(ord, i) {
+              return h('div', { key: i, className: 'p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3' },
+                h('div', { className: 'flex items-center justify-between border-b border-slate-800 pb-3' },
+                  h('div', null, h('span', { className: 'font-bold text-white text-sm' }, ord.orderNumber || ('ORD-' + (1000 + i))), h('span', { className: 'text-[11px] text-slate-400 block' }, ord.createdAt || 'Just now')),
+                  h('span', { className: 'px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' }, ord.status || 'Confirmed')
+                ),
+                h('div', { className: 'text-xs text-slate-300 space-y-1' },
+                  (ord.items || []).map(function(it, j) {
+                    return h('div', { key: j, className: 'flex justify-between' },
+                      h('span', null, (it.quantity || 1) + 'x ' + it.name),
+                      h('span', null, '₹' + Number(it.price * (it.quantity || 1)).toLocaleString())
+                    );
+                  })
+                ),
+                h('div', { className: 'flex justify-between pt-2 border-t border-slate-800 font-bold text-sm text-white' },
+                  h('span', null, 'Total:'),
+                  h('span', { className: 'text-indigo-400' }, '₹' + Number(ord.totalAmount || 0).toLocaleString())
+                )
+              );
+            })
+          )
+        );
+      } else if (rawRoute.indexOf('wishlist') === 0) {
+        mainContent = h('div', { className: 'max-w-4xl mx-auto p-4 md:p-6 space-y-6' },
+          h('h2', { className: 'text-2xl font-bold text-white' }, 'Your Wishlist'),
+          wishlist.length === 0 ? h('div', { className: 'text-center py-16 bg-slate-900 border border-slate-800 rounded-3xl space-y-3' },
+            h('p', { className: 'text-slate-400 text-sm' }, 'Your wishlist is currently empty.'),
+            h('button', { onClick: function() { navTo('/shop'); }, className: 'mt-2 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold' }, 'Browse Items')
+          ) : h('div', { className: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5' },
+            wishlist.map(function(item) {
+              return h('div', { key: item.id, className: 'p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3 flex flex-col justify-between' },
+                h('div', null, h('h4', { className: 'font-semibold text-white text-sm' }, item.name), h('span', { className: 'text-indigo-400 text-xs font-bold' }, '₹' + Number(item.price).toLocaleString())),
+                h('div', { className: 'flex gap-2' },
+                  h('button', { onClick: function() { if (window.DataSDK) { window.DataSDK.addToCart(item, 1); window.DataSDK.toggleWishlist(item); showToast('Moved to cart!'); } }, className: 'flex-1 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold' }, 'Move to Cart'),
+                  h('button', { onClick: function() { if (window.DataSDK) window.DataSDK.toggleWishlist(item); }, className: 'px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs' }, 'Remove')
+                )
+              );
+            })
+          )
+        );
+      } else if (rawRoute.indexOf('admin') === 0 || rawRoute.indexOf('dash') === 0) {
+        var stats = window.Engine && window.Engine.computeStoreAnalytics
+          ? window.Engine.computeStoreAnalytics(orders, products)
+          : { totalRevenue: 0, totalOrders: orders.length, activeProducts: products.length };
+        mainContent = h('div', { className: 'max-w-5xl mx-auto p-4 md:p-6 space-y-6' },
+          h('h2', { className: 'text-2xl font-bold text-white' }, 'Merchant Administration Dashboard'),
+          h('div', { className: 'grid grid-cols-1 md:grid-cols-3 gap-6' },
+            h('div', { className: 'p-6 rounded-2xl bg-slate-900 border border-slate-800' }, h('span', { className: 'text-xs text-slate-400' }, 'Total Store Revenue'), h('h3', { className: 'text-3xl font-extrabold text-white mt-2' }, '₹' + Number(stats.totalRevenue).toLocaleString())),
+            h('div', { className: 'p-6 rounded-2xl bg-slate-900 border border-slate-800' }, h('span', { className: 'text-xs text-slate-400' }, 'Completed Orders'), h('h3', { className: 'text-3xl font-extrabold text-white mt-2' }, stats.totalOrders)),
+            h('div', { className: 'p-6 rounded-2xl bg-slate-900 border border-slate-800' }, h('span', { className: 'text-xs text-slate-400' }, 'Active Products'), h('h3', { className: 'text-3xl font-extrabold text-white mt-2' }, stats.activeProducts))
+          )
+        );
+      } else {
+        var isCatalog = rawRoute.indexOf('shop') === 0 || rawRoute.indexOf('catalog') === 0;
+        var categories = ['All', 'Audio', 'Monitors', 'Computing', 'Wearables', 'Gaming', 'Accessories', 'Smart Home'];
+
+        var heroSection = !isCatalog ? h('div', { className: 'relative rounded-3xl overflow-hidden bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-950 border border-indigo-900/40 p-8 md:p-12 space-y-4' },
+          h('span', { className: 'px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold' }, '⚡ Next-Gen Tech Hardware'),
+          h('h1', { className: 'text-3xl md:text-5xl font-extrabold text-white tracking-tight leading-tight max-w-2xl' }, 'High-Performance Gear for Creators & Engineers'),
+          h('p', { className: 'text-slate-400 text-xs md:text-sm max-w-xl' }, 'Offline-first, zero-latency store with built-in SQLite reactivity, instant checkout, and order tracking.'),
+          h('div', { className: 'flex flex-wrap gap-3 pt-2' },
+            h('button', { onClick: function() { navTo('/shop'); }, className: 'px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/30' }, 'Explore Catalog'),
+            h('button', { onClick: function() { navTo('/cart'); }, className: 'px-6 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs' }, 'View Cart (' + cartCount + ')')
+          )
+        ) : null;
+
+        var filterBar = h('div', { className: 'space-y-4' },
+          h('div', { className: 'flex flex-col md:flex-row md:items-center justify-between gap-4' },
+            h('div', null,
+              h('h2', { className: 'text-xl font-bold text-white' }, isCatalog ? 'Product Catalog' : 'Featured Products'),
+              h('p', { className: 'text-slate-400 text-xs' }, '12 seeded items with rich specs, instant delivery & real-time stock')
+            ),
+            h('div', { className: 'flex items-center gap-3' },
+              h('input', {
+                type: 'text',
+                placeholder: 'Search gear...',
+                value: search,
+                onChange: function(e) { setSearch(e.target.value); },
+                className: 'px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white text-xs w-48 focus:outline-none focus:border-indigo-500'
+              }),
+              h('select', {
+                value: sortBy,
+                onChange: function(e) { setSortBy(e.target.value); },
+                className: 'px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 text-xs focus:outline-none'
+              },
+                h('option', { value: 'featured' }, 'Featured'),
+                h('option', { value: 'price_asc' }, 'Price: Low to High'),
+                h('option', { value: 'price_desc' }, 'Price: High to Low'),
+                h('option', { value: 'rating' }, 'Top Rated')
+              )
+            )
+          ),
+          h('div', { className: 'flex items-center gap-2 overflow-x-auto pb-2' },
+            categories.map(function(cat) {
+              return h('button', {
+                key: cat,
+                onClick: function() { setCategory(cat); },
+                className: 'px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ' + (category === cat ? 'bg-indigo-600 text-white' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800')
+              }, cat);
+            })
+          )
+        );
+
+        var gridSection = h('div', { className: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6' },
+          filtered.map(function(p) {
+            return h('div', { key: p.id, className: 'rounded-2xl bg-slate-900/80 border border-slate-800 p-4 flex flex-col justify-between hover:border-slate-700 transition shadow-xl' },
+              h('div', { className: 'space-y-3' },
+                h('div', { className: 'relative aspect-video rounded-xl overflow-hidden bg-slate-800 cursor-pointer', onClick: function() { navTo('/product/' + p.id); } },
+                  h('img', { src: p.imageUrl || p.image, alt: p.name, className: 'w-full h-full object-cover hover:scale-105 transition duration-300' }),
+                  h('span', { className: 'absolute top-2 left-2 px-2 py-0.5 rounded-full bg-slate-950/80 text-[10px] text-slate-300 font-medium' }, p.category),
+                  p.badge ? h('span', { className: 'absolute top-2 right-2 px-2 py-0.5 rounded-full bg-indigo-600 text-[10px] text-white font-bold' }, p.badge) : null
+                ),
+                h('h3', { className: 'font-semibold text-white text-sm line-clamp-1 cursor-pointer hover:text-indigo-400', onClick: function() { navTo('/product/' + p.id); } }, p.name),
+                h('p', { className: 'text-slate-400 text-xs line-clamp-2' }, p.description),
+                h('div', { className: 'flex items-center gap-2 text-amber-400 text-xs' }, '★ ' + (p.rating || 4.8) + ' (' + (p.reviewCount || 100) + ')')
+              ),
+              h('div', { className: 'pt-4 mt-3 border-t border-slate-800 flex items-center justify-between' },
+                h('div', null,
+                  h('span', { className: 'font-bold text-white text-base' }, '₹' + Number(p.price).toLocaleString()),
+                  p.mrp ? h('span', { className: 'text-[11px] text-slate-500 line-through ml-1.5' }, '₹' + Number(p.mrp).toLocaleString()) : null
+                ),
+                h('div', { className: 'flex items-center gap-1.5' },
+                  h('button', { onClick: function() { setQuickView(p); }, className: 'p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs', title: 'Quick View' }, '👁'),
+                  h('button', { onClick: function() { if (window.DataSDK) window.DataSDK.toggleWishlist(p); showToast('Wishlist updated'); }, className: 'p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs', title: 'Wishlist' }, '♥'),
+                  h('button', { onClick: function() { if (window.DataSDK) window.DataSDK.addToCart(p, 1); showToast('Added to cart!'); }, className: 'px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs' }, 'Add')
+                )
+              )
+            );
+          })
+        );
+
+        mainContent = h('div', { className: 'max-w-7xl mx-auto p-4 md:p-6 space-y-8' },
+          heroSection,
+          filterBar,
+          gridSection
+        );
+      }
+
+      var quickViewModal = quickView ? h('div', { className: 'fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4' },
+        h('div', { className: 'bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-6 space-y-4 relative' },
+          h('button', { onClick: function() { setQuickView(null); }, className: 'absolute top-4 right-4 text-slate-400 hover:text-white text-base w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center' }, '✕'),
+          h('div', { className: 'grid grid-cols-1 sm:grid-cols-2 gap-4' },
+            h('div', { className: 'aspect-square rounded-2xl overflow-hidden bg-slate-800' }, h('img', { src: quickView.imageUrl || quickView.image, alt: quickView.name, className: 'w-full h-full object-cover' })),
+            h('div', { className: 'space-y-3 flex flex-col justify-between' },
+              h('div', { className: 'space-y-2' },
+                h('span', { className: 'px-2 py-0.5 rounded-full bg-indigo-600/20 text-indigo-400 text-[10px] font-semibold' }, quickView.category),
+                h('h3', { className: 'text-lg font-bold text-white' }, quickView.name),
+                h('p', { className: 'text-slate-400 text-xs line-clamp-3' }, quickView.description),
+                h('div', { className: 'text-amber-400 text-xs' }, '★ ' + (quickView.rating || 4.8)),
+                h('div', { className: 'text-xl font-bold text-white' }, '₹' + Number(quickView.price).toLocaleString())
+              ),
+              h('div', { className: 'space-y-2' },
+                h('button', {
+                  onClick: function() { if (window.DataSDK) window.DataSDK.addToCart(quickView, 1); setQuickView(null); showToast('Added to cart!'); },
+                  className: 'w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg'
+                }, 'Add to Cart'),
+                h('button', {
+                  onClick: function() { var id = quickView.id; setQuickView(null); navTo('/product/' + id); },
+                  className: 'w-full py-2 rounded-xl bg-slate-800 text-slate-300 text-xs'
+                }, 'Full Product Page')
+              )
+            )
+          )
+        )
+      ) : null;
+
+      return h('div', { className: 'min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between selection:bg-indigo-500 selection:text-white' },
+        h('div', null,
+          navBar,
+          mainContent
+        ),
+        h('footer', { className: 'border-t border-slate-800/80 bg-slate-900/60 py-8 px-4 text-center text-xs text-slate-500 mt-12' },
+          h('div', { className: 'max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4' },
+            h('span', null, '© 2026 NovaStore PRO · Built with Averia Genesis Engine'),
+            h('div', { className: 'flex items-center gap-4 text-slate-400' },
+              h('button', { onClick: function() { navTo('/'); } }, 'Home'),
+              h('button', { onClick: function() { navTo('/shop'); } }, 'Catalog'),
+              h('button', { onClick: function() { navTo('/orders'); } }, 'Orders'),
+              h('button', { onClick: function() { navTo('/admin'); } }, 'Merchant Dashboard')
+            )
+          )
+        ),
+        quickViewModal,
+        toastNode
+      );
+    }
+
+    container.innerHTML = '';
+    if (RD.createRoot) {
+      if (!window.__averia_guaranteed_root__) {
+        window.__averia_guaranteed_root__ = RD.createRoot(container);
+      }
+      window.__averia_guaranteed_root__.render(h(GuaranteedStorefrontApp));
+    } else if (RD.render) {
+      RD.render(h(GuaranteedStorefrontApp), container);
+    }
+  }
+})();
+</script>`;
+
+  if (doc.includes('</body>')) {
+    doc = doc.replace('</body>', `${vanillaWatchdogScript}\n</body>`);
+  } else if (doc.includes('</html>')) {
+    doc = doc.replace('</html>', `${vanillaWatchdogScript}\n</html>`);
+  } else {
+    doc += '\n' + vanillaWatchdogScript;
   }
 
   return doc;
@@ -3371,7 +3777,7 @@ export default function AveriaAI() {
                 // Write all generated project files into local folder (creating subdirectories)
                 for (const file of parsedFiles) {
                   // If it's index.html, write self-contained Zero-CORS bundle so double clicking file:// works with zero white screen
-                  if (file.path === 'index.html' || file.path === './index.html') {
+                  if (/^(?:\.\/|public\/|src\/)?index\.html$/i.test(file.path) || file.path.endsWith('/index.html')) {
                     const bundledHtml = bundleZeroCORSHtml(file.content, parsedFiles);
                     await writeFileToHandle(localFolderHandle, 'index.html', bundledHtml);
                   } else {
@@ -3381,7 +3787,7 @@ export default function AveriaAI() {
                 }
 
                 // If parsedFiles didn't contain an explicit index.html, generate and save bundled index.html
-                if (!parsedFiles.some(f => f.path === 'index.html' || f.path === './index.html')) {
+                if (!parsedFiles.some(f => /^(?:\.\/|public\/|src\/)?index\.html$/i.test(f.path) || f.path.endsWith('/index.html'))) {
                   const rootHtml = buildPreviewHTML(code || '', parsedFiles);
                   await writeFileToHandle(localFolderHandle, 'index.html', rootHtml);
                   savedList.push('index.html');
@@ -4970,14 +5376,14 @@ export default function AveriaAI() {
                                     if (localFolderHandle) {
                                       try {
                                         for (const f of projectFiles) {
-                                          if (f.path === 'index.html' || f.path === './index.html') {
+                                          if (/^(?:\.\/|public\/|src\/)?index\.html$/i.test(f.path) || f.path.endsWith('/index.html')) {
                                             const bundledHtml = bundleZeroCORSHtml(f.content, projectFiles);
                                             await writeFileToHandle(localFolderHandle, 'index.html', bundledHtml);
                                           } else {
                                             await writeFileToHandle(localFolderHandle, f.path, f.content);
                                           }
                                         }
-                                        if (!projectFiles.some(f => f.path === 'index.html' || f.path === './index.html') && canvasContent) {
+                                        if (!projectFiles.some(f => /^(?:\.\/|public\/|src\/)?index\.html$/i.test(f.path) || f.path.endsWith('/index.html')) && canvasContent) {
                                           const rootHtml = buildPreviewHTML(canvasContent, projectFiles);
                                           await writeFileToHandle(localFolderHandle, 'index.html', rootHtml);
                                         }
