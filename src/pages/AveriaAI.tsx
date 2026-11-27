@@ -27,6 +27,7 @@ import {
   recoverMissingDeliverablesWithSurvivor,
   synthesizeDeterministicProject,
   selfHealFileWithGemini,
+  auditFileStructuralIntegrity,
   SurvivorInfo,
 } from '@/lib/genesisDirectEngine';
 
@@ -694,7 +695,7 @@ function stripESModules(code: string, fileName?: string): string {
 }
 
 function buildSmartAutoMountScript(): string {
-  return `<script type="text/babel" data-presets="react,typescript">
+  return `<script type="text/babel" data-presets="react,typescript" data-averia-mount="true">
 (function() {
   function getComponent(name) {
     if (window[name]) return window[name];
@@ -826,10 +827,20 @@ function buildSmartAutoMountScript(): string {
 function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] = []): string {
   let doc = htmlContent;
 
+  // 0. Clean out any previously injected Averia runtime scripts/styles if re-bundling
+  doc = doc.replace(/<!-- AVERIA_RUNTIME_HEAD_START -->[\s\S]*?<!-- AVERIA_RUNTIME_HEAD_END -->/gi, '');
+  doc = doc.replace(/<script[^>]*data-file=["'][^"']+["'][\s\S]*?<\/script>/gi, '');
+  doc = doc.replace(/<script[^>]*data-averia-mount=["']true["'][\s\S]*?<\/script>/gi, '');
+  doc = doc.replace(/<script[^>]*data-averia-watchdog=["']true["'][\s\S]*?<\/script>/gi, '');
+  doc = doc.replace(/<style[^>]*data-averia-css=["']true["'][\s\S]*?<\/style>/gi, '');
+
   // 1. Remove local script tags referencing companion files that we will inline
   doc = doc.replace(/<script[^>]*src=["'](?:\.\/|\.\.\/|src\/|js\/)?[^"']+\.(?:js|jsx|ts|tsx)["'][^>]*>\s*<\/script>/gi, '');
 
-  // 2. Ensure root #app or #root mount point is present in document
+  // 2. Ensure root #app or #root mount point is present in document and completely clean of placeholder stubs
+  doc = doc.replace(/<main\s+id=["']app["'][^>]*>[\s\S]*?<\/main>/gi, '<main id="app" class="flex-1 w-full min-h-screen"></main>');
+  doc = doc.replace(/<div\s+id=["']app["'][^>]*>[\s\S]*?<\/div>(?=\s*(?:<footer|<nav|<\/body|$))/gi, '<div id="app" class="w-full min-h-screen"></div>');
+
   if (!doc.includes('id="app"') && !doc.includes('id="root"')) {
     if (doc.includes('<body')) {
       doc = doc.replace(/<body([^>]*)>/i, '<body$1>\n<div id="app" class="w-full min-h-screen"></div>');
@@ -837,9 +848,6 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
       doc = '<div id="app" class="w-full min-h-screen"></div>\n' + doc;
     }
   }
-
-  // 2a. Strip any static placeholder text trapped inside #app or #root (such as "Initializing Averia Neural Matrix...")
-  doc = doc.replace(/(<(?:main|div)[^>]*id=["'](?:app|root)["'][^>]*>)[\s\S]*?(<\/(?:main|div)>)/gi, '$1$2');
 
   // 2b. Ensure dark canvas body classes for consistent high-contrast preview
   if (doc.includes('<body')) {
@@ -1685,7 +1693,7 @@ button:active {
 })();
 </script>\n`;
 
-  const headInject = `${storagePolyfillScript}${localDbSdkScript}${reactGlobalsAndIconPreambleScript}${averiaAppRuntimeBusScript}${hashAndLinkInterceptorScript}${imageFallbackAndStyleScript}${errorListenerScript}`;
+  const headInject = `<!-- AVERIA_RUNTIME_HEAD_START -->\n${storagePolyfillScript}${localDbSdkScript}${reactGlobalsAndIconPreambleScript}${averiaAppRuntimeBusScript}${hashAndLinkInterceptorScript}${imageFallbackAndStyleScript}${errorListenerScript}\n<!-- AVERIA_RUNTIME_HEAD_END -->`;
   if (doc.includes('<head>')) {
     doc = doc.replace('<head>', `<head>\n${headInject}`);
   } else if (doc.includes('<html>')) {
@@ -1698,7 +1706,7 @@ button:active {
   const cssFiles = allFiles.filter(f => f.path.endsWith('.css'));
   if (cssFiles.length > 0) {
     const inlinedStyles = cssFiles.map(f => `/* inlined: ${f.path} */\n${f.content}`).join('\n\n');
-    const styleTag = `\n<style>\n${inlinedStyles}\n</style>\n`;
+    const styleTag = `\n<style data-averia-css="true">\n${inlinedStyles}\n</style>\n`;
     if (doc.includes('</head>')) {
       doc = doc.replace('</head>', `${styleTag}</head>`);
     } else if (doc.includes('<body')) {
@@ -1787,7 +1795,7 @@ ${cleanCode}
   }
 
   // ── GENUINE RUNTIME HEALTH & PRE-MOUNT WATCHDOG ──
-  const vanillaWatchdogScript = `<script>
+  const vanillaWatchdogScript = `<script data-averia-watchdog="true">
 (function() {
   function reportRuntimeError(err) {
     console.error('[Averia Runtime Guard]', err);
@@ -3448,6 +3456,28 @@ export default function AveriaAI() {
         if (ctx) setWorkspaceContext(ctx);
       }).catch(() => {});
       toast.success(`📁 Folder opened: ${dirHandle.name}`);
+
+      // Immediately sync current project files to newly opened folder
+      const lastAssistant = messages.filter(m => m.role === 'assistant').pop();
+      if (lastAssistant && lastAssistant.content) {
+        const parsed = extractProjectFiles(lastAssistant.content);
+        if (parsed.length > 0) {
+          for (const file of parsed) {
+            if (/^(?:\.\/|public\/|src\/)?index\.html$/i.test(file.path) || file.path.endsWith('/index.html')) {
+              const bundledHtml = bundleZeroCORSHtml(file.content, parsed);
+              await writeFileToHandle(dirHandle, 'index.html', bundledHtml);
+            } else {
+              await writeFileToHandle(dirHandle, file.path, file.content);
+            }
+          }
+          if (!parsed.some(f => /^(?:\.\/|public\/|src\/)?index\.html$/i.test(f.path) || f.path.endsWith('/index.html')) && canvasContent) {
+            const rootHtml = buildPreviewHTML(canvasContent, parsed);
+            await writeFileToHandle(dirHandle, 'index.html', rootHtml);
+          }
+          setWrittenFiles(parsed.map(f => f.path));
+          toast.success(`📁 Synced ${parsed.length} files to ${dirHandle.name} (Self-contained index.html ready)`);
+        }
+      }
     } catch (err: any) {
       if (err?.name !== 'AbortError') {
         toast.error('Could not open folder.');
@@ -4278,6 +4308,78 @@ export default function AveriaAI() {
           hasSubstantialUI = true;
         }
 
+        // ── AUTONOMOUS POST-GENERATION STRUCTURAL & BABEL AUDIT WITH TARGETED GEMINI SELF-HEAL ──
+        const Babel = typeof window !== 'undefined' ? (window as any).Babel : null;
+        for (const file of allFiles) {
+          if (/\.(tsx|ts|jsx|js)$/i.test(file.path) && !file.path.endsWith('.d.ts')) {
+            const structuralAudit = auditFileStructuralIntegrity(file as any, textContent, brandTitle);
+            let babelError: string | null = null;
+            if (Babel) {
+              try {
+                Babel.transform(file.content, {
+                  presets: ['react', 'typescript'],
+                  filename: file.path,
+                });
+              } catch (bErr: any) {
+                babelError = bErr.message;
+              }
+            }
+
+            if (structuralAudit.hasErrors || babelError) {
+              const auditIssueMsg = [babelError ? `Syntax: ${babelError}` : '', ...structuralAudit.issues].filter(Boolean).join('; ');
+              console.warn(`[Genesis Autonomous Audit Alert for ${file.path}]:`, auditIssueMsg);
+              setCollaborationLogs(prev => [
+                ...prev,
+                {
+                  time: now(),
+                  from: 'Autonomous QA Guard',
+                  to: 'Gemini Healer',
+                  action: `Structural issue in ${file.path}: ${auditIssueMsg.slice(0, 55)}. Triggering self-heal...`,
+                  icon: '🔧',
+                },
+              ]);
+
+              try {
+                const healedContent = await selfHealFileWithGemini({
+                  file: file as any,
+                  error: auditIssueMsg,
+                  userGoal: textContent,
+                  brandTitle,
+                  survivor: survivorPool.length > 0 ? survivorPool[survivorPool.length - 1] : undefined,
+                  availableKeys,
+                });
+
+                if (healedContent && healedContent.trim().length > 70) {
+                  let healValid = true;
+                  if (Babel) {
+                    try {
+                      Babel.transform(healedContent, { presets: ['react', 'typescript'], filename: file.path });
+                    } catch {
+                      healValid = false;
+                    }
+                  }
+                  if (healValid) {
+                    file.content = healedContent;
+                    filesMap.set(file.path, file);
+                    setCollaborationLogs(prev => [
+                      ...prev,
+                      {
+                        time: now(),
+                        from: 'Gemini Healer',
+                        to: 'Live Preview',
+                        action: `Successfully repaired ${file.path} for browser execution`,
+                        icon: '✓',
+                      },
+                    ]);
+                  }
+                }
+              } catch (healErr) {
+                console.warn(`[Genesis Self-Heal Pass Error for ${file.path}]:`, healErr);
+              }
+            }
+          }
+        }
+
         setPreviewError(null);
         let indexFile = allFiles.find(f => f.path === 'index.html' || f.path.endsWith('/index.html') || f.path.endsWith('.html'));
         if (!indexFile) {
@@ -4288,7 +4390,20 @@ export default function AveriaAI() {
           };
           allFiles.push(indexFile);
         }
+
+        // Bundle all companion files into 100% self-contained Zero-CORS bundle
         const bundled = bundleZeroCORSHtml(indexFile.content, allFiles);
+        indexFile.content = bundled;
+        filesMap.set('index.html', indexFile);
+
+        // Update assistant content so msg.content has the complete bundled index.html (75–120 KB)
+        let combinedPostBundle = '';
+        for (const f of allFiles) {
+          const lang = f.language || (f.path.endsWith('.html') ? 'html' : f.path.endsWith('.sql') ? 'sql' : f.path.endsWith('.json') ? 'json' : 'javascript');
+          combinedPostBundle += `\`\`\`${lang}:${f.path}\n${f.content}\n\`\`\`\n\n`;
+        }
+        assistantContent = combinedPostBundle;
+
         setCanvasContent(bundled);
         setCanvasMode('preview');
         setPreviewKey(k => k + 1);
@@ -4303,7 +4418,7 @@ export default function AveriaAI() {
             }
             setWrittenFiles(allFiles.map(f => f.path));
             setDiskStatus(`All ${allFiles.length} files saved to ${localFolderName || 'folder'}`);
-            toast.success(`📁 Saved ${allFiles.length} files to ${localFolderName || 'folder'}`);
+            toast.success(`📁 Saved ${allFiles.length} files to ${localFolderName || 'folder'} (Self-contained index.html ready for Chrome)`);
 
             const scanned = await scanLocalWorkspace(localFolderHandle, 4);
             if (scanned) {
@@ -4311,65 +4426,6 @@ export default function AveriaAI() {
             }
           } catch (wErr) {
             console.error('Final swarm disk sync error:', wErr);
-          }
-        }
-
-        // ── IN-BUILD PRE-MOUNT BABEL SYNTAX VALIDATION & GEMINI SELF-HEALING ──
-        if (typeof window !== 'undefined' && (window as any).Babel) {
-          const Babel = (window as any).Babel;
-          for (const file of allFiles) {
-            if (/\.(tsx|ts|jsx|js)$/i.test(file.path) && !file.path.endsWith('.d.ts')) {
-              try {
-                Babel.transform(file.content, {
-                  presets: ['react', 'typescript'],
-                  filename: file.path,
-                });
-              } catch (babelErr: any) {
-                console.warn(`[Genesis Pre-Mount Syntax Check] Syntax error in ${file.path}:`, babelErr.message);
-                setCollaborationLogs(prev => [
-                  ...prev,
-                  {
-                    time: now(),
-                    from: 'In-Build Babel Guard',
-                    to: 'Gemini Healer',
-                    action: `Syntax issue detected in ${file.path}: ${babelErr.message.slice(0, 50)}. Self-healing...`,
-                    icon: '🔧',
-                  },
-                ]);
-                try {
-                  const healedContent = await selfHealFileWithGemini({
-                    file: file as any,
-                    error: babelErr.message,
-                    userGoal: textContent,
-                    brandTitle,
-                    survivor: survivorPool.length > 0 ? survivorPool[survivorPool.length - 1] : undefined,
-                    availableKeys,
-                  });
-                  if (healedContent && healedContent.trim().length > 50) {
-                    file.content = healedContent;
-                    filesMap.set(file.path, file);
-                    const rebundled = bundleZeroCORSHtml(indexFile.content, allFiles);
-                    setCanvasContent(rebundled);
-                    if (localFolderHandle && folderPermissionGranted) {
-                      writeFileToHandle(localFolderHandle, 'index.html', rebundled).catch(() => {});
-                      writeFileToHandle(localFolderHandle, file.path, healedContent).catch(() => {});
-                    }
-                    setCollaborationLogs(prev => [
-                      ...prev,
-                      {
-                        time: now(),
-                        from: 'Gemini Healer',
-                        to: 'Live Preview',
-                        action: `Successfully repaired ${file.path} for browser execution`,
-                        icon: '✓',
-                      },
-                    ]);
-                  }
-                } catch (healErr) {
-                  console.warn(`[Genesis Self-Heal Pass Error for ${file.path}]:`, healErr);
-                }
-              }
-            }
           }
         }
 

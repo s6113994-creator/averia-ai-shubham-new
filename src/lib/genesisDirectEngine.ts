@@ -1849,42 +1849,21 @@ export default router;`,
 
 export function HomePage() {
   const [score, setScore] = useState(0);
-  const [highScore, setHighScore] = useState(100);
+  const [highScore, setHighScore] = useState(120);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isGameOver, setIsGameOver] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    let animId: number;
-    let x = 150;
-    let y = 100;
-    let dx = 2;
-    let dy = 2;
-
-    const loop = () => {
-      ctx.fillStyle = '#0f172a';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      ctx.fillStyle = '#6366f1';
-      ctx.beginPath();
-      ctx.arc(x, y, 12, 0, Math.PI * 2);
-      ctx.fill();
-
-      if (x + dx > canvas.width - 12 || x + dx < 12) dx = -dx;
-      if (y + dy > canvas.height - 12 || y + dy < 12) dy = -dy;
-      x += dx;
-      y += dy;
-
-      if (isPlaying) animId = requestAnimationFrame(loop);
-    };
-
-    if (isPlaying) loop();
-    return () => cancelAnimationFrame(animId);
-  }, [isPlaying]);
+  const gameState = useRef({
+    snake: [{ x: 10, y: 10 }, { x: 10, y: 11 }, { x: 10, y: 12 }],
+    dir: { x: 0, y: -1 },
+    nextDir: { x: 0, y: -1 },
+    food: { x: 15, y: 7 },
+    gridSize: 20,
+    tileCount: 20,
+    speed: 120,
+    lastTick: 0
+  });
 
   const nav = (p: string) => {
     if (typeof (window as any).__AVERIA_NAVIGATE__ === 'function') {
@@ -1894,23 +1873,225 @@ export function HomePage() {
     }
   };
 
+  const spawnFood = () => {
+    const s = gameState.current;
+    s.food = {
+      x: Math.floor(Math.random() * (s.tileCount - 2)) + 1,
+      y: Math.floor(Math.random() * (s.tileCount - 2)) + 1
+    };
+  };
+
+  const resetGame = () => {
+    const s = gameState.current;
+    s.snake = [{ x: 10, y: 10 }, { x: 10, y: 11 }, { x: 10, y: 12 }];
+    s.dir = { x: 0, y: -1 };
+    s.nextDir = { x: 0, y: -1 };
+    spawnFood();
+    setScore(0);
+    setIsGameOver(false);
+    setIsPlaying(true);
+  };
+
+  // Keyboard controls listener
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const s = gameState.current;
+      if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+        if (s.dir.y === 0) s.nextDir = { x: 0, y: -1 };
+        e.preventDefault();
+      } else if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+        if (s.dir.y === 0) s.nextDir = { x: 0, y: 1 };
+        e.preventDefault();
+      } else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+        if (s.dir.x === 0) s.nextDir = { x: -1, y: 0 };
+        e.preventDefault();
+      } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+        if (s.dir.x === 0) s.nextDir = { x: 1, y: 0 };
+        e.preventDefault();
+      } else if (e.key === ' ') {
+        e.preventDefault();
+        setIsPlaying(p => !p);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Main Canvas Render Loop & Initial Draw
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let animId: number;
+    const s = gameState.current;
+
+    const draw = () => {
+      const width = canvas.width;
+      const height = canvas.height;
+      const tileSize = width / s.tileCount;
+
+      // Dark cyber background
+      ctx.fillStyle = '#090d16';
+      ctx.fillRect(0, 0, width, height);
+
+      // Grid lines
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 0.5;
+      for (let i = 0; i < s.tileCount; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * tileSize, 0);
+        ctx.lineTo(i * tileSize, height);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, i * tileSize);
+        ctx.lineTo(width, i * tileSize);
+        ctx.stroke();
+      }
+
+      // Draw Glowing Food
+      ctx.fillStyle = '#f43f5e';
+      ctx.shadowColor = '#f43f5e';
+      ctx.shadowBlur = 15;
+      ctx.beginPath();
+      ctx.arc(s.food.x * tileSize + tileSize / 2, s.food.y * tileSize + tileSize / 2, tileSize / 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Draw Glowing Snake
+      s.snake.forEach((seg, idx) => {
+        if (idx === 0) {
+          ctx.fillStyle = '#34d399'; // Head emerald
+          ctx.shadowColor = '#10b981';
+          ctx.shadowBlur = 12;
+        } else {
+          ctx.fillStyle = '#059669'; // Body green
+          ctx.shadowBlur = 4;
+        }
+        ctx.beginPath();
+        ctx.roundRect(seg.x * tileSize + 1.5, seg.y * tileSize + 1.5, tileSize - 3, tileSize - 3, 4);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      });
+
+      // Overlay if not playing or game over
+      if (!isPlaying || isGameOver) {
+        ctx.fillStyle = 'rgba(9, 13, 22, 0.78)';
+        ctx.fillRect(0, 0, width, height);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 22px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        if (isGameOver) {
+          ctx.fillStyle = '#f43f5e';
+          ctx.fillText('GAME OVER', width / 2, height / 2 - 20);
+          ctx.fillStyle = '#94a3b8';
+          ctx.font = '14px system-ui, sans-serif';
+          ctx.fillText('Press "Restart Game" or Space to retry', width / 2, height / 2 + 15);
+        } else {
+          ctx.fillText('CYBER SNAKE ARCADE', width / 2, height / 2 - 20);
+          ctx.fillStyle = '#38bdf8';
+          ctx.font = '13px system-ui, sans-serif';
+          ctx.fillText('Click "Start Game" or press Arrow Keys to begin', width / 2, height / 2 + 15);
+        }
+      }
+    };
+
+    // Immediate initial draw so canvas is NEVER blank!
+    draw();
+
+    const loop = (timestamp: number) => {
+      if (isPlaying && !isGameOver) {
+        if (timestamp - s.lastTick > s.speed) {
+          s.lastTick = timestamp;
+          s.dir = s.nextDir;
+
+          const head = { x: s.snake[0].x + s.dir.x, y: s.snake[0].y + s.dir.y };
+
+          // Wall collision
+          if (head.x < 0 || head.x >= s.tileCount || head.y < 0 || head.y >= s.tileCount) {
+            setIsGameOver(true);
+            setIsPlaying(false);
+            return;
+          }
+
+          // Self collision
+          if (s.snake.some(seg => seg.x === head.x && seg.y === head.y)) {
+            setIsGameOver(true);
+            setIsPlaying(false);
+            return;
+          }
+
+          s.snake.unshift(head);
+
+          // Food check
+          if (head.x === s.food.x && head.y === s.food.y) {
+            setScore(prev => {
+              const next = prev + 10;
+              setHighScore(h => Math.max(h, next));
+              try {
+                if ((window as any).LocalDB) {
+                  (window as any).LocalDB.insert('scores', { player: 'You', score: next, date: new Date().toLocaleTimeString() });
+                }
+              } catch (_) {}
+              return next;
+            });
+            spawnFood();
+          } else {
+            s.snake.pop();
+          }
+        }
+        draw();
+        animId = requestAnimationFrame(loop);
+      } else {
+        draw();
+      }
+    };
+
+    if (isPlaying && !isGameOver) {
+      animId = requestAnimationFrame(loop);
+    }
+
+    return () => cancelAnimationFrame(animId);
+  }, [isPlaying, isGameOver]);
+
+  const changeDir = (dx: number, dy: number) => {
+    const s = gameState.current;
+    if (dx !== 0 && s.dir.x === 0) s.nextDir = { x: dx, y: 0 };
+    if (dy !== 0 && s.dir.y === 0) s.nextDir = { x: 0, y: dy };
+    if (!isPlaying && !isGameOver) setIsPlaying(true);
+  };
+
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-900 border border-slate-800 rounded-2xl p-5">
-        <div>
-          <h1 className="text-2xl font-bold text-white">${title}</h1>
-          <p className="text-slate-400 text-xs">Interactive HTML5 Canvas Arcade Experience</p>
-        </div>
+    <div className="max-w-4xl mx-auto space-y-6 p-4">
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-2xl backdrop-blur">
         <div className="flex items-center gap-3">
-          <div className="text-right">
-            <span className="text-[11px] text-slate-400 block">Score</span>
-            <span className="text-xl font-bold text-indigo-400">{score}</span>
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-lg border border-emerald-500/30">
+            🐍
+          </div>
+          <div>
+            <h1 className="text-xl font-extrabold text-white tracking-wide">${title}</h1>
+            <p className="text-slate-400 text-xs">Playable HTML5 Cyber Arcade</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="text-right px-3 py-1 rounded-xl bg-slate-950 border border-slate-800">
+            <span className="text-[10px] text-slate-400 uppercase font-mono block">Score</span>
+            <span className="text-lg font-black text-emerald-400 font-mono">{score}</span>
+          </div>
+          <div className="text-right px-3 py-1 rounded-xl bg-slate-950 border border-slate-800">
+            <span className="text-[10px] text-slate-400 uppercase font-mono block">High</span>
+            <span className="text-lg font-black text-amber-400 font-mono">{highScore}</span>
           </div>
           <button
-            onClick={() => { setIsPlaying(!isPlaying); if (!isPlaying) setScore(s => s + 10); }}
-            className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/30 transition"
+            onClick={() => {
+              if (isGameOver) resetGame();
+              else setIsPlaying(p => !p);
+            }}
+            className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-600/30 transition transform active:scale-95"
           >
-            {isPlaying ? 'Pause Game' : 'Start Game'}
+            {isGameOver ? 'Restart Game' : isPlaying ? 'Pause Game' : 'Start Game'}
           </button>
           <button
             onClick={() => nav('/leaderboard')}
@@ -1927,12 +2108,33 @@ export function HomePage() {
         </div>
       </div>
 
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 flex flex-col items-center justify-center">
-        <canvas ref={canvasRef} width={600} height={360} className="rounded-2xl border border-slate-800 bg-slate-950 w-full max-w-2xl aspect-[5/3]" />
-        <div className="mt-4 flex flex-wrap justify-center gap-3 text-xs text-slate-400">
-          <span>🎮 Use Arrow Keys / Space to control</span>
+      <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-6 flex flex-col items-center justify-center shadow-2xl">
+        <canvas
+          ref={canvasRef}
+          width={400}
+          height={400}
+          className="rounded-2xl border-2 border-slate-800 bg-[#090d16] w-full max-w-[400px] aspect-square shadow-inner cursor-pointer"
+          onClick={() => {
+            if (!isPlaying) setIsPlaying(true);
+          }}
+        />
+
+        {/* On-screen touch D-Pad controls */}
+        <div className="mt-5 flex flex-col items-center gap-1.5 sm:hidden">
+          <button onClick={() => changeDir(0, -1)} className="w-12 h-10 rounded-xl bg-slate-800 text-white font-bold active:bg-emerald-600">▲</button>
+          <div className="flex gap-2">
+            <button onClick={() => changeDir(-1, 0)} className="w-12 h-10 rounded-xl bg-slate-800 text-white font-bold active:bg-emerald-600">◀</button>
+            <button onClick={() => changeDir(0, 1)} className="w-12 h-10 rounded-xl bg-slate-800 text-white font-bold active:bg-emerald-600">▼</button>
+            <button onClick={() => changeDir(1, 0)} className="w-12 h-10 rounded-xl bg-slate-800 text-white font-bold active:bg-emerald-600">▶</button>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap justify-center gap-4 text-xs text-slate-400">
+          <span>🎮 Arrow Keys / WASD to Steer</span>
           <span>•</span>
-          <span>🏆 High Score: {highScore}</span>
+          <span>⚡ Space to Pause</span>
+          <span>•</span>
+          <span>🍎 Eat orbs to grow & score</span>
         </div>
       </div>
     </div>
@@ -2304,6 +2506,69 @@ export default guard;`,
     const existing = existingMap.get(f.path.toLowerCase());
     return existing && existing.content && existing.content.trim().length > 100 ? existing : f;
   });
+}
+
+export interface FileAuditResult {
+  path: string;
+  hasErrors: boolean;
+  issues: string[];
+}
+
+export function auditFileStructuralIntegrity(file: GenesisProjectFile, userGoal: string, brandTitle: string): FileAuditResult {
+  const issues: string[] = [];
+  const content = (file.content || '').trim();
+  const path = file.path.toLowerCase();
+
+  // 1. Length check
+  if (content.length < 60) {
+    issues.push(`File is too short (${content.length} chars) - potential incomplete stub.`);
+  }
+
+  // 2. Placeholder/stub check
+  if (/\b(?:TODO|FIXME|\/\/ implement here|\/\/ write code here|\/\* placeholder \*\/|\/\/ stub)\b/i.test(content)) {
+    issues.push('Contains unfinished TODO or placeholder comments.');
+  }
+
+  // 3. React / UI export check
+  if (path.endsWith('homepage.tsx') || path.endsWith('homepage.jsx')) {
+    if (!content.includes('HomePage') && !content.includes('export default')) {
+      issues.push('HomePage does not export a primary component.');
+    }
+    if (!content.includes('window.HomePage') && !content.includes('window.__AVERIA_PAGES__')) {
+      issues.push('HomePage does not attach to window.HomePage or window.__AVERIA_PAGES__.');
+    }
+  }
+
+  if (path.endsWith('apppages.tsx') || path.endsWith('apppages.jsx')) {
+    if (!content.includes('window.AppPages') && !content.includes('export') && !content.includes('window.__AVERIA_PAGES__')) {
+      issues.push('AppPages does not export sub-page components.');
+    }
+  }
+
+  if (path.endsWith('router.tsx')) {
+    if (!content.includes('window.__AVERIA_APP__') && !content.includes('window.__AVERIA_ROUTER__') && !content.includes('router') && !content.includes('Router')) {
+      issues.push('Router does not attach to window.__AVERIA_APP__ or window.__AVERIA_ROUTER__.');
+    }
+  }
+
+  if (path.endsWith('ui.tsx')) {
+    if (!content.includes('Button') && !content.includes('Card') && !content.includes('window.UI')) {
+      issues.push('UI primitives do not export standard Button/Card components.');
+    }
+  }
+
+  // 4. JSX tag balance check
+  const openDiv = (content.match(/<div\b/g) || []).length;
+  const closeDiv = (content.match(/<\/div>/g) || []).length;
+  if (Math.abs(openDiv - closeDiv) > 4) {
+    issues.push(`Severe JSX div tag imbalance detected (${openDiv} opening vs ${closeDiv} closing).`);
+  }
+
+  return {
+    path: file.path,
+    hasErrors: issues.length > 0,
+    issues,
+  };
 }
 
 /**
