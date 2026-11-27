@@ -83,15 +83,15 @@ export function classifyUserIntent(prompt: string, attachments: Attachment[] = [
   const imageRequestPattern = /\b(image|photo|picture|drawing|illustration)\s+(of|for|showing|depicting)\b/i;
   if (mediaGenKeywords.test(lower) || imageRequestPattern.test(lower)) {
     // Avoid classifying "create an app for photo editing" as generate_media
-    if (!/\b(app|application|website|site|game|dashboard|saas|tool|platform|system)\b/i.test(lower)) {
+    if (!/\b(app|application|website|site|game|dashboard|saas|tool|platform|system|assistant|agent)\b/i.test(lower)) {
       return 'generate_media';
     }
   }
 
-  // 3. Build / modify / fix app, website, game, SaaS, code
-  const appBuildKeywords = /\b(build|create|make|code|program|develop|generate|clone|design)\b.*\b(app|application|website|web\s+app|site|page|game|snake\s+game|pong|tic\s*tac\s*toe|flappy|rpg|crm|erp|saas|dashboard|store|shop|e-?commerce|portal|platform|todo\s+app|calculator|tracker|portfolio|clone)\b/i;
-  const directAppPattern = /\b(create|build|make)\s+(a|an)?\s*[a-z0-9_-]+\s+(app|game|website|dashboard|saas|platform|tracker)\b/i;
-  const codeEditKeywords = /\b(fix\s+(the\s+)?(bug|error|button|ui|code|crash|page)|modify\s+(the\s+)?code|add\s+(a\s+)?(feature|page|button|route|component)|refactor\s+(the\s+)?code)\b/i;
+  // 3. Build / modify / fix app, website, game, SaaS, code, AI assistant, tools (including common typos)
+  const appBuildKeywords = /\b(build|create|make|code|program|develop|generate|clone|design|construct|setup|start)\b[\s\S]*?\b(app|application|ap|web\s*app|mobile\s*app|website|web\s*site|site|page|game|gameplay|arcade|snake|pong|tic\s*tac\s*toe|flappy|rpg|crm|erp|saas|dashboard|store|shop|e-?commerce|ecom|market|marketplace|portal|platform|platfrom|todo|calculator|tracker|portfolio|clone|assistant|asistant|assitant|asisstant|agent|ai\s*agent|bot|deliver|delivery|food\s*deliver|learing|learning|tutor|education|study|service|tool|system)\b/i;
+  const directAppPattern = /\b(create|build|make|generate|develop)\s+(an?\s+)?[a-z0-9_\-\s]{1,40}\b(app|game|website|site|dashboard|saas|platform|tracker|assistant|asistant|agent|system|portal|tool|arcade)\b/i;
+  const codeEditKeywords = /\b(fix\s+(the\s+)?(bug|error|button|ui|code|crash|page|nav|router)|modify\s+(the\s+)?code|add\s+(a\s+)?(feature|page|button|route|component|view)|refactor\s+(the\s+)?code)\b/i;
 
   if (appBuildKeywords.test(lower) || directAppPattern.test(lower) || codeEditKeywords.test(lower)) {
     return 'build_app';
@@ -442,13 +442,13 @@ function generateDeterministicSpaHtml(brandTitle: string, allFiles: { path: stri
   <div id="modal-root"></div>
   <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2"></div>
 
-  <!-- Companion Modules (TypeScript + React) -->
+  <!-- Companion Modules (TypeScript + React in Topological Order) -->
   <script type="text/babel" data-presets="react,typescript" src="src/lib/dataSdk.ts"></script>
-  <script type="text/babel" data-presets="react,typescript" src="src/components/ui.tsx"></script>
   <script type="text/babel" data-presets="react,typescript" src="src/lib/engine.ts"></script>
-  <script type="text/babel" data-presets="react,typescript" src="src/router.tsx"></script>
+  <script type="text/babel" data-presets="react,typescript" src="src/components/ui.tsx"></script>
   <script type="text/babel" data-presets="react,typescript" src="src/pages/HomePage.tsx"></script>
   <script type="text/babel" data-presets="react,typescript" src="src/pages/AppPages.tsx"></script>
+  <script type="text/babel" data-presets="react,typescript" src="src/router.tsx"></script>
   <script type="text/babel" data-presets="react,typescript" src="src/lib/qaGuard.ts"></script>
 
   <!-- Automatic App Bus Mount -->
@@ -603,34 +603,19 @@ export function transpileToVanillaJS(code: string, fileName?: string): { code: s
      (cleaned.includes('return <') || cleaned.includes('render()') || cleaned.includes('React.') || cleaned.includes('useState')));
   const isJSX = isExplicitJSX || hasJSXTags;
 
-  // 3. Strip TypeScript Interfaces and Type Aliases
+  // 3. Strip top-level TypeScript interfaces and type aliases
   cleaned = cleaned.replace(/^\s*(?:export\s+)?interface\s+[A-Za-z0-9_$]+(?:\s*<[^>]+>)?(?:\s+extends\s+[^{]+)?\s*\{[\s\S]*?\}/gm, '');
   cleaned = cleaned.replace(/^\s*(?:export\s+)?type\s+[A-Za-z0-9_$]+(?:\s*<[^>]+>)?\s*=[\s\S]*?;/gm, '');
 
-  // 4. Strip TypeScript Function parameter and return types
-  cleaned = cleaned.replace(/\):\s*[A-Za-z0-9_$<>\[\]|, ]+\s*=>/g, ') =>');
-  cleaned = cleaned.replace(/\):\s*[A-Za-z0-9_$<>\[\]|, ]+\s*\{/g, ') {');
-  cleaned = cleaned.replace(/:\s*(?:string|number|boolean|any|void|unknown|never|object|Function|Record<[^>]+>|[A-Z][A-Za-z0-9_$]*)(?:\[\])?(?=[,\)=;])/g, '');
-
-  // 5. Strip "as <Type>" and "as const"
-  cleaned = cleaned.replace(/\s+as\s+[A-Za-z0-9_$<>\[\]]+/g, '');
-
-  // 6. Strip class access modifiers (public, private, protected, readonly)
-  cleaned = cleaned.replace(/^\s*(?:public|private|protected|readonly)\s+/gm, '');
-
-  // 7. Strip imports and exports (ES module shims)
-  // Multiline imports: import { ... } from '...'
+  // 4. Strip imports cleanly (multiline, singleline, type-only, dynamic, side-effects)
   cleaned = cleaned.replace(/import\s+(?:type\s+)?[\s\S]*?from\s*['"][^'"]+['"];?/g, '');
-  // Side-effect imports: import '...' or import "..."
   cleaned = cleaned.replace(/^\s*import\s+['"][^'"]+['"];?\s*$/gm, '');
-  // Dynamic imports: import(...)
   cleaned = cleaned.replace(/import\s*\([^)]+\)/g, 'undefined');
-  // Any leftover import lines
   cleaned = cleaned.replace(/^\s*import\s+.*?;?\s*$/gm, '');
 
   const baseCompName = fileName ? fileName.replace(/^.*[\\\/]/, '').replace(/\.[^.]+$/, '') : '';
 
-  // Convert exports
+  // 5. Rewrite export statements so every component registers on window and window.__AVERIA_PAGES__
   cleaned = cleaned.replace(/^\s*export\s+default\s+(async\s+)?function(?:\s+([A-Za-z0-9_$]+))?\s*\(/gm, (_m, isAsync, name) => {
     const fnName = name || baseCompName || 'DefaultExport';
     return `${isAsync ? 'async ' : ''}function ${fnName}(`;
@@ -642,7 +627,7 @@ export function transpileToVanillaJS(code: string, fileName?: string): { code: s
   cleaned = cleaned.replace(/^\s*export\s+(async\s+)?function\s+([A-Za-z0-9_$]+)/gm, '$1function $2');
   cleaned = cleaned.replace(/^\s*export\s+(?:const|let|var)\s+([A-Za-z0-9_$]+)/gm, 'var $1');
   cleaned = cleaned.replace(/^\s*export\s+default\s+([A-Za-z0-9_$]+)\s*;?/gm, (_m, id) => {
-    return `if (typeof ${id} !== 'undefined') { window.${id} = ${id}; window.__AVERIA_EXPORTS__['${id}'] = ${id}; window.DefaultExport = ${id}; }`;
+    return `if (typeof ${id} !== 'undefined') {\n  window.${id} = ${id};\n  window.__AVERIA_PAGES__['${id}'] = ${id};\n  window.AppPages['${id}'] = ${id};\n  window.__AVERIA_EXPORTS__['${id}'] = ${id};\n  window.DefaultExport = ${id};\n  if ('${baseCompName}') {\n    window['${baseCompName}'] = ${id};\n    window.__AVERIA_PAGES__['${baseCompName}'] = ${id};\n  }\n}`;
   });
   cleaned = cleaned.replace(/^\s*export\s+default\s+/gm, `window.${baseCompName || 'DefaultExport'} = `);
   cleaned = cleaned.replace(/^\s*export\s*\{([\s\S]*?)\}\s*;?/gm, (_m, inner) => {
@@ -655,47 +640,52 @@ export function transpileToVanillaJS(code: string, fileName?: string): { code: s
       if (asMatch) {
         const localName = asMatch[1];
         const exportName = asMatch[2] || localName;
-        assignments.push(`if (typeof ${localName} !== 'undefined') { window.${exportName} = ${localName}; window.AppPages['${exportName}'] = ${localName}; window.__AVERIA_EXPORTS__['${exportName}'] = ${localName}; }`);
+        assignments.push(`if (typeof ${localName} !== 'undefined') {\n  window.${exportName} = ${localName};\n  window.__AVERIA_PAGES__['${exportName}'] = ${localName};\n  window.AppPages['${exportName}'] = ${localName};\n  window.__AVERIA_EXPORTS__['${exportName}'] = ${localName};\n}`);
       }
     }
     return assignments.join('\n');
   });
 
-  // 8. Auto-expose functions and classes on window, window.__AVERIA_EXPORTS__, and window.AppPages
+  // 6. Auto-expose all declared functions, classes, and capitalized components on window & window.__AVERIA_PAGES__
   const exposed: string[] = [];
+  exposed.push("window.__AVERIA_PAGES__ = window.__AVERIA_PAGES__ || {};");
   exposed.push("window.__AVERIA_EXPORTS__ = window.__AVERIA_EXPORTS__ || {};");
-  exposed.push("window.AppPages = window.AppPages || {};");
+  exposed.push("window.AppPages = window.AppPages || window.__AVERIA_PAGES__;");
 
   if (baseCompName && /^[A-Z]/.test(baseCompName)) {
-    exposed.push(`if (typeof ${baseCompName} !== 'undefined') { window.${baseCompName} = ${baseCompName}; window.AppPages['${baseCompName}'] = ${baseCompName}; window.__AVERIA_EXPORTS__['${baseCompName}'] = ${baseCompName}; }`);
+    exposed.push(`if (typeof ${baseCompName} !== 'undefined') {\n  window.${baseCompName} = ${baseCompName};\n  window.__AVERIA_PAGES__['${baseCompName}'] = ${baseCompName};\n  window.AppPages['${baseCompName}'] = ${baseCompName};\n  window.__AVERIA_EXPORTS__['${baseCompName}'] = ${baseCompName};\n}`);
   }
 
+  // Detect classes
   const classMatches = cleaned.matchAll(/class\s+([A-Za-z0-9_$]+)/g);
   for (const m of classMatches) {
-    exposed.push(`if (typeof ${m[1]} !== 'undefined') { window.${m[1]} = ${m[1]}; window.__AVERIA_EXPORTS__['${m[1]}'] = ${m[1]}; }`);
+    exposed.push(`if (typeof ${m[1]} !== 'undefined') {\n  window.${m[1]} = ${m[1]};\n  window.__AVERIA_PAGES__['${m[1]}'] = ${m[1]};\n  window.__AVERIA_EXPORTS__['${m[1]}'] = ${m[1]};\n}`);
   }
+
+  // Detect all declared functions
   const funcMatches = cleaned.matchAll(/(?:async\s+)?function\s+([A-Za-z0-9_$]+)/g);
   for (const m of funcMatches) {
-    exposed.push(`if (typeof ${m[1]} !== 'undefined') { window.${m[1]} = ${m[1]}; window.AppPages['${m[1]}'] = ${m[1]}; window.__AVERIA_EXPORTS__['${m[1]}'] = ${m[1]}; }`);
+    exposed.push(`if (typeof ${m[1]} !== 'undefined') {\n  window.${m[1]} = ${m[1]};\n  window.__AVERIA_PAGES__['${m[1]}'] = ${m[1]};\n  window.AppPages['${m[1]}'] = ${m[1]};\n  window.__AVERIA_EXPORTS__['${m[1]}'] = ${m[1]};\n}`);
   }
+
+  // Detect var/let/const declarations (especially React components and core singletons)
   const varMatches = cleaned.matchAll(/(?:const|let|var)\s+([A-Za-z0-9_$]+)(?:\s*:[^=]+)?\s*=/g);
   for (const m of varMatches) {
-    if (m[1] && (/^[A-Z]/.test(m[1]) || /^(dataSdk|engine|router|qaGuard)$/i.test(m[1]))) {
-      exposed.push(`if (typeof ${m[1]} !== 'undefined') { window.${m[1]} = ${m[1]}; window.AppPages['${m[1]}'] = ${m[1]}; window.__AVERIA_EXPORTS__['${m[1]}'] = ${m[1]}; }`);
+    if (m[1] && (/^[A-Z]/.test(m[1]) || /^(dataSdk|engine|router|qaGuard|store|ui)$/i.test(m[1]))) {
+      exposed.push(`if (typeof ${m[1]} !== 'undefined') {\n  window.${m[1]} = ${m[1]};\n  window.__AVERIA_PAGES__['${m[1]}'] = ${m[1]};\n  window.AppPages['${m[1]}'] = ${m[1]};\n  window.__AVERIA_EXPORTS__['${m[1]}'] = ${m[1]};\n}`);
     }
   }
 
-  // Explicitly ensure standard storefront pages and routers are wired onto window and window.AppPages
-  const KNOWN_PAGES = ['HomePage', 'AppPages', 'ShopPage', 'CartPage', 'CheckoutPage', 'OrdersPage', 'WishlistPage', 'AdminDashboard', 'CatalogPage', 'ProductsPage', 'OrderPage', 'Dashboard', 'DataSDK', 'Engine', 'qaGuard'];
-  for (const p of KNOWN_PAGES) {
-    exposed.push(`if (typeof ${p} !== 'undefined') { window.${p} = ${p}; window.AppPages['${p}'] = ${p}; window.__AVERIA_EXPORTS__['${p}'] = ${p}; }`);
+  // File-specific aliases
+  if (baseCompName === 'HomePage') {
+    exposed.push(`if (typeof HomePage !== 'undefined') {\n  window.HomePage = HomePage;\n  window.__AVERIA_PAGES__['HomePage'] = HomePage;\n  window.__AVERIA_PAGES__['/'] = HomePage;\n  window.__AVERIA_PAGES__['/home'] = HomePage;\n} else if (typeof DefaultExport !== 'undefined') {\n  window.HomePage = DefaultExport;\n  window.__AVERIA_PAGES__['HomePage'] = DefaultExport;\n  window.__AVERIA_PAGES__['/'] = DefaultExport;\n  window.__AVERIA_PAGES__['/home'] = DefaultExport;\n}`);
+  } else if (baseCompName === 'AppPages') {
+    exposed.push(`if (typeof AppPages !== 'undefined' && typeof AppPages === 'object') {\n  Object.assign(window.__AVERIA_PAGES__, AppPages);\n  Object.assign(window.AppPages, AppPages);\n}`);
+  } else if (baseCompName === 'router') {
+    exposed.push(`if (typeof router !== 'undefined') {\n  window.__AVERIA_ROUTER__ = router;\n  window.__AVERIA_APP__ = router;\n}`);
   }
 
-  if (baseCompName && (baseCompName === 'HomePage' || baseCompName === 'AppPages')) {
-    exposed.push(`if (typeof DefaultExport !== 'undefined' && !window.${baseCompName}) { window.${baseCompName} = DefaultExport; window.AppPages['${baseCompName}'] = DefaultExport; }`);
-  }
-
-  const exportShim = exposed.length > 0 ? `\n// Window exports for ${fileName || 'module'}\n${exposed.join('\n')}\n` : '';
+  const exportShim = exposed.length > 0 ? `\n// Window & Route Component Exports for ${fileName || 'module'}\n${exposed.join('\n')}\n` : '';
   return { code: cleaned + exportShim, isJSX };
 }
 
@@ -708,230 +698,28 @@ function buildSmartAutoMountScript(): string {
 (function() {
   function getComponent(name) {
     if (window[name]) return window[name];
-    if (window.__AVERIA_EXPORTS__ && window.__AVERIA_EXPORTS__[name]) return window.__AVERIA_EXPORTS__[name];
+    if (window.__AVERIA_PAGES__ && window.__AVERIA_PAGES__[name]) return window.__AVERIA_PAGES__[name];
     if (window.AppPages && window.AppPages[name]) return window.AppPages[name];
+    if (window.__AVERIA_EXPORTS__ && window.__AVERIA_EXPORTS__[name]) return window.__AVERIA_EXPORTS__[name];
     return null;
   }
 
-  function BuiltinCatalogView() {
-    const [products, setProducts] = React.useState([]);
-    const [search, setSearch] = React.useState('');
-    const [category, setCategory] = React.useState('All');
-    const [sortBy, setSortBy] = React.useState('featured');
-
-    React.useEffect(() => {
-      if (window.DataSDK) window.DataSDK.getProducts().then(setProducts);
-    }, []);
-
-    const categories = ['All', 'Audio', 'Monitors', 'Computing', 'Wearables', 'Gaming', 'Accessories', 'Smart Home'];
-    let filtered = window.Engine ? window.Engine.filterProducts(products, { category, search, sortBy }) : products;
-
+  function BuiltinFallbackView() {
     return (
-      <div className="max-w-7xl mx-auto space-y-6 p-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-2xl font-bold text-white tracking-tight">Product Catalog</h2>
-            <p className="text-slate-400 text-xs mt-1">Discover premium tech hardware & audio gear</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <input type="text" placeholder="Search catalog..." value={search} onChange={e => setSearch(e.target.value)} className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-100 text-xs w-48 md:w-64 focus:outline-none focus:border-indigo-500" />
-            <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 text-xs cursor-pointer focus:outline-none">
-              <option value="featured">Featured</option>
-              <option value="price_asc">Price: Low to High</option>
-              <option value="price_desc">Price: High to Low</option>
-              <option value="rating">Top Rated</option>
-            </select>
-          </div>
+      <div className="max-w-4xl mx-auto p-8 text-center space-y-4">
+        <div className="w-16 h-16 mx-auto rounded-2xl bg-indigo-600/20 text-indigo-400 flex items-center justify-center text-2xl font-bold">
+          <i className="fa-solid fa-layer-group"></i>
         </div>
-        <div className="flex items-center gap-2 overflow-x-auto pb-2">
-          {categories.map(cat => (
-            <button key={cat} onClick={() => setCategory(cat)} className={'px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ' + (category === cat ? 'bg-indigo-600 text-white' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800')}>{cat}</button>
-          ))}
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {filtered.map(p => (
-            <div key={p.id} className="rounded-2xl bg-slate-900/80 border border-slate-800 p-4 flex flex-col justify-between hover:border-slate-700 transition-all shadow-xl">
-              <div className="space-y-3">
-                <div className="relative aspect-video rounded-xl overflow-hidden bg-slate-800">
-                  <img src={p.imageUrl || p.image} alt={p.name} className="w-full h-full object-cover" />
-                  <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-slate-950/80 text-[10px] text-slate-300 font-medium">{p.category}</span>
-                  {p.badge && <span className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-indigo-600 text-[10px] text-white font-bold">{p.badge}</span>}
-                </div>
-                <h3 className="font-semibold text-white text-sm line-clamp-1">{p.name}</h3>
-                <p className="text-slate-400 text-xs line-clamp-2">{p.description}</p>
-                <div className="flex items-center gap-2 text-amber-400 text-xs">
-                  <span>&#9733; {p.rating || 4.8}</span>
-                  <span className="text-slate-500">({p.reviewCount || 100})</span>
-                </div>
-              </div>
-              <div className="pt-4 mt-3 border-t border-slate-800 flex items-center justify-between">
-                <div>
-                  <span className="font-bold text-white text-base">&#8377;{Number(p.price).toLocaleString()}</span>
-                  {p.mrp && <span className="text-[11px] text-slate-500 line-through ml-1.5">&#8377;{Number(p.mrp).toLocaleString()}</span>}
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <button onClick={() => { if (window.DataSDK) window.DataSDK.toggleWishlist(p); }} className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs" title="Wishlist">&#9829;</button>
-                  <button onClick={() => { if (window.DataSDK) window.DataSDK.addToCart(p, 1); }} className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs">Add to Cart</button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        <h2 className="text-2xl font-bold text-white">Application View Ready</h2>
+        <p className="text-slate-400 text-sm">Select any navigation item or card above to explore the application.</p>
+        <button onClick={() => { if (typeof window.__AVERIA_NAVIGATE__ === 'function') window.__AVERIA_NAVIGATE__('/'); }} className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-xs shadow-lg">
+          Return to Home
+        </button>
       </div>
     );
   }
 
-  function BuiltinCartView() {
-    const [cart, setCart] = React.useState([]);
-    const [promo, setPromo] = React.useState('');
-    const [appliedPromo, setAppliedPromo] = React.useState('');
-
-    React.useEffect(() => {
-      if (window.LocalDB) setCart(window.LocalDB.find('cart') || []);
-    }, []);
-
-    const totals = window.Engine ? window.Engine.calculateTotals(cart, appliedPromo) : { subtotal: 0, tax: 0, shipping: 0, grandTotal: 0, discount: 0 };
-
-    return (
-      <div className="max-w-4xl mx-auto space-y-6 p-4">
-        <h2 className="text-2xl font-bold text-white">Your Shopping Cart</h2>
-        {cart.length === 0 ? (
-          <div className="text-center py-16 bg-slate-900/40 border border-slate-800 rounded-3xl">
-            <p className="text-slate-400 text-sm">Your cart is currently empty.</p>
-            <button onClick={() => { if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/catalog'); }} className="mt-4 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold">Browse Catalog</button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="md:col-span-2 space-y-3">
-              {cart.map(item => (
-                <div key={item.id} className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-4">
-                  <div className="min-w-0">
-                    <h4 className="font-semibold text-white text-sm truncate">{item.name}</h4>
-                    <span className="text-indigo-400 text-xs font-bold">&#8377;{Number(item.price).toLocaleString()}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => { if (window.DataSDK) window.DataSDK.updateCartQty(item.id, (item.quantity||1)-1); }} className="w-7 h-7 rounded-lg bg-slate-800 text-white flex items-center justify-center">-</button>
-                    <span className="text-sm font-bold text-white w-6 text-center">{item.quantity||1}</span>
-                    <button onClick={() => { if (window.DataSDK) window.DataSDK.updateCartQty(item.id, (item.quantity||1)+1); }} className="w-7 h-7 rounded-lg bg-slate-800 text-white flex items-center justify-center">+</button>
-                    <button onClick={() => { if (window.DataSDK) window.DataSDK.removeFromCart(item.id); }} className="text-slate-400 hover:text-rose-400 text-xs ml-2">&#10005;</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 h-fit">
-              <h3 className="font-bold text-white text-sm">Order Summary</h3>
-              <div className="flex gap-2">
-                <input type="text" placeholder="AVERIA20 for 20% off" value={promo} onChange={e => setPromo(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white flex-1 focus:outline-none" />
-                <button onClick={() => setAppliedPromo(promo)} className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold">Apply</button>
-              </div>
-              <div className="space-y-2 text-xs text-slate-300">
-                <div className="flex justify-between"><span>Subtotal:</span><span>&#8377;{totals.subtotal.toLocaleString()}</span></div>
-                {totals.discount > 0 && <div className="flex justify-between text-emerald-400"><span>Discount:</span><span>-&#8377;{totals.discount.toLocaleString()}</span></div>}
-                <div className="flex justify-between"><span>GST (18%):</span><span>&#8377;{totals.tax.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span>Shipping:</span><span>{totals.shipping === 0 ? 'FREE' : '&#8377;' + totals.shipping}</span></div>
-                <div className="border-t border-slate-800 pt-2 flex justify-between font-bold text-white text-sm"><span>Total:</span><span className="text-indigo-400">&#8377;{totals.grandTotal.toLocaleString()}</span></div>
-              </div>
-              <button onClick={() => { if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/checkout'); }} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg">Proceed to Checkout</button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function BuiltinCheckoutView() {
-    const [formData, setFormData] = React.useState({ name: '', email: '', phone: '', address: '' });
-    const cart = window.LocalDB ? (window.LocalDB.find('cart') || []) : [];
-    const totals = window.Engine ? window.Engine.calculateTotals(cart) : { grandTotal: 0 };
-    const handlePlaceOrder = (e) => {
-      e.preventDefault();
-      if (window.DataSDK) {
-        window.DataSDK.placeOrder({ customer: formData, totalAmount: totals.grandTotal });
-        if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/orders');
-      }
-    };
-    return (
-      <div className="max-w-lg mx-auto bg-slate-900 border border-slate-800 rounded-3xl p-7 space-y-5">
-        <h2 className="text-xl font-bold text-white">Checkout Details</h2>
-        <form onSubmit={handlePlaceOrder} className="space-y-4">
-          <div><label className="text-xs text-slate-400 block mb-1">Full Name</label><input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" /></div>
-          <div><label className="text-xs text-slate-400 block mb-1">Email</label><input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" /></div>
-          <div><label className="text-xs text-slate-400 block mb-1">Shipping Address</label><textarea required rows={2} value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" /></div>
-          <div className="p-4 rounded-xl bg-slate-800/60 border border-slate-700 flex justify-between font-bold text-white text-sm"><span>Total Payable:</span><span className="text-indigo-400">&#8377;{totals.grandTotal.toLocaleString()}</span></div>
-          <button type="submit" className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg">Confirm &amp; Place Order</button>
-        </form>
-      </div>
-    );
-  }
-
-  function BuiltinOrdersView() {
-    const orders = window.LocalDB ? (window.LocalDB.find('orders') || []) : [];
-    return (
-      <div className="max-w-4xl mx-auto space-y-6 p-4">
-        <h2 className="text-2xl font-bold text-white">Order History &amp; Tracking</h2>
-        {orders.length === 0 ? (
-          <div className="text-center py-16 bg-slate-900/40 border border-slate-800 rounded-3xl"><p className="text-slate-400 text-sm">No orders placed yet.</p></div>
-        ) : (
-          <div className="space-y-4">
-            {orders.map((ord, idx) => (
-              <div key={idx} className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <div><span className="font-bold text-white text-sm">{ord.orderNumber}</span><span className="text-[11px] text-slate-400 block">{ord.createdAt}</span></div>
-                  <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">{ord.status || 'Confirmed'}</span>
-                </div>
-                <div className="text-xs text-slate-300 space-y-1">
-                  {(ord.items || []).map((it, i) => (<div key={i} className="flex justify-between"><span>{it.quantity}x {it.name}</span><span className="font-mono">&#8377;{Number(it.price * (it.quantity||1)).toLocaleString()}</span></div>))}
-                </div>
-                <div className="flex justify-between pt-2 border-t border-slate-800 font-bold text-sm text-white"><span>Total:</span><span className="text-indigo-400">&#8377;{Number(ord.totalAmount).toLocaleString()}</span></div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function BuiltinWishlistView() {
-    const wishlist = window.LocalDB ? (window.LocalDB.find('wishlist') || []) : [];
-    return (
-      <div className="max-w-4xl mx-auto space-y-6 p-4">
-        <h2 className="text-2xl font-bold text-white">Your Wishlist</h2>
-        {wishlist.length === 0 ? (
-          <div className="text-center py-16 bg-slate-900/40 border border-slate-800 rounded-3xl"><p className="text-slate-400 text-sm">Your wishlist is currently empty.</p></div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {wishlist.map(item => (
-              <div key={item.id} className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3 flex flex-col justify-between">
-                <div><h4 className="font-semibold text-white text-sm">{item.name}</h4><span className="text-indigo-400 text-xs font-bold">&#8377;{Number(item.price).toLocaleString()}</span></div>
-                <div className="flex gap-2">
-                  <button onClick={() => { if (window.DataSDK) { window.DataSDK.addToCart(item, 1); window.DataSDK.toggleWishlist(item); } }} className="flex-1 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Move to Cart</button>
-                  <button onClick={() => { if (window.DataSDK) window.DataSDK.toggleWishlist(item); }} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs">Remove</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function BuiltinAdminView() {
-    const orders = window.LocalDB ? (window.LocalDB.find('orders') || []) : [];
-    const products = window.LocalDB ? (window.LocalDB.find('items') || []) : [];
-    const stats = window.Engine ? window.Engine.computeStoreAnalytics(orders, products) : { totalRevenue: 0, totalOrders: 0, activeProducts: 0 };
-    return (
-      <div className="max-w-5xl mx-auto space-y-6 p-4">
-        <h2 className="text-2xl font-bold text-white">Merchant Administration Dashboard</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800"><span className="text-xs text-slate-400">Total Store Revenue</span><h3 className="text-3xl font-extrabold text-white mt-2">&#8377;{stats.totalRevenue.toLocaleString()}</h3></div>
-          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800"><span className="text-xs text-slate-400">Completed Orders</span><h3 className="text-3xl font-extrabold text-white mt-2">{stats.totalOrders}</h3></div>
-          <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800"><span className="text-xs text-slate-400">Active Products</span><h3 className="text-3xl font-extrabold text-white mt-2">{stats.activeProducts}</h3></div>
-        </div>
-      </div>
-    );
-  }
-
-  function UniversalFallbackRouter() {
+  function UniversalDynamicRouter() {
     const [currentHash, setCurrentHash] = React.useState(window.location.hash || '#/');
     const [dbVersion, setDbVersion] = React.useState(0);
 
@@ -939,51 +727,55 @@ function buildSmartAutoMountScript(): string {
       const onHashChange = () => setCurrentHash(window.location.hash || '#/');
       const onNav = (e) => {
         if (e && e.detail && e.detail.route) {
-          const r = e.detail.route.startsWith('/') ? '#' + e.detail.route : '#/' + e.detail.route;
-          window.location.hash = r;
+          const r = e.detail.route.startsWith('#') ? e.detail.route : (e.detail.route.startsWith('/') ? '#' + e.detail.route : '#/' + e.detail.route);
+          if (window.location.hash !== r) {
+            try { window.location.hash = r; } catch (_) {}
+          }
           setCurrentHash(r);
+        } else {
+          setCurrentHash(window.location.hash || '#/');
         }
       };
       const onDbChange = () => setDbVersion(v => v + 1);
       window.addEventListener('hashchange', onHashChange);
       window.addEventListener('averia:navigate', onNav);
+      window.addEventListener('popstate', onHashChange);
       window.addEventListener('localdb:change', onDbChange);
       return () => {
         window.removeEventListener('hashchange', onHashChange);
         window.removeEventListener('averia:navigate', onNav);
+        window.removeEventListener('popstate', onHashChange);
         window.removeEventListener('localdb:change', onDbChange);
       };
     }, []);
 
-    const rawRoute = (currentHash.replace(/^#\\/?/, '') || '').toLowerCase();
-    const cleanRoute = '/' + rawRoute;
+    const rawRoute = (currentHash.replace(/^#\\/?/, '') || '').split('?')[0].toLowerCase();
+    const cleanRoute = '/' + (rawRoute.startsWith('/') ? rawRoute.slice(1) : rawRoute);
 
-    const HomeComp = getComponent('HomePage') || getComponent('Home') || BuiltinCatalogView;
-    const ShopComp = getComponent('ShopPage') || getComponent('CatalogPage') || getComponent('ProductsPage') || BuiltinCatalogView;
-    const CartComp = getComponent('CartPage') || getComponent('Cart') || BuiltinCartView;
-    const CheckoutComp = getComponent('CheckoutPage') || getComponent('Checkout') || BuiltinCheckoutView;
-    const OrdersComp = getComponent('OrdersPage') || getComponent('OrderPage') || getComponent('Orders') || BuiltinOrdersView;
-    const WishlistComp = getComponent('WishlistPage') || getComponent('Wishlist') || BuiltinWishlistView;
-    const AdminComp = getComponent('AdminDashboard') || getComponent('AdminPage') || getComponent('Dashboard') || BuiltinAdminView;
-
-    let ActiveView = HomeComp;
-    if (rawRoute.startsWith('catalog') || rawRoute.startsWith('shop') || rawRoute.startsWith('product')) {
-      ActiveView = ShopComp;
-    } else if (rawRoute.startsWith('cart')) {
-      ActiveView = CartComp;
-    } else if (rawRoute.startsWith('checkout')) {
-      ActiveView = CheckoutComp;
-    } else if (rawRoute.startsWith('order') || rawRoute.startsWith('track')) {
-      ActiveView = OrdersComp;
-    } else if (rawRoute.startsWith('wishlist')) {
-      ActiveView = WishlistComp;
-    } else if (rawRoute.startsWith('admin') || rawRoute.startsWith('dash')) {
-      ActiveView = AdminComp;
+    let ActiveView = null;
+    if (typeof window.__RESOLVE_ROUTE_COMPONENT__ === 'function') {
+      ActiveView = window.__RESOLVE_ROUTE_COMPONENT__(cleanRoute);
+    }
+    if (!ActiveView) {
+      ActiveView = getComponent('HomePage') || getComponent('Home') || window.HomePage;
+    }
+    if (!ActiveView && window.__AVERIA_PAGES__) {
+      const keys = Object.keys(window.__AVERIA_PAGES__);
+      for (let i = 0; i < keys.length; i++) {
+        const val = window.__AVERIA_PAGES__[keys[i]];
+        if (typeof val === 'function' && /^[A-Z]/.test(keys[i])) {
+          ActiveView = val;
+          break;
+        }
+      }
+    }
+    if (!ActiveView) {
+      ActiveView = BuiltinFallbackView;
     }
 
     return (
-      <div className="averia-dynamic-viewport" key={cleanRoute + '_' + dbVersion}>
-        <ActiveView />
+      <div className="averia-dynamic-viewport w-full min-h-full" key={cleanRoute + '_' + dbVersion}>
+        {React.createElement(ActiveView)}
       </div>
     );
   }
@@ -991,30 +783,42 @@ function buildSmartAutoMountScript(): string {
   function bootMount() {
     const container = document.getElementById('app') || document.getElementById('root');
     if (!container) return;
+    
+    // Clear any static placeholders like "Initializing Averia Neural Matrix..."
+    container.innerHTML = '';
+
     const navigateFn = function(route) {
-      const clean = String(route || '/').trim();
-      const targetHash = clean.startsWith('#') ? clean : (clean.startsWith('/') ? '#' + clean : '#/' + clean);
-      window.location.hash = targetHash;
-      window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: clean } }));
+      if (typeof window.__AVERIA_NAVIGATE__ === 'function') {
+        window.__AVERIA_NAVIGATE__(route);
+      } else {
+        const clean = String(route || '/').trim();
+        const targetHash = clean.startsWith('#') ? clean : (clean.startsWith('/') ? '#' + clean : '#/' + clean);
+        window.location.hash = targetHash;
+        window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: clean } }));
+      }
     };
     if (window.__AVERIA_APP__) window.__AVERIA_APP__.navigate = navigateFn;
     if (window.__AVERIA_ROUTER__) window.__AVERIA_ROUTER__.navigate = navigateFn;
-    // Expose bootMount for vanilla watchdog
     window.__averia_boot__ = bootMount;
-    if (window.ReactDOM && window.ReactDOM.createRoot && window.React) {
-      if (!window.__averia_react_root__) {
-        container.innerHTML = '';
-        window.__averia_react_root__ = window.ReactDOM.createRoot(container);
+
+    if (window.ReactDOM && window.React) {
+      if (window.ReactDOM.createRoot) {
+        if (!window.__averia_react_root__) {
+          window.__averia_react_root__ = window.ReactDOM.createRoot(container);
+        }
+        window.__averia_react_root__.render(<UniversalDynamicRouter />);
+      } else if (window.ReactDOM.render) {
+        window.ReactDOM.render(<UniversalDynamicRouter />, container);
       }
-      window.__averia_react_root__.render(<UniversalFallbackRouter />);
     }
   }
 
   bootMount();
   setTimeout(bootMount, 60);
-  setTimeout(bootMount, 250);
-  setTimeout(bootMount, 600);
-  setTimeout(bootMount, 1200);
+  setTimeout(bootMount, 200);
+  setTimeout(bootMount, 500);
+  setTimeout(bootMount, 1000);
+  window.addEventListener('load', bootMount);
 })();
 </script>`;
 }
@@ -1033,6 +837,9 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
       doc = '<div id="app" class="w-full min-h-screen"></div>\n' + doc;
     }
   }
+
+  // 2a. Strip any static placeholder text trapped inside #app or #root (such as "Initializing Averia Neural Matrix...")
+  doc = doc.replace(/(<(?:main|div)[^>]*id=["'](?:app|root)["'][^>]*>)[\s\S]*?(<\/(?:main|div)>)/gi, '$1$2');
 
   // 2b. Ensure dark canvas body classes for consistent high-contrast preview
   if (doc.includes('<body')) {
@@ -1116,9 +923,11 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
 })();
 </script>\n`;
 
-  // 4. React Globals & Universal Icon Component Bridge
+  // 4. React Globals & Universal Icon Component Bridge & Route Resolver
   const reactGlobalsAndIconPreambleScript = `<script>
 (function() {
+  window.__AVERIA_PAGES__ = window.__AVERIA_PAGES__ || {};
+  window.AppPages = window.AppPages || window.__AVERIA_PAGES__;
   window.__AVERIA_EXPORTS__ = window.__AVERIA_EXPORTS__ || {};
 
   function bindReactGlobals() {
@@ -1138,6 +947,144 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
   if (document.readyState === 'loading') {
     window.addEventListener('DOMContentLoaded', bindReactGlobals);
   }
+
+  // Universal Route Component Resolver (Zero Blank <main> Body Guarantee)
+  window.__RESOLVE_ROUTE_COMPONENT__ = function(route) {
+    var pages = window.__AVERIA_PAGES__ || {};
+    var appPages = window.AppPages || {};
+    var exp = window.__AVERIA_EXPORTS__ || {};
+
+    function isValid(c) {
+      return c && (typeof c === 'function' || (typeof c === 'object' && c !== null));
+    }
+
+    function get(name) {
+      if (!name) return null;
+      if (isValid(pages[name])) return pages[name];
+      if (isValid(appPages[name])) return appPages[name];
+      if (isValid(window[name])) return window[name];
+      if (isValid(exp[name])) return exp[name];
+      return null;
+    }
+
+    var raw = String(route || '/').trim();
+    if (raw.startsWith('#/')) raw = raw.slice(1);
+    else if (raw.startsWith('#')) raw = raw === '#' ? '/' : '/' + raw.slice(1);
+    if (!raw.startsWith('/')) raw = '/' + raw;
+    var path = raw.split('?')[0].split('#')[0].toLowerCase();
+    if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
+    var seg = path.replace(/^\\/+/, '');
+    var mainSeg = seg.split('/')[0] || '';
+
+    // 1. Root / Home route
+    if (path === '/' || path === '/home' || !seg) {
+      var home = get('HomePage') || get('Home') || get('MainPage') || get('MainView') || get('App');
+      if (isValid(home)) return home;
+    }
+
+    // 2. Direct name matches (case variations)
+    if (mainSeg) {
+      var cap = mainSeg.charAt(0).toUpperCase() + mainSeg.slice(1);
+      var candidates = [
+        mainSeg,
+        cap,
+        cap + 'Page',
+        cap + 'View',
+        cap + 'Screen',
+        mainSeg + 'Page',
+        mainSeg + 'View',
+        mainSeg + 'Screen'
+      ];
+      for (var i = 0; i < candidates.length; i++) {
+        var comp = get(candidates[i]);
+        if (isValid(comp)) return comp;
+      }
+    }
+
+    // 3. Domain route aliases
+    var ALIASES = {
+      play: ['PlayPage', 'GamePage', 'ArcadePage', 'CanvasPage', 'HomePage', 'GameView'],
+      game: ['GamePage', 'PlayPage', 'ArcadePage', 'CanvasPage', 'HomePage', 'GameView'],
+      arcade: ['ArcadePage', 'GamePage', 'PlayPage', 'HomePage'],
+      score: ['LeaderboardPage', 'ScoresPage', 'HighScoresPage', 'StatsPage'],
+      scores: ['LeaderboardPage', 'ScoresPage', 'HighScoresPage', 'StatsPage'],
+      leaderboard: ['LeaderboardPage', 'ScoresPage', 'RankingsPage', 'Leaderboard'],
+      explore: ['ExplorePage', 'DiscoverPage', 'CatalogPage', 'ShopPage', 'BrowsePage', 'ProductsPage'],
+      shop: ['ShopPage', 'CatalogPage', 'ProductsPage', 'StorePage', 'ExplorePage'],
+      catalog: ['CatalogPage', 'ShopPage', 'ProductsPage', 'StorePage', 'ExplorePage'],
+      product: ['ProductDetailPage', 'ProductPage', 'DetailsPage', 'ItemDetailPage', 'ShopPage'],
+      products: ['ProductsPage', 'ShopPage', 'CatalogPage', 'ExplorePage'],
+      detail: ['ProductDetailPage', 'DetailsPage', 'DetailPage', 'ItemDetailPage'],
+      cart: ['CartPage', 'CheckoutPage', 'BasketPage', 'CartView', 'Cart'],
+      checkout: ['CheckoutPage', 'PaymentPage', 'OrderPage', 'CartPage'],
+      order: ['OrdersPage', 'OrderHistoryPage', 'OrderPage', 'TrackingPage'],
+      orders: ['OrdersPage', 'OrderHistoryPage', 'OrderPage', 'TrackingPage'],
+      track: ['TrackingPage', 'OrdersPage', 'OrderPage'],
+      wishlist: ['WishlistPage', 'FavoritesPage', 'SavedPage'],
+      favorites: ['FavoritesPage', 'WishlistPage'],
+      admin: ['AdminDashboard', 'AdminPage', 'Dashboard', 'AnalyticsPage'],
+      dashboard: ['Dashboard', 'AdminDashboard', 'AnalyticsPage', 'OverviewPage'],
+      analytics: ['AnalyticsPage', 'AdminDashboard', 'StatsPage', 'MetricsPage'],
+      settings: ['SettingsPage', 'PreferencesPage', 'ConfigPage', 'SettingsView', 'Settings'],
+      profile: ['ProfilePage', 'AccountPage', 'UserProfilePage', 'SettingsPage'],
+      account: ['AccountPage', 'ProfilePage', 'SettingsPage'],
+      about: ['AboutPage', 'InfoPage'],
+      help: ['HelpPage', 'SupportPage', 'FaqPage']
+    };
+
+    if (mainSeg && ALIASES[mainSeg]) {
+      var arr = ALIASES[mainSeg];
+      for (var j = 0; j < arr.length; j++) {
+        var aComp = get(arr[j]);
+        if (isValid(aComp)) return aComp;
+      }
+    }
+
+    // 4. Fuzzy match across all exported React components
+    var allKeys = Object.keys(pages).concat(Object.keys(appPages)).concat(Object.keys(exp));
+    for (var k = 0; k < allKeys.length; k++) {
+      var kLower = allKeys[k].toLowerCase();
+      if (mainSeg && (kLower.includes(mainSeg) || mainSeg.includes(kLower.replace(/(page|view|screen)$/, '')))) {
+        var fComp = get(allKeys[k]);
+        if (isValid(fComp)) return fComp;
+      }
+    }
+
+    // 5. Fallback to HomePage
+    var fallbackHome = get('HomePage') || get('Home') || window.HomePage;
+    if (isValid(fallbackHome)) return fallbackHome;
+
+    // 6. Fallback to any exported React component
+    for (var m = 0; m < allKeys.length; m++) {
+      var anyComp = get(allKeys[m]);
+      if (isValid(anyComp) && typeof anyComp === 'function' && /^[A-Z]/.test(allKeys[m])) {
+        return anyComp;
+      }
+    }
+
+    return null;
+  };
+
+  // Universal Navigation Interceptor & Route Broadcaster
+  window.__AVERIA_NAVIGATE__ = function(route, params) {
+    var clean = String(route || '/').trim();
+    if (clean.startsWith('#/')) clean = clean.slice(1);
+    else if (clean.startsWith('#')) clean = clean === '#' ? '/' : '/' + clean.slice(1);
+    if (!clean.startsWith('/')) clean = '/' + clean;
+
+    var targetHash = '#' + clean;
+    if (window.location.hash !== targetHash) {
+      try { window.location.hash = targetHash; } catch (_) {}
+    }
+
+    window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: clean, params: params } }));
+    window.dispatchEvent(new CustomEvent('hashchange'));
+    window.dispatchEvent(new CustomEvent('popstate'));
+
+    if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.render === 'function') {
+      try { window.__AVERIA_APP__.render(clean, params); } catch (_) {}
+    }
+  };
 
   var ICON_MAP = {
     shoppingcart: 'fa-cart-shopping',
@@ -1193,7 +1140,11 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     barchart2: 'fa-chart-column',
     barchart3: 'fa-chart-line',
     trendingup: 'fa-arrow-trend-up',
-    trendingdown: 'fa-arrow-trend-down'
+    trendingdown: 'fa-arrow-trend-down',
+    gamepad: 'fa-gamepad',
+    trophy: 'fa-trophy',
+    crown: 'fa-crown',
+    compass: 'fa-compass'
   };
 
   function createUniversalIcon(iconName) {
@@ -1229,7 +1180,8 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     'MoreVertical', 'Navigation', 'Play', 'Power', 'Printer', 'Radio', 'RotateCcw', 'Send',
     'Server', 'Share', 'Shuffle', 'Smartphone', 'Sun', 'Tablet', 'ThumbsUp', 'ThumbsDown',
     'Tool', 'Tv', 'Video', 'Volume2', 'Wifi', 'XCircle', 'CheckSquare', 'Square', 'Circle',
-    'MinusCircle', 'PlusCircle', 'LockKeyhole', 'UserCheck', 'Loader', 'Loader2', 'Refresh'
+    'MinusCircle', 'PlusCircle', 'LockKeyhole', 'UserCheck', 'Loader', 'Loader2', 'Refresh',
+    'Gamepad', 'Trophy', 'Crown'
   ];
 
   commonIcons.forEach(function(icon) {
@@ -1298,16 +1250,12 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
       var target = normalizeRoute(path);
       _currentRoute = target;
 
-      window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: target, params: params } }));
-      window.dispatchEvent(new CustomEvent('popstate'));
-
-      try {
-        window.parent.postMessage({
-          type: 'AVERIA_ROUTE_UPDATE',
-          route: target,
-          allRoutes: Object.keys(_routes)
-        }, '*');
-      } catch (_) {}
+      if (typeof window.__AVERIA_NAVIGATE__ === 'function') {
+        window.__AVERIA_NAVIGATE__(target, params);
+      } else {
+        window.dispatchEvent(new CustomEvent('averia:navigate', { detail: { route: target, params: params } }));
+        window.dispatchEvent(new CustomEvent('popstate'));
+      }
 
       app.render(target, params);
 
@@ -1323,72 +1271,18 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     render: function(route, params) {
       var r = normalizeRoute(route || _currentRoute);
       var container = document.getElementById('app') || document.getElementById('root');
-      if (!container) {
-        container = document.createElement('div');
-        container.id = 'app';
-        container.className = 'w-full min-h-screen';
-        if (document.body) {
-          document.body.prepend(container);
-        } else if (document.documentElement) {
-          document.documentElement.appendChild(container);
-        }
+      if (!container) return;
+
+      // 1. Resolve component via smart universal resolver
+      var renderComp = _routes[r];
+      if (!renderComp && typeof window.__RESOLVE_ROUTE_COMPONENT__ === 'function') {
+        renderComp = window.__RESOLVE_ROUTE_COMPONENT__(r);
+      }
+      if (!renderComp) {
+        renderComp = (r === '/' || r === '/home') ? (window.HomePage || window.DefaultExport) : null;
       }
 
-      // 1. Matched route function
-      var renderFn = _routes[r];
-
-      // 2. Fallbacks for root/home
-      if (!renderFn && (r === '/' || r === '/home')) {
-        if (_routes['/']) renderFn = _routes['/'];
-        else if (_routes['/home']) renderFn = _routes['/home'];
-        else if (window.HomePage && typeof window.HomePage.render === 'function') {
-          renderFn = function() { window.HomePage.render(params); };
-        } else if (window.HomePage && typeof window.HomePage === 'function') {
-          renderFn = window.HomePage;
-        } else if (window.AppPages && window.AppPages.ShopPage) {
-          renderFn = window.AppPages.ShopPage;
-        } else if (window.AppPages && typeof window.AppPages.renderCatalog === 'function') {
-          renderFn = function() { window.AppPages.renderCatalog(params); };
-        }
-      }
-
-      // 3. Fallback to subpages if available
-      if (!renderFn && window.AppPages) {
-        var subName = r.replace(/^\//, '').toLowerCase();
-        if (typeof window.AppPages['render' + subName.charAt(0).toUpperCase() + subName.slice(1)] === 'function') {
-          renderFn = function() { window.AppPages['render' + subName.charAt(0).toUpperCase() + subName.slice(1)](params); };
-        } else if ((subName === 'catalog' || subName === 'shop' || subName === 'products') && window.AppPages.ShopPage) {
-          renderFn = window.AppPages.ShopPage;
-        } else if (subName === 'catalog' && typeof window.AppPages.renderCatalog === 'function') {
-          renderFn = function() { window.AppPages.renderCatalog(params); };
-        } else if (subName === 'cart' && window.AppPages.CartPage) {
-          renderFn = window.AppPages.CartPage;
-        } else if (subName === 'cart' && typeof window.AppPages.renderCart === 'function') {
-          renderFn = function() { window.AppPages.renderCart(params); };
-        } else if (subName === 'detail' && window.AppPages.ProductDetailPage) {
-          renderFn = window.AppPages.ProductDetailPage;
-        } else if (subName === 'detail' && typeof window.AppPages.renderDetail === 'function') {
-          renderFn = function() { window.AppPages.renderDetail(params); };
-        } else if ((subName === 'orders' || subName === 'order') && window.AppPages.OrdersPage) {
-          renderFn = window.AppPages.OrdersPage;
-        } else if (subName === 'orders' && typeof window.AppPages.renderOrders === 'function') {
-          renderFn = function() { window.AppPages.renderOrders(params); };
-        } else if (subName === 'checkout' && window.AppPages.CheckoutPage) {
-          renderFn = window.AppPages.CheckoutPage;
-        } else if (subName === 'checkout' && typeof window.AppPages.renderCheckout === 'function') {
-          renderFn = function() { window.AppPages.renderCheckout(params); };
-        } else if ((subName === 'admin' || subName === 'dashboard') && window.AppPages.AdminDashboard) {
-          renderFn = window.AppPages.AdminDashboard;
-        } else if (subName === 'admin' && typeof window.AppPages.renderAdmin === 'function') {
-          renderFn = function() { window.AppPages.renderAdmin(params); };
-        } else if (subName === 'settings' && typeof window.AppPages.renderSettings === 'function') {
-          renderFn = function() { window.AppPages.renderSettings(params); };
-        } else if (subName === 'about' && typeof window.AppPages.renderAbout === 'function') {
-          renderFn = function() { window.AppPages.renderAbout(params); };
-        }
-      }
-
-      // 4. Fallback DOM sections with [data-route], [data-page], .page-view
+      // 2. Fallback DOM sections with [data-route], [data-page], .page-view
       var domViews = document.querySelectorAll('[data-route], [data-page], .page-view');
       if (domViews.length > 0) {
         var anyMatched = false;
@@ -1406,11 +1300,12 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
         if (anyMatched) return;
       }
 
-      if (typeof renderFn === 'function') {
+      if (renderComp) {
         try {
+          container.innerHTML = '';
           if (typeof window.ReactDOM !== 'undefined' && typeof window.React !== 'undefined' && window.ReactDOM.createRoot) {
             try {
-              var reactElem = window.React.createElement(renderFn, params || {});
+              var reactElem = window.React.createElement(renderComp, params || {});
               if (!window.__averia_react_root__) {
                 window.__averia_react_root__ = window.ReactDOM.createRoot(container);
               }
@@ -1420,7 +1315,7 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
               console.warn('[AveriaApp React createRoot failed, trying direct invoke]:', rErr);
             }
           }
-          renderFn(params);
+          if (typeof renderComp === 'function') renderComp(params);
         } catch (renderErr) {
           console.error('[AveriaApp Render Error on ' + r + ']:', renderErr);
         }
@@ -1428,49 +1323,6 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
     },
 
     mount: function() {
-      // Auto-register any modules attached to window
-      if (window.HomePage) {
-        if (typeof window.HomePage.render === 'function') {
-          app.route('/', function(p) { window.HomePage.render(p); });
-        } else if (typeof window.HomePage === 'function') {
-          app.route('/', window.HomePage);
-        }
-      }
-      if (window.AppPages) {
-        var ap = window.AppPages;
-        if (ap.ShopPage) {
-          app.route('/shop', ap.ShopPage);
-          app.route('/catalog', ap.ShopPage);
-          app.route('/products', ap.ShopPage);
-        }
-        if (ap.ProductDetailPage) app.route('/product', ap.ProductDetailPage);
-        if (ap.CartPage) app.route('/cart', ap.CartPage);
-        if (ap.CheckoutPage) app.route('/checkout', ap.CheckoutPage);
-        if (ap.OrdersPage) {
-          app.route('/orders', ap.OrdersPage);
-          app.route('/order', ap.OrdersPage);
-        }
-        if (ap.WishlistPage) app.route('/wishlist', ap.WishlistPage);
-        if (ap.AdminDashboard) {
-          app.route('/admin', ap.AdminDashboard);
-          app.route('/dashboard', ap.AdminDashboard);
-        }
-        if (typeof ap.renderCatalog === 'function') app.route('/catalog', function(p) { ap.renderCatalog(p); });
-        if (typeof ap.renderDetail === 'function') app.route('/detail', function(p) { ap.renderDetail(p); });
-        if (typeof ap.renderCart === 'function') app.route('/cart', function(p) { ap.renderCart(p); });
-        if (typeof ap.renderOrders === 'function') app.route('/orders', function(p) { ap.renderOrders(p); });
-        if (typeof ap.renderCheckout === 'function') app.route('/checkout', function(p) { ap.renderCheckout(p); });
-        if (typeof ap.renderAdmin === 'function') app.route('/admin', function(p) { ap.renderAdmin(p); });
-        if (typeof ap.renderSettings === 'function') app.route('/settings', function(p) { ap.renderSettings(p); });
-        if (typeof ap.renderAbout === 'function') app.route('/about', function(p) { ap.renderAbout(p); });
-
-        // If no root route registered yet, default to ShopPage or renderCatalog
-        if (!_routes['/']) {
-          if (ap.ShopPage) app.route('/', ap.ShopPage);
-          else if (typeof ap.renderCatalog === 'function') app.route('/', function(p) { ap.renderCatalog(p); });
-        }
-      }
-
       var initial = (window.location.hash ? normalizeRoute(window.location.hash) : '/');
       app.navigate(initial);
       _mounted = true;
@@ -1507,7 +1359,7 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
 })();
 </script>\n`;
 
-  // 5. Safe Hash & Link Navigation Interceptor (Capture Phase)
+  // 5. Global Link, Card, Tab, and Button Click Interceptor (Capture Phase)
   const hashAndLinkInterceptorScript = `<script>
 (function() {
   function normalizeRoute(href) {
@@ -1521,15 +1373,17 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
 
   document.addEventListener('click', function(e) {
     var target = e.target;
-    var el = target && typeof target.closest === 'function' ? target.closest('a, button, [data-route], [data-page], [onclick*="navigate"]') : null;
+    var el = target && typeof target.closest === 'function'
+      ? target.closest('a, button, [data-route], [data-page], [data-nav], [data-tab], [onclick*="navigate"]')
+      : null;
     if (!el) return;
 
-    var route = el.getAttribute('data-route') || el.getAttribute('data-page');
+    var route = el.getAttribute('data-route') || el.getAttribute('data-page') || el.getAttribute('data-nav') || el.getAttribute('data-tab');
 
     if (!route && el.tagName === 'A') {
       var href = el.getAttribute('href');
       if (href) {
-        if (/^(https?:|\/\/|mailto:|tel:|javascript:)/i.test(href)) {
+        if (/^(https?:|\\/\\/|mailto:|tel:|javascript:)/i.test(href)) {
           if (el.getAttribute('target') !== '_blank') {
             el.setAttribute('target', '_blank');
             el.setAttribute('rel', 'noopener noreferrer');
@@ -1542,32 +1396,37 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
 
     if (!route) {
       var onclickAttr = el.getAttribute('onclick') || '';
-      var m = onclickAttr.match(/navigate\(['"]([^'"]+)['"]\)/);
+      var m = onclickAttr.match(/navigate\\(['"]([^'"]+)['"]\\)/);
       if (m) {
         route = normalizeRoute(m[1]);
-      } else {
-        var text = (el.innerText || el.textContent || '').trim().toLowerCase();
-        if (text === 'home' || text.startsWith('home ')) route = '/';
-        else if (text.includes('catalog') || text.includes('product') || text.includes('shop') || text.includes('browse')) route = '/catalog';
-        else if (text.includes('cart')) route = '/cart';
-        else if (text.includes('checkout')) route = '/checkout';
-        else if (text.includes('order')) route = '/orders';
-        else if (text.includes('wishlist')) route = '/wishlist';
-        else if (text.includes('admin') || text.includes('dashboard')) route = '/admin';
       }
+    }
+
+    if (!route) {
+      var text = (el.innerText || el.textContent || '').trim().toLowerCase();
+      var cleanText = text.replace(/[^a-z0-9 ]/g, ' ').replace(/\\s+/g, ' ').trim();
+      if (cleanText === 'home' || cleanText.startsWith('home ')) route = '/';
+      else if (cleanText.includes('play') || cleanText.includes('game') || cleanText.includes('start game') || cleanText.includes('arcade')) route = '/play';
+      else if (cleanText.includes('leaderboard') || cleanText.includes('high score') || cleanText.includes('scores') || cleanText.includes('rankings')) route = '/leaderboard';
+      else if (cleanText.includes('explore') || cleanText.includes('discover') || cleanText.includes('catalog') || cleanText.includes('shop') || cleanText.includes('browse') || cleanText.includes('menu')) route = '/explore';
+      else if (cleanText.includes('cart') || cleanText.includes('basket') || cleanText.includes('bag')) route = '/cart';
+      else if (cleanText.includes('checkout') || cleanText.includes('pay now') || cleanText.includes('place order')) route = '/checkout';
+      else if (cleanText.includes('order') || cleanText.includes('orders') || cleanText.includes('my orders') || cleanText.includes('track')) route = '/orders';
+      else if (cleanText.includes('wishlist') || cleanText.includes('favorite') || cleanText.includes('saved')) route = '/wishlist';
+      else if (cleanText.includes('dashboard') || cleanText.includes('analytics') || cleanText.includes('metrics') || cleanText.includes('admin')) route = '/dashboard';
+      else if (cleanText.includes('settings') || cleanText.includes('preference') || cleanText.includes('config')) route = '/settings';
+      else if (cleanText.includes('profile') || cleanText.includes('account') || cleanText.includes('my account')) route = '/profile';
+      else if (cleanText.includes('back') || cleanText.includes('return')) route = '/';
     }
 
     if (route) {
       e.preventDefault();
       e.stopPropagation();
-      if (window.location) {
+      if (typeof window.__AVERIA_NAVIGATE__ === 'function') {
+        window.__AVERIA_NAVIGATE__(route);
+      } else {
         var cleanTarget = route === '/' ? '' : (route.startsWith('/') ? '#' + route : '#/' + route);
         window.location.hash = cleanTarget;
-      }
-      if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.navigate === 'function') {
-        window.__AVERIA_APP__.navigate(route);
-      } else if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
-        window.__AVERIA_ROUTER__.navigate(route);
       }
     }
   }, true);
@@ -1577,10 +1436,8 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
   history.pushState = function(state, title, url) {
     if (typeof url === 'string') {
       var r = normalizeRoute(url.replace(/^about:srcdoc/i, ''));
-      if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.navigate === 'function') {
-        window.__AVERIA_APP__.navigate(r);
-      } else if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
-        window.__AVERIA_ROUTER__.navigate(r);
+      if (typeof window.__AVERIA_NAVIGATE__ === 'function') {
+        window.__AVERIA_NAVIGATE__(r);
       }
       return;
     }
@@ -1589,26 +1446,18 @@ function bundleZeroCORSHtml(htmlContent: string, allFiles: ParsedProjectFile[] =
   history.replaceState = function(state, title, url) {
     if (typeof url === 'string') {
       var r = normalizeRoute(url.replace(/^about:srcdoc/i, ''));
-      if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.navigate === 'function') {
-        window.__AVERIA_APP__.navigate(r);
-      } else if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
-        window.__AVERIA_ROUTER__.navigate(r);
+      if (typeof window.__AVERIA_NAVIGATE__ === 'function') {
+        window.__AVERIA_NAVIGATE__(r);
       }
       return;
     }
     try { origReplace.apply(history, arguments); } catch (_) {}
   };
 
-  window.addEventListener('hashchange', function(e) {
-    e.preventDefault();
+  window.addEventListener('hashchange', function() {
     var h = window.location.hash || '';
-    if (h) {
-      var r = normalizeRoute(h);
-      if (window.__AVERIA_APP__ && typeof window.__AVERIA_APP__.navigate === 'function') {
-        window.__AVERIA_APP__.navigate(r);
-      } else if (window.__AVERIA_ROUTER__ && typeof window.__AVERIA_ROUTER__.navigate === 'function') {
-        window.__AVERIA_ROUTER__.navigate(r);
-      }
+    if (h && typeof window.__AVERIA_NAVIGATE__ === 'function') {
+      window.__AVERIA_NAVIGATE__(normalizeRoute(h));
     }
   });
 })();
@@ -1877,11 +1726,11 @@ button:active {
     const getTopologicalRank = (p: string) => {
       const lower = p.toLowerCase();
       if (lower.includes('datasdk') || lower.includes('data') || lower.includes('store') || lower.includes('sdk')) return 0;
-      if (lower.includes('ui.') || lower.includes('components/ui') || lower.includes('/ui/') || lower.includes('components')) return 1;
-      if (lower.includes('engine') || lower.includes('calculator') || lower.includes('analytics') || lower.includes('logic')) return 2;
-      if (lower.includes('router')) return 3;
-      if (lower.includes('homepage') || lower.includes('home')) return 4;
-      if (lower.includes('apppages') || lower.includes('page') || lower.includes('view')) return 5;
+      if (lower.includes('engine') || lower.includes('calculator') || lower.includes('analytics') || lower.includes('logic')) return 1;
+      if (lower.includes('ui.') || lower.includes('components/ui') || lower.includes('/ui/') || lower.includes('components')) return 2;
+      if (lower.includes('homepage') || lower.includes('home')) return 3;
+      if (lower.includes('apppages') || lower.includes('page') || lower.includes('view')) return 4;
+      if (lower.includes('router') || lower.includes('route') || lower.includes('nav')) return 5;
       if (lower.includes('qaguard') || lower.includes('guard') || lower.includes('qa')) return 6;
       return 7;
     };
@@ -2586,11 +2435,11 @@ TOPOLOGICAL LOAD ORDER IN index.html:
 2. React & ReactDOM (<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>)
 3. Babel Standalone (<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>)
 4. src/lib/dataSdk.ts
-5. src/components/ui.tsx
-6. src/lib/engine.ts
-7. src/router.tsx
-8. src/pages/HomePage.tsx
-9. src/pages/AppPages.tsx
+5. src/lib/engine.ts
+6. src/components/ui.tsx
+7. src/pages/HomePage.tsx
+8. src/pages/AppPages.tsx
+9. src/router.tsx
 10. src/lib/qaGuard.ts
 ==========================================================`;
 }
@@ -3803,7 +3652,15 @@ export default function AveriaAI() {
     }
 
     const currentAttachments = customPrompt ? [] : attachments;
-    const intent = classifyUserIntent(textContent, currentAttachments);
+    let intent = classifyUserIntent(textContent, currentAttachments);
+
+    // In Genesis mode: ensure any prompt asking to create/build/generate/make an app, assistant,
+    // SaaS, platform, website, or game (including typos) routes directly to 'build_app'
+    // without asking clarifying text questions first.
+    const isPureGreeting = /^(hi|hello|hey|sup|greetings|namaste|good\s*(morning|afternoon|evening)|help|who are you)[\s!.]*$/i.test((textContent || '').trim());
+    if (selectedModel === 'genesis' && !isPureGreeting && intent !== 'verify_news' && intent !== 'generate_media') {
+      intent = 'build_app';
+    }
     setActiveIntent(intent);
 
     const userMsg: Message = { role: 'user', content: textContent || '(forensic analysis request)', attachments: currentAttachments, intent };
@@ -4491,6 +4348,12 @@ export default function AveriaAI() {
                   if (healedContent && healedContent.trim().length > 50) {
                     file.content = healedContent;
                     filesMap.set(file.path, file);
+                    const rebundled = bundleZeroCORSHtml(indexFile.content, allFiles);
+                    setCanvasContent(rebundled);
+                    if (localFolderHandle && folderPermissionGranted) {
+                      writeFileToHandle(localFolderHandle, 'index.html', rebundled).catch(() => {});
+                      writeFileToHandle(localFolderHandle, file.path, healedContent).catch(() => {});
+                    }
                     setCollaborationLogs(prev => [
                       ...prev,
                       {
@@ -4652,6 +4515,12 @@ export default function AveriaAI() {
                             await writeFileToHandle(localFolderHandle, f.path, bundled);
                           } else {
                             await writeFileToHandle(localFolderHandle, f.path, f.content);
+                            // Whenever a companion code file closes, refresh bundled index.html on disk
+                            const idxFile = newlyParsed.find(item => /^(?:public\/|src\/)?index\.html$/i.test(item.path) || item.path.endsWith('.html'));
+                            if (idxFile) {
+                              const refreshedBundle = bundleZeroCORSHtml(idxFile.content, newlyParsed);
+                              await writeFileToHandle(localFolderHandle, 'index.html', refreshedBundle);
+                            }
                           }
                           setWrittenFiles(prev => Array.from(new Set([...prev, f.path])));
                           setDiskStatus(`Saved ${incrementallyWrittenFiles.size} files to ${localFolderName || 'folder'}`);

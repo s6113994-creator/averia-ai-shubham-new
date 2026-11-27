@@ -662,12 +662,12 @@ YOUR MANDATE: Generate the modern responsive HTML5 shell, CSS design system, reu
 MANDATORY RULES:
 - Output every file using: ===FILE: <path>=== followed by complete code.
 - ZERO external npm imports (use React globally from window.React, and use FontAwesome icons).
-- Navigation links/buttons MUST use both onclick="if(window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/...');" and href="#/..." for dual routing.
+- Navigation links/buttons MUST use both onclick="if(window.__AVERIA_NAVIGATE__) window.__AVERIA_NAVIGATE__('/...'); else if(window.__AVERIA_APP__) window.__AVERIA_APP__.navigate('/...');" and href="#/..." for dual routing.
 - Generate EXACTLY these 4 complete production files:
-  1. index.html (Responsive HTML5 shell with brand navbar, main viewport <main id="app">, modal-root, toast-container, and script manifest)
+  1. index.html (Responsive HTML5 shell with brand navbar, main viewport <main id="app" class="flex-1 w-full min-h-screen"></main> with ZERO static placeholder text inside so React mounts cleanly, modal-root, toast-container, and script manifest)
   2. src/styles.css (Modern CSS tokens, animations, custom scrollbars, and dark theme utility styles)
-  3. src/components/ui.tsx (Reusable Button, Card, Modal, Input, Badge, Tabs attached to window.UI)
-  4. src/router.tsx (Complete nested client router supporting /, /catalog or /game, /details, /settings, /admin)
+  3. src/components/ui.tsx (Reusable Button, Card, Modal, Input, Badge, Tabs attached to window.UI and window: window.Button = Button; window.Card = Card; window.Modal = Modal; window.Input = Input;)
+  4. src/router.tsx (Complete client router that ALWAYS resolves pages via window.HomePage, window.AppPages, and window.__RESOLVE_ROUTE_COMPONENT__ instead of unbundled ESM imports. Mounts cleanly to document.getElementById('app') and listens to 'hashchange' and 'averia:navigate')
 
 SHARED CONTRACT:
 ${contract}
@@ -688,8 +688,8 @@ MANDATORY RULES:
 - Output every file using: ===FILE: <path>=== followed by complete code.
 - ZERO external npm imports. Use window.React, window.ReactDOM, and window.LocalDB.
 - Generate EXACTLY these 3 complete production files:
-  1. src/pages/HomePage.tsx (Primary interactive view: ${isGame ? 'Playable HTML5 Canvas Game' : 'Hero banner, domain data grid/dashboard, search, filter tabs, interactive detail modal'}. Includes HomePage.render mount helper)
-  2. src/pages/AppPages.tsx (Secondary multi-page views: DetailsPage, SettingsPage, AnalyticsPage, AdminDashboard)
+  1. src/pages/HomePage.tsx (Primary interactive view: ${isGame ? 'Playable HTML5 Canvas Game' : 'Hero banner, domain data grid/dashboard, search, filter tabs, interactive detail modal'}. ALWAYS attaches window.HomePage = HomePage; window.__AVERIA_PAGES__ = window.__AVERIA_PAGES__ || {}; window.__AVERIA_PAGES__.HomePage = HomePage; window.__AVERIA_PAGES__['/'] = HomePage; export default HomePage; Renders COMPLETE, rich domain content with buttons calling window.__AVERIA_NAVIGATE__('/...'))
+  2. src/pages/AppPages.tsx (Secondary multi-page views matching domain: e.g. ExplorePage, CartPage, OrdersPage, SettingsPage, LeaderboardPage, PlayPage, AdminDashboard. ALWAYS attaches EVERY inner page component both individually: window.ExplorePage = ...; window.CartPage = ...; AND as window.AppPages = { ... }; AND registers on window.__AVERIA_PAGES__. Includes full interactive state, forms, lists, modals, and window.__AVERIA_NAVIGATE__('/...') on every button/link)
   3. src/lib/qaGuard.ts (Runtime security guard: sanitizeHTML, safeJSONParse, showToast, runHealthCheck)
 
 SHARED CONTRACT:
@@ -1790,22 +1790,34 @@ class AveriaRouter {
   private routes: Record<string, any> = {};
 
   route(path: string, component: any) {
-    this.routes[path.toLowerCase()] = component;
+    if (path && component) this.routes[path.toLowerCase()] = component;
   }
 
   navigate(path: string) {
-    const clean = path.startsWith('#') ? path : '#/' + path.replace(/^\/+/, '');
-    window.location.hash = clean;
-    this.mount();
+    if (typeof window !== 'undefined' && typeof (window as any).__AVERIA_NAVIGATE__ === 'function') {
+      (window as any).__AVERIA_NAVIGATE__(path);
+    } else {
+      const clean = path.startsWith('#') ? path : '#/' + path.replace(/^\\/+/, '');
+      window.location.hash = clean;
+      this.mount();
+    }
   }
 
   mount() {
-    const raw = (window.location.hash || '#/').replace(/^#\/?/, '').toLowerCase();
+    const raw = (window.location.hash || '#/').replace(/^#\\/?/, '').toLowerCase();
     const clean = '/' + (raw.split('?')[0] || '');
-    const comp = this.routes[clean] || this.routes['/'] || (window as any).HomePage;
-    const container = document.getElementById('app');
+    
+    // Resolve dynamically via universal route component resolver
+    let comp = null;
+    if (typeof (window as any).__RESOLVE_ROUTE_COMPONENT__ === 'function') {
+      comp = (window as any).__RESOLVE_ROUTE_COMPONENT__(clean);
+    }
+    if (!comp) comp = this.routes[clean] || this.routes['/'] || (window as any).HomePage;
+    
+    const container = document.getElementById('app') || document.getElementById('root');
     if (!container || !comp) return;
 
+    container.innerHTML = '';
     if (comp.render && typeof comp.render === 'function') {
       comp.render();
     } else if (window.ReactDOM && (window.ReactDOM as any).createRoot) {
@@ -1813,6 +1825,8 @@ class AveriaRouter {
         (window as any).__router_root__ = (window.ReactDOM as any).createRoot(container);
       }
       (window as any).__router_root__.render(React.createElement(comp));
+    } else if (window.ReactDOM && (window.ReactDOM as any).render) {
+      (window as any).ReactDOM.render(React.createElement(comp), container);
     }
   }
 }
@@ -1822,6 +1836,7 @@ if (typeof window !== 'undefined') {
   (window as any).__AVERIA_APP__ = router;
   (window as any).__AVERIA_ROUTER__ = router;
   window.addEventListener('hashchange', () => router.mount());
+  window.addEventListener('averia:navigate', () => router.mount());
 }
 export default router;`,
   });
@@ -1871,33 +1886,53 @@ export function HomePage() {
     return () => cancelAnimationFrame(animId);
   }, [isPlaying]);
 
+  const nav = (p: string) => {
+    if (typeof (window as any).__AVERIA_NAVIGATE__ === 'function') {
+      (window as any).__AVERIA_NAVIGATE__(p);
+    } else {
+      window.location.hash = '#' + p;
+    }
+  };
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-2xl p-5">
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-900 border border-slate-800 rounded-2xl p-5">
         <div>
           <h1 className="text-2xl font-bold text-white">${title}</h1>
           <p className="text-slate-400 text-xs">Interactive HTML5 Canvas Arcade Experience</p>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <div className="text-right">
-            <span className="text-xs text-slate-400 block">Score</span>
+            <span className="text-[11px] text-slate-400 block">Score</span>
             <span className="text-xl font-bold text-indigo-400">{score}</span>
           </div>
           <button
             onClick={() => { setIsPlaying(!isPlaying); if (!isPlaying) setScore(s => s + 10); }}
-            className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/30"
+            className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg shadow-indigo-600/30 transition"
           >
             {isPlaying ? 'Pause Game' : 'Start Game'}
+          </button>
+          <button
+            onClick={() => nav('/leaderboard')}
+            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition"
+          >
+            Leaderboard
+          </button>
+          <button
+            onClick={() => nav('/settings')}
+            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition"
+          >
+            Settings
           </button>
         </div>
       </div>
 
       <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 flex flex-col items-center justify-center">
         <canvas ref={canvasRef} width={600} height={360} className="rounded-2xl border border-slate-800 bg-slate-950 w-full max-w-2xl aspect-[5/3]" />
-        <div className="mt-4 flex gap-3 text-xs text-slate-400">
-          <span>Use Arrow Keys / Space to control</span>
+        <div className="mt-4 flex flex-wrap justify-center gap-3 text-xs text-slate-400">
+          <span>🎮 Use Arrow Keys / Space to control</span>
           <span>•</span>
-          <span>High Score: {highScore}</span>
+          <span>🏆 High Score: {highScore}</span>
         </div>
       </div>
     </div>
@@ -1905,8 +1940,9 @@ export function HomePage() {
 }
 
 HomePage.render = function() {
-  const container = document.getElementById('app');
+  const container = document.getElementById('app') || document.getElementById('root');
   if (!container) return;
+  container.innerHTML = '';
   if (window.ReactDOM && (window.ReactDOM as any).createRoot) {
     if (!(window as any).__root__) (window as any).__root__ = (window.ReactDOM as any).createRoot(container);
     (window as any).__root__.render(React.createElement(HomePage));
@@ -1915,6 +1951,9 @@ HomePage.render = function() {
 
 if (typeof window !== 'undefined') {
   (window as any).HomePage = HomePage;
+  (window as any).__AVERIA_PAGES__ = (window as any).__AVERIA_PAGES__ || {};
+  (window as any).__AVERIA_PAGES__.HomePage = HomePage;
+  (window as any).__AVERIA_PAGES__['/'] = HomePage;
   if ((window as any).__AVERIA_APP__) (window as any).__AVERIA_APP__.route('/', HomePage);
 }
 export default HomePage;` : `import React, { useState, useEffect } from 'react';
@@ -1927,12 +1966,28 @@ export function HomePage() {
   ]);
   const [search, setSearch] = useState('');
 
+  const nav = (p: string) => {
+    if (typeof (window as any).__AVERIA_NAVIGATE__ === 'function') {
+      (window as any).__AVERIA_NAVIGATE__(p);
+    } else {
+      window.location.hash = '#' + p;
+    }
+  };
+
   const filtered = items.filter(it => it.title.toLowerCase().includes(search.toLowerCase()) || it.category.toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div className="max-w-6xl mx-auto space-y-8">
       <div className="rounded-3xl bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-950 border border-indigo-900/40 p-8 space-y-4">
-        <span className="px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold">⚡ ${title}</span>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <span className="px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold">⚡ ${title}</span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => nav('/explore')} className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition">Explore</button>
+            <button onClick={() => nav('/cart')} className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition">Cart</button>
+            <button onClick={() => nav('/orders')} className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition">Orders</button>
+            <button onClick={() => nav('/settings')} className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition">Settings</button>
+          </div>
+        </div>
         <h1 className="text-3xl md:text-5xl font-extrabold text-white tracking-tight">${title}</h1>
         <p className="text-slate-400 text-sm max-w-xl">${goal}</p>
       </div>
@@ -1957,6 +2012,9 @@ export function HomePage() {
             </div>
             <h3 className="text-lg font-bold text-white">{item.title}</h3>
             <p className="text-slate-400 text-xs">{item.desc}</p>
+            <button onClick={() => nav('/explore')} className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1">
+              Open details &rarr;
+            </button>
           </div>
         ))}
       </div>
@@ -1965,8 +2023,9 @@ export function HomePage() {
 }
 
 HomePage.render = function() {
-  const container = document.getElementById('app');
+  const container = document.getElementById('app') || document.getElementById('root');
   if (!container) return;
+  container.innerHTML = '';
   if (window.ReactDOM && (window.ReactDOM as any).createRoot) {
     if (!(window as any).__root__) (window as any).__root__ = (window.ReactDOM as any).createRoot(container);
     (window as any).__root__.render(React.createElement(HomePage));
@@ -1975,6 +2034,9 @@ HomePage.render = function() {
 
 if (typeof window !== 'undefined') {
   (window as any).HomePage = HomePage;
+  (window as any).__AVERIA_PAGES__ = (window as any).__AVERIA_PAGES__ || {};
+  (window as any).__AVERIA_PAGES__.HomePage = HomePage;
+  (window as any).__AVERIA_PAGES__['/'] = HomePage;
   if ((window as any).__AVERIA_APP__) (window as any).__AVERIA_APP__.route('/', HomePage);
 }
 export default HomePage;`,
@@ -1984,31 +2046,236 @@ export default HomePage;`,
   files.push({
     path: 'src/pages/AppPages.tsx',
     language: 'tsx',
-    content: `import React from 'react';
+    content: isGame ? `import React, { useState } from 'react';
 
-export function SettingsPage() {
+export function LeaderboardPage() {
+  const scores = [
+    { rank: 1, name: 'CyberSnake', score: 2450, date: 'Just now' },
+    { rank: 2, name: 'NeonPulse', score: 1980, date: '10m ago' },
+    { rank: 3, name: 'VectorGhost', score: 1420, date: '1h ago' },
+    { rank: 4, name: 'MatrixPilot', score: 1100, date: '3h ago' }
+  ];
+
+  const nav = (p: string) => {
+    if (typeof (window as any).__AVERIA_NAVIGATE__ === 'function') (window as any).__AVERIA_NAVIGATE__(p);
+    else window.location.hash = '#' + p;
+  };
+
   return (
     <div className="max-w-4xl mx-auto p-6 bg-slate-900 border border-slate-800 rounded-3xl space-y-6">
-      <h2 className="text-2xl font-bold text-white">System Settings</h2>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Arcade Leaderboard</h2>
+          <p className="text-xs text-slate-400 mt-1">Global high scores and rankings</p>
+        </div>
+        <button onClick={() => nav('/play')} className="px-4 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-xs shadow-lg">
+          Play Now
+        </button>
+      </div>
+      <div className="space-y-3">
+        {scores.map(s => (
+          <div key={s.rank} className="p-4 rounded-xl bg-slate-800/60 border border-slate-700 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className={'w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs ' + (s.rank === 1 ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-700 text-slate-300')}>
+                #{s.rank}
+              </span>
+              <span className="font-semibold text-white text-sm">{s.name}</span>
+            </div>
+            <div className="flex items-center gap-4">
+              <span className="font-mono font-bold text-indigo-400 text-sm">{s.score.toLocaleString()} pts</span>
+              <span className="text-[11px] text-slate-400">{s.date}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function PlayPage() {
+  return typeof (window as any).HomePage === 'function' ? React.createElement((window as any).HomePage) : <LeaderboardPage />;
+}
+
+export function SettingsPage() {
+  const [sound, setSound] = useState(true);
+  const [difficulty, setDifficulty] = useState('Normal');
+
+  return (
+    <div className="max-w-4xl mx-auto p-6 bg-slate-900 border border-slate-800 rounded-3xl space-y-6">
+      <h2 className="text-2xl font-bold text-white">Game Preferences</h2>
       <div className="space-y-4 text-xs text-slate-300">
         <div className="flex items-center justify-between p-4 rounded-xl bg-slate-800/60 border border-slate-700">
-          <span>Real-time Telemetry Sync</span>
-          <span className="text-emerald-400 font-semibold">Enabled</span>
+          <div>
+            <span className="font-semibold text-white block">Synthesized Audio Effects</span>
+            <span className="text-slate-400 text-[11px]">Web Audio 60FPS sound effects</span>
+          </div>
+          <button onClick={() => setSound(!sound)} className={'px-3.5 py-1.5 rounded-lg text-xs font-semibold ' + (sound ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-400')}>
+            {sound ? 'Enabled' : 'Muted'}
+          </button>
         </div>
         <div className="flex items-center justify-between p-4 rounded-xl bg-slate-800/60 border border-slate-700">
-          <span>Offline Persistence Engine</span>
-          <span className="text-emerald-400 font-semibold">IndexedDB Active</span>
+          <div>
+            <span className="font-semibold text-white block">Difficulty Level</span>
+            <span className="text-slate-400 text-[11px]">Controls game loop tick rate</span>
+          </div>
+          <select value={difficulty} onChange={e => setDifficulty(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-700 border border-slate-600 text-white text-xs">
+            <option>Easy</option>
+            <option>Normal</option>
+            <option>Hard</option>
+          </select>
         </div>
       </div>
     </div>
   );
 }
 
+const AppPages = { LeaderboardPage, PlayPage, SettingsPage };
 if (typeof window !== 'undefined') {
+  (window as any).LeaderboardPage = LeaderboardPage;
+  (window as any).PlayPage = PlayPage;
   (window as any).SettingsPage = SettingsPage;
-  if ((window as any).__AVERIA_APP__) (window as any).__AVERIA_APP__.route('/settings', SettingsPage);
+  (window as any).AppPages = AppPages;
+  (window as any).__AVERIA_PAGES__ = Object.assign((window as any).__AVERIA_PAGES__ || {}, AppPages);
 }
-export default { SettingsPage };`,
+export default AppPages;` : `import React, { useState } from 'react';
+
+export function ExplorePage() {
+  const catalog = [
+    { id: '1', title: 'Smart Sensor Matrix', category: 'Hardware', price: 149, rating: 4.9 },
+    { id: '2', title: 'Neural Gateway Adapter', category: 'Networking', price: 299, rating: 4.8 },
+    { id: '3', title: 'Quantum Storage Core', category: 'Storage', price: 499, rating: 5.0 },
+    { id: '4', title: 'Optical Interface Hub', category: 'Display', price: 199, rating: 4.7 }
+  ];
+
+  const nav = (p: string) => {
+    if (typeof (window as any).__AVERIA_NAVIGATE__ === 'function') (window as any).__AVERIA_NAVIGATE__(p);
+    else window.location.hash = '#' + p;
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto p-6 space-y-6">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Explore Catalog</h2>
+          <p className="text-xs text-slate-400 mt-1">Discover available items, products, and services</p>
+        </div>
+        <button onClick={() => nav('/cart')} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold shadow-lg">
+          View Cart
+        </button>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        {catalog.map(item => (
+          <div key={item.id} className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3 flex flex-col justify-between shadow-xl">
+            <div>
+              <span className="text-[10px] font-semibold text-indigo-400 bg-indigo-500/10 px-2.5 py-0.5 rounded-full">{item.category}</span>
+              <h3 className="font-semibold text-white text-sm mt-2">{item.title}</h3>
+              <span className="text-xs text-amber-400">★ {item.rating}</span>
+            </div>
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+              <span className="font-bold text-white text-base">\${item.price}</span>
+              <button onClick={() => nav('/cart')} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold">Add</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function CartPage() {
+  const nav = (p: string) => {
+    if (typeof (window as any).__AVERIA_NAVIGATE__ === 'function') (window as any).__AVERIA_NAVIGATE__(p);
+    else window.location.hash = '#' + p;
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto p-6 bg-slate-900 border border-slate-800 rounded-3xl space-y-6">
+      <h2 className="text-2xl font-bold text-white">Shopping Cart</h2>
+      <div className="p-4 rounded-xl bg-slate-800/60 border border-slate-700 flex items-center justify-between">
+        <div>
+          <h4 className="font-semibold text-white text-sm">Smart Sensor Matrix</h4>
+          <span className="text-indigo-400 font-bold text-xs">Qty: 1 • \$149</span>
+        </div>
+        <button onClick={() => nav('/checkout')} className="px-4 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-xs shadow-lg">
+          Proceed to Checkout
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function CheckoutPage() {
+  const [done, setDone] = useState(false);
+  const nav = (p: string) => {
+    if (typeof (window as any).__AVERIA_NAVIGATE__ === 'function') (window as any).__AVERIA_NAVIGATE__(p);
+    else window.location.hash = '#' + p;
+  };
+
+  return (
+    <div className="max-w-lg mx-auto p-7 bg-slate-900 border border-slate-800 rounded-3xl space-y-5">
+      <h2 className="text-xl font-bold text-white">Checkout</h2>
+      {done ? (
+        <div className="text-center py-8 space-y-3">
+          <div className="w-12 h-12 mx-auto rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xl font-bold">✓</div>
+          <h3 className="font-bold text-white">Order Confirmed!</h3>
+          <p className="text-xs text-slate-400">Your order has been placed successfully.</p>
+          <button onClick={() => nav('/orders')} className="mt-3 px-5 py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-xs">View Orders</button>
+        </div>
+      ) : (
+        <form onSubmit={e => { e.preventDefault(); setDone(true); }} className="space-y-4">
+          <div><label className="text-xs text-slate-400 block mb-1">Full Name</label><input required defaultValue="Averia User" className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" /></div>
+          <div><label className="text-xs text-slate-400 block mb-1">Shipping Address</label><input required defaultValue="742 Evergreen Terrace" className="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none" /></div>
+          <button type="submit" className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg">Confirm &amp; Place Order</button>
+        </form>
+      )}
+    </div>
+  );
+}
+
+export function OrdersPage() {
+  return (
+    <div className="max-w-4xl mx-auto p-6 bg-slate-900 border border-slate-800 rounded-3xl space-y-6">
+      <h2 className="text-2xl font-bold text-white">Order History &amp; Tracking</h2>
+      <div className="p-4 rounded-xl bg-slate-800/60 border border-slate-700 flex items-center justify-between">
+        <div>
+          <span className="font-mono font-bold text-white text-sm">#ORD-90214</span>
+          <span className="text-slate-400 text-xs block">Placed today • 1 item</span>
+        </div>
+        <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Delivered</span>
+      </div>
+    </div>
+  );
+}
+
+export function SettingsPage() {
+  return (
+    <div className="max-w-4xl mx-auto p-6 bg-slate-900 border border-slate-800 rounded-3xl space-y-6">
+      <h2 className="text-2xl font-bold text-white">Settings</h2>
+      <div className="space-y-4 text-xs text-slate-300">
+        <div className="flex items-center justify-between p-4 rounded-xl bg-slate-800/60 border border-slate-700">
+          <span>Real-time Sync</span>
+          <span className="text-emerald-400 font-semibold">Active</span>
+        </div>
+        <div className="flex items-center justify-between p-4 rounded-xl bg-slate-800/60 border border-slate-700">
+          <span>Offline Persistence</span>
+          <span className="text-emerald-400 font-semibold">IndexedDB</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const AppPages = { ExplorePage, CartPage, CheckoutPage, OrdersPage, SettingsPage };
+if (typeof window !== 'undefined') {
+  (window as any).ExplorePage = ExplorePage;
+  (window as any).CartPage = CartPage;
+  (window as any).CheckoutPage = CheckoutPage;
+  (window as any).OrdersPage = OrdersPage;
+  (window as any).SettingsPage = SettingsPage;
+  (window as any).AppPages = AppPages;
+  (window as any).__AVERIA_PAGES__ = Object.assign((window as any).__AVERIA_PAGES__ || {}, AppPages);
+}
+export default AppPages;`,
   });
 
   // 11. src/lib/qaGuard.ts
